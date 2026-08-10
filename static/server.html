@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>服务器监控 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
+  <style>
+    .server-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .server-metric { min-height: 126px; padding: 16px; }
+    .server-metric .metric-label { color: var(--muted); font-size: 11px; }
+    .server-metric strong { display: block; margin-top: 12px; color: var(--ink); font: 700 24px/1 var(--display); letter-spacing: -.05em; }
+    .server-metric small { display: block; margin-top: 8px; color: var(--faint); font: 10px var(--mono); }
+    .server-status { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 999px; color: var(--muted); background: var(--surface-muted); border: 1px solid var(--line); font-size: 10px; }
+    .server-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+    .server-status.ok { color: var(--green); background: #edf8f4; border-color: #cfe9df; }
+    .server-status.ok i { background: var(--green); box-shadow: 0 0 0 3px rgba(35,139,114,.12); }
+    .server-status.error { color: var(--danger); background: #fff3f1; border-color: #f1d2ce; }
+    .server-status.error i { background: var(--danger); }
+    .server-status.warning { color: #946020; background: #fff8eb; border-color: #f0d9aa; }
+    .server-status.warning i { background: #d69a32; box-shadow: 0 0 0 3px rgba(214,154,50,.12); }
+    .server-overview { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(150px, .6fr)); gap: 12px; margin-top: 16px; padding: 15px 16px; }
+    .server-overview-label { display: block; color: var(--faint); font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .server-overview strong { display: block; margin-top: 6px; color: var(--ink); font: 700 17px var(--display); letter-spacing: -.03em; }
+    .server-overview p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .server-overview > div:not(:first-child) { padding-left: 14px; border-left: 1px solid var(--line); }
+    .server-overview > div:not(:first-child) strong { font-size: 13px; }
+    .server-detail-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; margin-top: 16px; }
+    .service-list { display: grid; gap: 9px; }
+    .service-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; background: var(--surface-muted); border: 1px solid transparent; border-radius: 8px; }
+    .service-row:hover { border-color: var(--line-strong); }
+    .service-name { color: var(--ink); font-weight: 600; }
+    .service-state { color: var(--muted); font: 10px var(--mono); }
+    .server-info { display: grid; gap: 10px; }
+    .server-info-row { display: flex; justify-content: space-between; gap: 14px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+    .server-info-row:last-child { border-bottom: 0; }
+    .server-info-row span:first-child { color: var(--muted); }
+    .server-info-row span:last-child { max-width: 68%; color: var(--ink); font-family: var(--mono); text-align: right; overflow-wrap: anywhere; }
+    .server-error { display: none; margin: 14px 0 0; padding: 10px 12px; color: var(--danger); background: #fff3f1; border: 1px solid #f1d2ce; border-radius: 8px; font-size: 11px; }
+    .server-error.show { display: block; }
+    .server-alert-list, .server-history-list { display: grid; gap: 8px; }
+    .server-alert { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 9px; padding: 10px 11px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 8px; }
+    .server-alert i { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #d69a32; }
+    .server-alert.error i { background: var(--danger); }
+    .server-alert.success i { background: var(--green); }
+    .server-alert strong { display: block; color: var(--ink); font-size: 11px; }
+    .server-alert p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .server-history-panel { margin-top: 16px; }
+    .server-history-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; background: var(--surface-muted); border: 1px solid transparent; border-radius: 8px; }
+    .server-history-details { display: block; }
+    .server-history-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
+    .server-history-details > summary::-webkit-details-marker { display: none; }
+    .server-history-detail { margin-top: 8px; padding-top: 8px; color: var(--muted); border-top: 1px dashed var(--line); font-size: 10px; line-height: 1.6; }
+    .server-error-text { color: #bd4036; }
+    .server-history-row:hover { border-color: var(--line-strong); }
+    .server-history-row > div { min-width: 0; }
+    .server-history-row strong, .server-history-row small { display: block; }
+    .server-history-row strong { color: var(--ink); font: 600 11px var(--mono); }
+    .server-history-row small { margin-top: 3px; color: var(--faint); font-size: 9px; }
+    .server-history-status { flex: 0 0 auto; padding: 3px 6px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; font-size: 9px; }
+    .server-history-status.ok { color: var(--green); border-color: #cfe9df; background: #edf8f4; }
+    .server-history-status.error { color: var(--danger); border-color: #f1d2ce; background: #fff3f1; }
+    .server-history-status.warning { color: #946020; border-color: #f0d9aa; background: #fff8eb; }
+    @media (max-width: 980px) { .server-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .server-detail-grid { grid-template-columns: 1fr; } .server-overview { grid-template-columns: 1fr 1fr; } .server-overview > div:first-child { grid-column: 1 / -1; } .server-overview > div:not(:first-child) { padding-left: 0; border-left: 0; } }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="page-topbar">
+      <a class="page-brand" href="/"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>ONLINE WORKSPACE</small></span></a>
+      <div class="page-actions"><a class="back-link" href="/">← <span>返回工作台</span></a><button id="refresh-server" class="ghost-button" type="button">刷新检查</button><a class="global-button" href="/?settings=llm" target="_blank" rel="noopener"><span class="dot"></span>全局 LLM ↗</a></div>
+    </header>
+    <main class="page-main">
+      <section class="page-heading"><div><div class="eyebrow">服务器监控</div><h1>服务器监控</h1><p class="lede">只读查看主机和关键服务状态。检查失败时保留上次快照，不会因为网络波动把数据清空。</p></div><div class="page-kpi"><span id="server-status" class="server-status"><i></i><span>读取中</span></span></div></section>
+      <div id="server-error" class="server-error"></div>
+      <section class="server-grid" aria-label="服务器核心指标">
+        <article class="card server-metric"><span class="metric-label">主机</span><strong id="server-host">—</strong><small id="server-target">—</small></article>
+        <article class="card server-metric"><span class="metric-label">磁盘使用</span><strong id="server-disk">—</strong><small id="server-disk-detail">等待检查</small></article>
+        <article class="card server-metric"><span class="metric-label">内存使用</span><strong id="server-memory">—</strong><small id="server-memory-detail">等待检查</small></article>
+        <article class="card server-metric"><span class="metric-label">系统负载</span><strong id="server-load">—</strong><small id="server-uptime">等待检查</small></article>
+      </section>
+      <section class="card server-overview" aria-label="服务器监控结论"><div><span class="server-overview-label">当前结论</span><strong id="server-summary">正在读取…</strong><p id="server-risk-note">只读监控；变更操作需要人工确认。</p></div><div><span class="server-overview-label">数据状态</span><strong id="server-freshness">—</strong><p id="server-age">—</p></div><div><span class="server-overview-label">监控项</span><strong id="server-alert-count">—</strong><p>磁盘、内存、负载、必需服务</p></div><div><span class="server-overview-label">健康评分</span><strong id="server-health-score">—</strong><p id="server-health-label">只读评分</p></div><div><span class="server-overview-label">容量趋势</span><strong id="server-capacity">—</strong><p id="server-capacity-detail">积累历史快照后预测</p></div></section>
+      <section class="server-detail-grid">
+        <article class="card panel"><div class="panel-head"><h2>关键服务</h2><small id="checked-at">最近检查：—</small></div><div id="service-list" class="service-list"></div></article>
+        <article class="card panel"><div class="panel-head"><h2>告警与恢复</h2><small>自动记录，变更仍需确认</small></div><div id="server-alert-list" class="server-alert-list"></div></article>
+      </section>
+      <section class="card panel server-history-panel"><div class="panel-head"><h2>最近检查</h2><small>本地保存 · 用于判断变化</small></div><div id="server-history-list" class="server-history-list"></div></section>
+      <section class="card panel"><div class="panel-head"><h2>只读 Runbook</h2><small>变更动作保持人工审批</small></div><div id="server-runbook" class="server-alert-list"></div><p id="server-runbook-message" class="threshold-message" role="status"></p></section>
+      <section class="card panel"><div class="panel-head"><h2>告警阈值</h2><small>可配置 · 保存后立即影响分析</small></div><div class="threshold-grid"><label>磁盘警告 %<input id="th-disk-warn" type="number" min="0" max="100" step="1" /></label><label>磁盘严重 %<input id="th-disk-critical" type="number" min="0" max="100" step="1" /></label><label>内存警告 %<input id="th-memory-warn" type="number" min="0" max="100" step="1" /></label><label>内存严重 %<input id="th-memory-critical" type="number" min="0" max="100" step="1" /></label><label>负载警告<input id="th-load-warn" type="number" min="0" max="1000" step="0.5" /></label><label>负载严重<input id="th-load-critical" type="number" min="0" max="1000" step="0.5" /></label></div><div class="threshold-actions"><button id="save-thresholds" class="secondary-button" type="button">保存阈值</button><button id="reset-thresholds" class="secondary-button" type="button">恢复默认</button><span id="threshold-message" class="threshold-message"></span></div></section>
+      <section class="card panel"><div class="panel-head"><h2>主机信息</h2><small>SSH 只读</small></div><div id="server-info" class="server-info"></div></section>
+    </main>
+  </div>
+  <script src="/static/request.js?v=0.3.140"></script><script src="/static/project.js?v=0.3.140"></script>
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    const text = (value, fallback = "—") => value === undefined || value === null || value === "" ? fallback : value;
+    function service(label, value) { return `<div class="service-row"><span class="service-name">${esc(label)}</span><span class="service-state">${esc(text(value, "未返回"))}</span></div>`; }
+    function render(payload) {
+      const server = payload.server || {};
+      const analysis = payload.analysis || {};
+      const history = payload.history || [];
+      const disk = server.disk || {}, memory = server.memory || {};
+      const health = analysis.status || (server.status === "ok" ? "ok" : "error");
+      const status = $("#server-status");
+      status.className = `server-status ${health}`;
+      status.querySelector("span").textContent = analysis.status_label || (health === "ok" ? "状态正常" : "快照 · 检查失败");
+      $("#server-host").textContent = text(server.host, payload.target || "—");
+      $("#server-target").textContent = text(payload.target, "未配置目标");
+      $("#server-disk").textContent = text(disk.used_pct);
+      $("#server-disk-detail").textContent = disk.used_kb && disk.total_kb ? `${disk.used_kb} / ${disk.total_kb} KB` : "未返回磁盘数据";
+      $("#server-memory").textContent = memory.used_mb && memory.total_mb ? `${memory.used_mb} / ${memory.total_mb} MB` : "—";
+      $("#server-memory-detail").textContent = memory.available_mb ? `可用 ${memory.available_mb} MB` : "未返回内存数据";
+      $("#server-load").textContent = text(server.load);
+      $("#server-uptime").textContent = `运行时间 ${text(server.uptime)}`;
+      $("#checked-at").textContent = `最近检查：${server.checked_at ? new Date(server.checked_at).toLocaleString("zh-CN") : "—"}`;
+      $("#server-summary").textContent = analysis.summary || "还没有形成监控结论。";
+      $("#server-risk-note").textContent = analysis.risk_note || "这是只读监控，不会自动修改服务器。";
+      $("#server-freshness").textContent = analysis.freshness?.label || "没有检查时间";
+      $("#server-age").textContent = analysis.freshness?.checked_at ? `检查于 ${new Date(analysis.freshness.checked_at).toLocaleString("zh-CN")}` : "需要刷新一次";
+      $("#server-alert-count").textContent = `${(analysis.alerts || []).length} 个关注项`;
+      $("#server-health-score").textContent = analysis.health_score === undefined ? "—" : `${analysis.health_score}/100`;
+      $("#server-health-label").textContent = analysis.health_score_label || "只读评分";
+      const prediction = analysis.prediction || {};
+      const diskPred = prediction.disk || {};
+      const memPred = prediction.memory || {};
+      const predText = [diskPred, memPred].map((item, index) => { const label = index === 0 ? "磁盘" : "内存"; if (item.status === "unknown") return `${label} 样本不足`; if (item.status === "stable") return `${label} 平稳`; if (item.status === "growing") return `${label} ${item.days_to_warn == null ? "—" : `约 ${Math.round(item.days_to_warn)} 天到提醒`}`; return `${label} 待预测`; }).join(" · ");
+      $("#server-capacity").textContent = predText.includes("样本不足") && predText.includes("待预测") ? "积累中" : predText;
+      $("#server-capacity-detail").textContent = [diskPred, memPred].map((item, index) => { const label = index === 0 ? "磁盘" : "内存"; return item.status === "growing" ? `${label}：${item.note || ""}` : ""; }).filter(Boolean).join("；") || "积累历史快照后预测容量剩余天数";
+      const serviceItems = analysis.services || [{ label: "Nginx", value: server.nginx, required: true }, { label: "Workbench", value: server.workbench, required: false }, { label: "App / PM2", value: server.hotel, required: true }];
+      $("#service-list").innerHTML = serviceItems.map((item) => service(`${item.label}${item.required ? " · 必需" : " · 非必需"}`, item.value)).join("");
+      const alerts = analysis.alerts || [];
+      const recovered = analysis.recovered || [];
+      $("#server-alert-list").innerHTML = alerts.concat(recovered.map((item) => ({ ...item, level: "success", title: `已恢复：${item.title}`, message: item.message }))).length ? alerts.concat(recovered.map((item) => ({ ...item, level: "success", title: `已恢复：${item.title}`, message: item.message }))).map((item) => `<article class="server-alert ${esc(item.level || "warning")}"><i></i><div><strong>${esc(item.title || "监控项")}</strong><p>${esc(item.message || "")}</p></div></article>`).join("") : '<div class="empty-state">当前没有告警，所有监控项在阈值内。</div>';
+      $("#server-info").innerHTML = [["系统", server.os], ["主机名", server.host], ["SSH 目标", payload.target], ["最近状态", server.status], ["检查时间", server.checked_at ? new Date(server.checked_at).toLocaleString("zh-CN") : "—"]].map(([label, value]) => `<div class="server-info-row"><span>${esc(label)}</span><span>${esc(text(value))}</span></div>`).join("");
+      $("#server-history-list").innerHTML = history.length ? history.slice(0, 10).map((item) => { const snap = item.snapshot || {}; const disk = snap.disk || {}; const mem = snap.memory || {}; const details = [`磁盘 ${disk.used_pct ?? "—"}%`, `内存 ${mem.used_mb ?? "—"}/${mem.total_mb ?? "—"} MB`, `负载 ${snap.load ?? "—"}`, `Nginx ${snap.nginx ?? "—"}`].join(" · "); return `<details class="server-history-row server-history-details"><summary><span><strong>${esc(item.checked_at ? new Date(item.checked_at).toLocaleString("zh-CN") : "未知时间")}</strong><small>${esc(item.snapshot?.host || payload.target || "服务器快照")}</small></span><span class="server-history-status ${esc(item.status || "warning")}">${esc(item.status === "ok" ? "检查成功" : item.status === "error" ? "检查失败" : item.status || "未知")}</span></summary><div class="server-history-detail">${esc(details)}${item.error ? `<br><span class="server-error-text">${esc(String(item.error).slice(0, 200))}</span>` : ""}</div></details>`; }).join("") : '<div class="empty-state">刷新一次后，历史检查会保存在本地数据库。</div>';
+      const runbook = analysis.runbook || [];
+      $("#server-runbook").innerHTML = runbook.length ? runbook.map((item) => `<article class="server-alert ${item.available ? "success" : "warning"}"><i></i><div><strong>${esc(item.label || item.key)} · ${item.available ? "可用" : "需人工审批"}</strong><p>${esc(item.reason || (item.risk === "low" ? "只读动作，不修改服务器。" : "高风险变更不会由当前 Agent 自动执行。"))}</p>${!item.available || item.risk === "high" ? `<button class="secondary-button server-approval-button" data-server-action="${esc(item.key)}" type="button">申请审批</button>` : ""}</div></article>`).join("") : '<div class="empty-state">暂无 Runbook。</div>';
+      const error = $("#server-error");
+      error.classList.toggle("show", !!server.error);
+      error.textContent = server.error ? `本次检查失败，当前展示上次快照：${server.error}` : "";
+    }
+    $("#server-runbook").addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-server-action]");
+      if (!button) return;
+      const reason = window.prompt("说明为什么需要这个服务器动作（会写入审批记录）：", "");
+      if (reason === null) return;
+      if (!window.confirm("确认提交服务器动作审批？批准后仍需按安全边界人工执行。")) return;
+      button.disabled = true; button.textContent = "提交中…";
+      const message = $("#server-runbook-message");
+      try {
+        const response = await fetch("/api/server/actions/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: button.dataset.serverAction, reason, confirmed: true }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.detail || "审批申请失败");
+        message.textContent = `${body.message || "已进入审批"} 可到审批中心查看。`;
+        message.className = "threshold-message ok";
+      } catch (error) { message.textContent = error.message; message.className = "threshold-message error"; button.disabled = false; button.textContent = "申请审批"; }
+    });
+    function renderThresholds(thresholds = {}) {
+      $("#th-disk-warn").value = thresholds.disk_warn ?? "";
+      $("#th-disk-critical").value = thresholds.disk_critical ?? "";
+      $("#th-memory-warn").value = thresholds.memory_warn ?? "";
+      $("#th-memory-critical").value = thresholds.memory_critical ?? "";
+      $("#th-load-warn").value = thresholds.load_warn ?? "";
+      $("#th-load-critical").value = thresholds.load_critical ?? "";
+    }
+    function collectThresholds() {
+      return {
+        disk_warn: Number($("#th-disk-warn").value),
+        disk_critical: Number($("#th-disk-critical").value),
+        memory_warn: Number($("#th-memory-warn").value),
+        memory_critical: Number($("#th-memory-critical").value),
+        load_warn: Number($("#th-load-warn").value),
+        load_critical: Number($("#th-load-critical").value),
+      };
+    }
+    async function load() {
+      const response = await fetch("/api/server");
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || "服务器状态读取失败");
+      render(body);
+      renderThresholds(body.thresholds);
+    }
+    $("#save-thresholds").addEventListener("click", async () => {
+      const button = $("#save-thresholds"); button.disabled = true; const msg = $("#threshold-message"); msg.textContent = "正在保存…"; msg.className = "threshold-message";
+      try { const response = await fetch("/api/server/thresholds", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ thresholds: collectThresholds() }) }); const body = await response.json(); if (!response.ok) throw new Error(body.detail || "保存失败"); renderThresholds(body.thresholds); await load(); msg.textContent = "阈值已保存，并已用新阈值重新分析。"; msg.className = "threshold-message ok"; }
+      catch (error) { msg.textContent = error.message; msg.className = "threshold-message error"; }
+      finally { button.disabled = false; }
+    });
+    $("#reset-thresholds").addEventListener("click", async () => {
+      const button = $("#reset-thresholds"); button.disabled = true; const msg = $("#threshold-message"); msg.textContent = "正在恢复默认…"; msg.className = "threshold-message";
+      try { const response = await fetch("/api/server/thresholds", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ thresholds: { disk_warn: 85, disk_critical: 95, memory_warn: 85, memory_critical: 95, load_warn: 4, load_critical: 8 } }) }); const body = await response.json(); if (!response.ok) throw new Error(body.detail || "恢复失败"); renderThresholds(body.thresholds); await load(); msg.textContent = "已恢复默认阈值。"; msg.className = "threshold-message ok"; }
+      catch (error) { msg.textContent = error.message; msg.className = "threshold-message error"; }
+      finally { button.disabled = false; }
+    });
+    $("#refresh-server").addEventListener("click", async () => {
+      const button = $("#refresh-server"); button.disabled = true; button.textContent = "检查中…";
+      try { const response = await fetch("/api/server/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh: true }) }); const body = await response.json(); if (!response.ok) { await load(); throw new Error(body.detail || "检查失败"); } render(body); }
+      catch (error) { $("#server-error").classList.add("show"); $("#server-error").textContent = error.message; }
+      finally { button.disabled = false; button.textContent = "刷新检查"; }
+    });
+    load().catch((error) => { $("#server-error").classList.add("show"); $("#server-error").textContent = error.message; });
+  </script>
+</body>
+</html>

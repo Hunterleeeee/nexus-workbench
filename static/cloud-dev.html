@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>云开发入口 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
+  <style>
+    .cloud-layout { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(280px,.9fr); gap:18px; max-width:1120px; margin:0 auto; }
+    .cloud-card { padding:22px; }
+    .cloud-card h2 { margin:0 0 8px; }
+    .cloud-muted { color:#64748b; font-size:13px; line-height:1.7; }
+    .cloud-form { display:grid; gap:12px; margin-top:18px; }
+    .cloud-form input { width:100%; padding:12px; border:1px solid #dce4ee; border-radius:9px; font:inherit; }
+    .cloud-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .cloud-output { min-height:130px; margin-top:14px; padding:13px; border-radius:10px; background:#f1f5f9; white-space:pre-wrap; font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .cloud-workspace { display:grid; gap:9px; }
+    .cloud-workspace-item { padding:12px; border:1px solid #dce4ee; border-radius:10px; background:#fff; }
+    .cloud-workspace-item strong,.cloud-workspace-item small { display:block; }
+    .cloud-workspace-item small { margin-top:4px; color:#64748b; }
+    .cloud-readiness { display:grid; gap:8px; margin:14px 0 18px; }
+    .cloud-check { padding:10px 12px; border:1px solid #dce4ee; border-radius:10px; background:#f8fafc; }
+    .cloud-check strong,.cloud-check small { display:block; }
+    .cloud-check small { margin-top:3px; color:#64748b; line-height:1.5; }
+    .cloud-check.ok { border-color:#b8dec7; background:#f1fbf5; }
+    .cloud-check.warn { border-color:#f0d39c; background:#fffaf0; }
+    .cloud-policy { margin:0; padding-left:18px; color:#64748b; font-size:12px; line-height:1.8; }
+    @media (max-width:760px) { .cloud-layout { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="page-topbar"><a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small">☁</span><span><strong>Workbench</strong><small>CLOUD DEV</small></span></a><div class="page-actions"><span class="market-note">固定命令 · 工作区白名单 · 审计</span><a class="back-link" href="/">← 工作台</a></div></header>
+    <main class="page-main">
+      <section class="page-heading"><div><div class="eyebrow">CLOUD DEVELOPMENT</div><h1>云开发入口</h1><p class="lede">从 Workbench 或飞书发起项目状态检查、测试和受控构建。未配置显式工作区时，系统不会猜路径，也不会执行。</p></div></section>
+      <div class="cloud-layout">
+        <section class="card cloud-card"><h2>发起固定动作</h2><p class="cloud-muted">示例：<code>云开发 workbench 查看状态</code>、<code>云开发 workbench 运行测试</code>、<code>云开发 workbench 构建</code>。构建会先进入审批。</p><form id="cloud-form" class="cloud-form"><label>命令<input id="cloud-command" value="云开发 workbench 查看状态" maxlength="400" autocomplete="off" /></label><div class="cloud-actions"><button class="primary-button" type="submit">执行 / 创建审批</button><button id="cloud-refresh" class="secondary-button" type="button">刷新工作区</button><span id="cloud-status" class="form-note" role="status" aria-live="polite"></span></div></form><div id="cloud-output" class="cloud-output">等待动作。</div></section>
+        <section class="card cloud-card"><h2>当前服务器就绪状态</h2><p class="cloud-muted">先看这三项，再从 Workbench 或飞书发起动作。只显示布尔状态，不回显密钥。</p><div id="cloud-readiness" class="cloud-readiness"><span class="cloud-muted">读取中…</span></div><h2>当前白名单工作区</h2><p class="cloud-muted">只显示配置的项目别名和固定配方；不会返回环境变量、Token 或 Cookie。</p><div id="cloud-workspaces" class="cloud-workspace"><span class="cloud-muted">读取中…</span></div><hr /><h2>安全边界</h2><ul class="cloud-policy"><li>不接受任意 shell 字符串或路径。</li><li>测试和状态可自动执行，构建需审批。</li><li>不自动部署、不远程 SSH、不启动常驻重型服务。</li><li>输出会截断并做常见敏感字段隐藏。</li></ul></section>
+      </div>
+    </main>
+  </div>
+  <script src="/static/request.js?v=0.3.140"></script>
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    const escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+    function readinessCard(label, ok, detail) { return `<article class="cloud-check ${ok ? "ok" : "warn"}"><strong>${ok ? "✓" : "!"} ${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></article>`; }
+    async function loadCloudStatus() { const host = $("#cloud-workspaces"), readiness = $("#cloud-readiness"); const [cloudResult, feishuResult] = await Promise.allSettled([window.requestJson("/api/cloud-dev"), window.requestJson("/api/feishu")]); const body = cloudResult.status === "fulfilled" ? cloudResult.value : null; const feishu = feishuResult.status === "fulfilled" ? feishuResult.value : null; const rows = body?.workspaces || []; const workspaceReady = rows.length > 0; const appReady = Boolean(feishu?.configured); const callbackReady = Boolean(feishu?.verify_token_set || feishu?.encrypt_key_set); readiness.innerHTML = [readinessCard("云开发工作区", workspaceReady, workspaceReady ? `${rows.length} 个白名单工作区可用` : "未配置 WORKBENCH_CLOUD_WORKSPACES，状态/测试不会执行"), readinessCard("飞书应用凭据", appReady, appReady ? "App ID / App Secret 已配置" : "未配置 WORKBENCH_FEISHU_APP_ID/SECRET（也支持无前缀兼容名）"), readinessCard("飞书回调校验", callbackReady, callbackReady ? "VERIFY_TOKEN 或 ENCRYPT_KEY 已配置" : "未配置 WORKBENCH_FEISHU_VERIFY_TOKEN/ENCRYPT_KEY，回调会拒绝")].join(""); if (body) { host.innerHTML = rows.length ? rows.map((item) => `<article class="cloud-workspace-item"><strong>${escapeHtml(item.project || "未命名")}</strong><small>标记：${escapeHtml((item.markers || []).join("、") || "无")} · 可用动作：${escapeHtml((item.available_actions || []).join("、"))}</small></article>`).join("") : '<span class="cloud-muted">服务器尚未配置工作区。请设置 WORKBENCH_CLOUD_WORKSPACES。</span>'; } else { host.textContent = cloudResult.reason?.message || "云开发状态读取失败。"; } }
+    $("#cloud-form").addEventListener("submit", async (event) => { event.preventDefault(); const status = $("#cloud-status"), output = $("#cloud-output"), button = event.submitter || $("#cloud-form button[type=submit]"); button.disabled = true; status.textContent = "处理中…"; try { const body = await window.requestJson("/api/cloud-dev", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:$("#cloud-command").value}) }); const result = body.result || {}; status.textContent = body.status === "approval_required" ? "已进入审批" : (result.status || body.status || "完成"); output.textContent = body.status === "approval_required" ? `审批编号：${body.approval?.id || "—"}\n构建不会在审批前执行。` : JSON.stringify(result, null, 2); } catch (error) { status.textContent = "失败"; output.textContent = error.message; } finally { button.disabled = false; } });
+    $("#cloud-refresh").addEventListener("click", loadCloudStatus); loadCloudStatus();
+  </script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>自动化中心 · Workbench</title>
+  <link rel="stylesheet" href="/static/platform.css?v=0.3.140" />
+</head>
+<body data-page="automation">
+  <div class="platform-shell">
+    <header class="platform-topbar"><a class="platform-brand" href="/"><span class="platform-brand-mark">↗</span><span><strong>Workbench</strong><small>平台工具</small></span></a><nav class="platform-nav" aria-label="平台导航"><a class="active" href="/automation">自动化中心</a><a href="/git">Git 项目中心</a><a href="/github-tools">GitHub 工具目录</a><a href="/approvals">审批与交付</a></nav><span class="platform-version">v0.3.140</span></header>
+    <main class="platform-main">
+      <section class="platform-hero"><div><span class="platform-eyebrow">自动化中心</span><h1>让任务按计划发生</h1><p>统一管理同步、抓取、行情刷新、服务器巡检、知识索引和联动证据。每次运行都保留状态、错误和下一步，不把定时器当成完成证明。</p></div><div class="platform-hero-actions"><span id="page-status" class="platform-status" role="status">正在读取平台状态…</span><button id="refresh-automation" class="platform-button-secondary" type="button" onclick="location.reload()">刷新</button></div></section>
+      <section class="platform-kpi-row"><div class="platform-kpi"><strong id="rule-count">—</strong><span>自动化规则</span></div><div class="platform-kpi"><strong id="plan-count">—</strong><span>执行计划</span></div><div class="platform-kpi"><strong id="recovery-count">—</strong><span>失败运行记录</span></div></section>
+      <section class="platform-grid two">
+        <section class="platform-card elevated"><div class="platform-card-head"><div><h2 id="automation-form-title">创建自动化规则</h2><p>周期格式使用 <code>every:秒数</code>；留空表示仅手动运行。点击规则列表中的「编辑」可修改已有规则。</p></div></div><form id="automation-form" class="platform-form"><label>规则名称<input id="automation-name" required maxlength="160" placeholder="例如：每天刷新行情并生成观察" /></label><div class="platform-form-grid"><label>动作<select id="automation-kind" required></select></label><label>负责项目<select id="automation-project" required></select></label></div><div class="platform-form-grid"><label>运行周期<select id="automation-schedule"><option value="">仅手动</option><option value="every:300">每 5 分钟</option><option value="every:1800">每 30 分钟</option><option value="every:3600">每小时</option><option value="every:86400">每天</option></select></label><label class="platform-checkbox"><input id="automation-enabled" type="checkbox" checked />创建后启用</label></div><label>提醒标题<input id="automation-notice-title" maxlength="160" placeholder="可选：仅通知动作使用" /></label><label>提醒内容<textarea id="automation-notice-body" maxlength="1000" placeholder="可选：仅通知动作使用"></textarea></label><label>入口地址<input id="automation-notice-href" maxlength="500" placeholder="/ 或 /projects/market" /></label><div class="platform-form-actions"><button id="automation-cancel-edit" class="platform-button-secondary hidden" type="button">取消编辑</button><button class="platform-button orange" type="submit">保存规则</button></div></form></section>
+        <section class="platform-card"><div class="platform-card-head"><div><h2>现有规则</h2><p>手动运行会立即留下 Automation Run；周期运行由本机调度循环触发。</p></div><small id="automation-rule-note">失败规则可重试</small></div><div id="automation-rules" class="platform-list"><div class="platform-list-empty">读取中…</div></div></section>
+      </section>
+      <section class="platform-card" style="margin-top:14px"><div class="platform-card-head"><div><h2>多步骤执行计划</h2><p>按依赖顺序执行；单步最多重试两次，达到上限后计划暂停，可人工接管后重新运行。</p></div></div><form id="plan-form" class="platform-form"><div class="platform-form-grid"><label>计划名称<input id="plan-title" required maxlength="200" value="工作台例行维护" /></label><label>来源项目<select id="plan-source"><option value="workbench">工作台</option><option value="knowledge">知识库</option><option value="doc-factory">文档工厂</option></select></label></div><div id="plan-steps" class="platform-steps" aria-label="计划步骤"></div><div class="platform-form-actions"><button id="add-plan-step" class="platform-button-secondary" type="button">＋ 增加步骤</button><button class="platform-button" type="submit">创建计划</button></div></form><div style="height:16px"></div><div id="plan-list" class="platform-list"><div class="platform-list-empty">读取中…</div></div><div id="plan-detail" class="platform-plan-detail" hidden role="status"></div></section>
+      <section class="platform-card" style="margin-top:14px"><div class="platform-card-head"><div><h2>能力图与负载</h2><p>路由会参考工具声明、数据新鲜度和 Agent 当前负载；这里显示真实边界和缺口。</p></div><small>能力图</small></div><div id="capability-grid" class="capability-grid"><div class="platform-list-empty">读取中…</div></div></section>
+      <section class="platform-grid two platform-runtime-grid"><section class="platform-card"><div class="platform-card-head"><div><h2>Worker 运行状态</h2><p>租约只负责防止多实例重复执行；状态来自心跳，不把“已注册”当成“正在运行”。</p></div><small id="worker-runtime-summary">读取中…</small></div><div id="worker-status-list" class="worker-status-list"><div class="platform-list-empty">读取中…</div></div></section><section class="platform-card"><div class="platform-card-head"><div><h2>LLM 运行指标</h2><p>只显示 Provider、模型、状态、Token 和耗时，不保存请求或响应正文。</p></div><small>最近 24 小时</small></div><div id="llm-runtime-metrics" class="runtime-metrics"><div class="platform-list-empty">读取中…</div></div></section></section>
+      <footer class="platform-footer"><span>Workbench · local-first · 所有运行记录写入本地 SQLite</span><span>平台动作不自动执行高风险外部变更</span></footer>
+    </main>
+  </div>
+  <script src="/static/request.js?v=0.3.140"></script><script src="/static/platform.js?v=0.3.140"></script>
+</body>
+</html>

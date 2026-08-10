@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>AI 热点研究 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
+  <link rel="stylesheet" href="/static/aihot.css?v=0.3.140" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="page-topbar">
+      <a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span><span><strong>Workbench</strong><small>AI SIGNALS</small></span></a>
+      <div class="page-actions"><a class="back-link" href="/">← 返回工作台</a><a class="ghost-button" href="https://aihot.today/ai-news" target="_blank" rel="noreferrer">打开原站 ↗</a></div>
+    </header>
+    <main class="page-main">
+      <section class="page-heading"><div><div class="eyebrow">AI 热点研究</div><h1>AI 热点研究</h1><p class="lede">把公开资讯压成真正值得看的信号；你可以挑几条消息，让 Agent 继续解释、比较和发现机会。</p></div><div class="page-kpi"><strong id="feed-count">—</strong><span>条当前信号</span></div></section>
+      <section class="aihot-layout">
+        <section class="card panel feed-panel">
+          <div class="filter-row"><div class="filter-buttons" role="tablist" aria-label="热点筛选"><button class="filter-button active" data-mode="useful" type="button">有用</button><button class="filter-button" data-mode="latest" type="button">最新</button><button class="filter-button" data-mode="opportunity" type="button">商机线索</button></div><button id="refresh-feed" class="secondary-button" type="button">同步</button></div><div id="opportunity-review" class="opportunity-review" hidden></div>
+          <div class="feed-search"><input id="feed-search" placeholder="搜索 AI 新闻、公司、产品或标签…" aria-label="搜索 AI 热点" /><button id="search-feed" class="secondary-button" type="button">搜索</button></div>
+          <div class="feed-status"><span id="feed-status">正在读取公开资讯…</span><span id="feed-source">来源：aihot.today · 反馈只保存在本机</span></div>
+          <div class="feed-tools"><button id="digest-feed" class="secondary-button" type="button">生成摘要与主题聚类</button><button id="insights-feed" class="secondary-button" type="button">洞察</button></div>
+          <div id="digest-output" class="digest-output" hidden></div>
+          <div id="insights-output" class="digest-output" hidden></div>
+          <div id="feed-list" class="feed-list" aria-live="polite"></div>
+        </section>
+        <aside class="card panel agent-panel">
+          <div class="panel-head"><div><h2>AI 热点研究 Agent</h2><small>选消息，再问它</small></div><span class="agent-state"><i></i> 在线</span></div>
+          <div class="agent-prompt">它会区分新闻事实、判断和待验证假设，并从真实需求、用户、付费可能和 7 天验证切入。</div>
+          <div class="agent-quick-actions" aria-label="热点研究快捷提问"><button type="button" data-agent-prompt="从当前筛选结果里挑出最值得关注的 3 条，并说明理由">挑 3 条最重要</button><button type="button" data-agent-prompt="从已选消息里找 3 个适合个人开发者验证的机会">找个人机会</button><button type="button" data-agent-prompt="判断当前消息中哪些是事实、哪些只是推断或营销话术">区分事实与噪音</button></div>
+          <div id="chat-log" class="chat-log"><div class="chat-message assistant"><strong>AI 热点研究 Agent</strong><p>你可以问我：哪些消息值得关注？这条新闻背后有什么产品机会？哪些只是噱头？</p></div></div>
+          <form id="aihot-chat-form" class="chat-form"><textarea id="aihot-chat-input" rows="4" placeholder="例如：从已选消息里找 3 个适合个人开发者验证的机会"></textarea><div class="chat-form-foot"><span id="selected-note">未选择消息，将使用当前筛选结果</span><button class="primary-button" type="submit">开始分析</button></div></form>
+          <section class="project-agent-runs" aria-label="AI 热点 Agent 运行"><div class="project-agent-runs-head"><strong>Agent 运行记录</strong><span id="aihot-run-summary">读取中…</span></div><div id="aihot-run-history"><div class="project-agent-runs-empty">分析后会显示运行状态、失败原因和重试入口。</div></div></section>
+        </aside>
+      </section>
+    </main>
+  </div>
+      <script src="/static/request.js?v=0.3.140"></script><script src="/static/project.js?v=0.3.140"></script>
+  <script>
+    const feedList = qs("#feed-list");
+    const feedStatus = qs("#feed-status");
+    const feedSource = qs("#feed-source");
+    const selected = new Set();
+    let currentMode = "useful";
+    let currentItems = [];
+    let sessionId = "";
+    let statusTimer = null;
+
+    function setFeedStatus(message, tone = "") {
+      window.clearTimeout(statusTimer);
+      feedStatus.textContent = message;
+      feedStatus.dataset.tone = tone;
+      if (tone === "success") statusTimer = window.setTimeout(() => { feedStatus.dataset.tone = ""; }, 3200);
+    }
+
+    function renderFeed(items, context = {}) {
+      currentItems = items || [];
+      qs("#feed-count").textContent = currentItems.length;
+      if (!currentItems.length) {
+        const hasQuery = Boolean(context.query || (qs("#feed-search").value || "").trim());
+        const notSynced = context.stale || (!context.items_total && !context.fetched_at);
+        const message = notSynced ? '还没有可用资讯。点“同步”拉取最新热点后再看。' : hasQuery ? '没有匹配的资讯，换个关键词试试。' : '当前筛选下没有资讯，切换“最新 / 商机线索”看看。';
+        feedList.innerHTML = `<div class="empty-state">${message}</div>`;
+        qs("#selected-note").textContent = selected.size ? `已选 ${selected.size} 条消息` : "未选择消息，将使用当前筛选结果";
+        return;
+      }
+      feedList.innerHTML = currentItems.map((item) => {
+        const id = String(item.id);
+        const feedback = item.feedback || {};
+        const opportunityDone = Boolean(item.opportunity_work_item_id);
+        return `<article class="signal-card ${selected.has(id) ? "selected" : ""}" data-item-id="${escapeHtml(id)}">
+          <div class="signal-top"><span class="signal-source">${escapeHtml(item.source)}</span>${item.change === "new" ? '<span class="signal-new">新</span>' : ""}<span class="signal-time">${escapeHtml(formatDate(item.published_at))}</span></div>
+          <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.description || "暂无中文摘要")}</p>
+          <div class="signal-bottom"><span class="signal-tags">${(item.tags || []).slice(0, 3).map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}</span><span class="signal-score">重要度 ${escapeHtml(item.importance || 0)} · 机会 ${escapeHtml(item.opportunity_score?.score ?? 0)} 分 · 来源 ${escapeHtml(item.source_score ?? 3)}/5${item.source_votes ? `（${item.source_votes > 0 ? "+" : ""}${escapeHtml(item.source_votes)}）` : ""}</span></div>
+          <div class="signal-actions signal-feedback-actions" aria-label="给这条热点反馈">
+            <button class="feedback-button ${feedback.vote === "useful" ? "active" : ""}" data-vote="useful" aria-pressed="${feedback.vote === "useful"}" type="button">有用</button>
+            <button class="feedback-button ${feedback.vote === "not_useful" ? "active" : ""}" data-vote="not_useful" aria-pressed="${feedback.vote === "not_useful"}" type="button">不相关</button>
+            <button class="select-signal ${selected.has(id) ? "active" : ""}" type="button">${selected.has(id) ? "已选入对话" : "加入对话"}</button>
+          </div>
+          <div class="signal-actions signal-primary-actions">
+            <button class="opportunity-button ${opportunityDone ? "done" : ""}" data-opportunity="${opportunityDone ? "done" : "create"}" type="button" ${opportunityDone ? "disabled" : ""}>${opportunityDone ? "已交给想法分析" : "交给想法分析"}</button>${opportunityDone ? `<button class="opportunity-button review" data-review-opportunity="${escapeHtml(id)}" type="button">记录复盘</button>` : ""}
+            ${item.link ? `<a href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer">阅读原文 ↗</a>` : ""}
+          </div>
+        </article>`;
+      }).join("");
+      qs("#selected-note").textContent = selected.size ? `已选 ${selected.size} 条消息` : "未选择消息，将使用当前筛选结果";
+    }
+
+    async function loadFeed(refresh = false) {
+      const refreshButton = qs("#refresh-feed");
+      refreshButton.disabled = true;
+      feedList.classList.add("is-loading");
+      setFeedStatus(refresh ? "正在同步最新资讯…" : "正在读取公开资讯…");
+      try {
+        const query = encodeURIComponent(qs("#feed-search").value.trim());
+        const body = await requestJson(`/api/aihot/feed?mode=${encodeURIComponent(currentMode)}&q=${query}&refresh=${refresh}`);
+        renderFeed(body.feed?.items || [], { stale: body.feed?.stale, items_total: body.feed?.items_total, fetched_at: body.feed?.fetched_at, query: qs("#feed-search").value.trim() });
+        feedSource.textContent = body.feed?.stale ? `来源：aihot.today · 使用上次快照（${body.feed.error || "同步失败"}）` : `来源：aihot.today · ${body.feed?.fetched_at ? formatDate(body.feed.fetched_at) : "已同步"} · 反馈只保存在本机`;
+        setFeedStatus(`${body.feed?.items?.length || 0} 条结果`);
+      } catch (error) {
+        setFeedStatus(error.message, "error");
+        feedList.innerHTML = `<div class="empty-state">读取失败：${escapeHtml(error.message)}<br><button class="secondary-button retry-feed" type="button">重新读取</button></div>`;
+      } finally {
+        feedList.classList.remove("is-loading");
+        refreshButton.disabled = false;
+      }
+    }
+
+    function replaceCurrentItem(item) {
+      currentItems = currentItems.map((candidate) => String(candidate.id) === String(item.id) ? item : candidate);
+      renderFeed(currentItems);
+    }
+
+    document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
+      document.querySelectorAll("[data-mode]").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active"); currentMode = button.dataset.mode; loadFeed(); renderOpportunityReview();
+    }));
+    async function renderOpportunityReview() {
+      const el = qs("#opportunity-review");
+      if (!el) return;
+      if (currentMode !== "opportunity") { el.hidden = true; el.innerHTML = ""; return; }
+      el.hidden = false; el.innerHTML = '<span class="muted">正在统计机会去向…</span>';
+      try {
+        const body = await requestJson("/api/aihot/opportunity-review");
+        const b = body.buckets || {};
+        const reviewStats = body.review_stats || {}; const feedback = reviewStats.feedback || {}; const opportunityStats = reviewStats.opportunities || {};
+        const parts = [
+          `共 ${body.total || 0} 条商机线索`,
+          `待处理 ${(b.open || []).length + (b.blocked || []).length + (b.failed || []).length}`,
+          `进行中 ${(b.running || []).length}`,
+          `已处理 ${(b.done || []).length + (b.archived || []).length}`,
+          `复盘 ${opportunityStats.reviewed || 0}/${opportunityStats.total || 0}`,
+        ];
+        const feedbackText = feedback.sample_status === "ready" ? `反馈有用率 ${Math.round((feedback.useful_rate || 0) * 100)}%` : `反馈样本不足（${feedback.total || 0}/${feedback.minimum_samples || 10}）`;
+        el.innerHTML = `<strong>机会复盘</strong><span>${parts.join(" · ")}</span>${body.processed_rate ? `<span class="review-rate">状态完成率 ${Math.round(body.processed_rate * 100)}%</span>` : ""}<small>${feedbackText} · ${opportunityStats.sample_status === "ready" ? `已确认 ${opportunityStats.confirmed || 0} 次` : "机会复盘样本不足，先积累记录"}</small>`;
+      } catch (e) { el.innerHTML = '<span class="muted">复盘读取失败</span>'; }
+    }
+    loadFeed(); renderOpportunityReview();
+    qs("#refresh-feed").addEventListener("click", () => loadFeed(true));
+    qs("#search-feed").addEventListener("click", () => loadFeed());
+    qs("#feed-search").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); loadFeed(); } });
+    qs("#insights-feed").addEventListener("click", async () => {
+      const button = qs("#insights-feed"); const output = qs("#insights-output");
+      button.disabled = true; button.textContent = "读取洞察…"; output.hidden = false; output.textContent = "正在读取主题簇与来源质量…";
+      try {
+        const body = await requestJson("/api/aihot/insights");
+        const clusters = body.clusters || [];
+        const sources = body.source_scores || [];
+        const change = body.change_detection || {}; const replay = body.opportunity_replay || [];
+        const reviewStats = body.review_stats || {}; const feedbackStats = reviewStats.feedback || {}; const opportunityStats = reviewStats.opportunities || {};
+        const feedbackSummary = feedbackStats.sample_status === "ready" ? `反馈 ${feedbackStats.total || 0} 条 · 有用率 ${Math.round((feedbackStats.useful_rate || 0) * 100)}%` : `反馈样本不足：${feedbackStats.total || 0}/${feedbackStats.minimum_samples || 10}`;
+        const verdictSummary = Object.entries(opportunityStats.verdicts || {}).map(([verdict, count]) => `${escapeHtml(verdict)} ${escapeHtml(count)}`).join(" · ") || "暂无复盘结论";
+        output.innerHTML = `<div class="insights-summary">${escapeHtml(body.summary || `共 ${body.item_count || 0} 条资讯 · ${clusters.length} 个主题簇`)}</div><div class="insights-section"><strong>主题簇</strong>${clusters.slice(0, 8).map((c) => `<div>· ${escapeHtml(c.label)}（${escapeHtml(c.count)} 条）<small>${escapeHtml((c.items || []).slice(0, 2).map((i) => i.title).join("；"))}</small></div>`).join("") || "<p>暂无主题簇。</p>"}</div><div class="insights-section"><strong>来源质量</strong>${sources.slice(0, 10).map((s) => `<div>· ${escapeHtml(s.source)}：${escapeHtml(s.quality_score)} <small>样本 ${escapeHtml(s.count)} · 有用 ${escapeHtml(s.useful)}</small></div>`).join("") || "<p>暂无反馈样本。</p>"}<p class="insights-sample-note">${feedbackSummary}</p></div><div class="insights-section"><strong>变化与机会复盘</strong><p>新增 ${escapeHtml(change.new_items || 0)} 条 · 消失 ${escapeHtml(change.removed_items || 0)} 条 · 已登记机会 ${escapeHtml(replay.length)} 条 · 已复盘 ${escapeHtml(opportunityStats.reviewed || 0)} 条</p><p class="insights-sample-note">${verdictSummary}</p>${replay.slice(0, 5).map((item) => `<div>· ${escapeHtml(item.title)} <small>${escapeHtml(item.status || "待处理")} · ${escapeHtml(item.next || "尚未记录下一步")}</small></div>`).join("") || "<p>还没有登记机会。</p>"}</div>`;
+        setFeedStatus("洞察已基于当前快照生成。", "success");
+      } catch (error) {
+        output.textContent = error.message;
+        setFeedStatus(error.message, "error");
+      } finally { button.disabled = false; button.textContent = "洞察"; }
+    });
+    qs("#digest-feed").addEventListener("click", async () => {
+      const button = qs("#digest-feed"); const output = qs("#digest-output");
+      button.disabled = true; button.textContent = "正在生成摘要…"; output.hidden = false; output.textContent = "正在基于当前有用资讯生成摘要和主题聚类…";
+      try {
+        const body = await requestJson("/api/aihot/digest", { method: "POST" });
+        output.textContent = body.answer;
+        setFeedStatus(`摘要已保存：outputs/${body.filename}`, "success");
+      } catch (error) {
+        output.textContent = error.message;
+        setFeedStatus(error.message, "error");
+      } finally {
+        button.disabled = false; button.textContent = "生成摘要与主题聚类";
+      }
+    });
+
+    feedList.addEventListener("click", async (event) => {
+      const retry = event.target.closest(".retry-feed");
+      if (retry) return loadFeed();
+      const button = event.target.closest("button");
+      const card = button?.closest("[data-item-id]");
+      if (!button || !card) return;
+      const id = card.dataset.itemId;
+      if (button.classList.contains("select-signal")) {
+        if (selected.has(id)) selected.delete(id); else selected.add(id);
+        renderFeed(currentItems);
+        return;
+      }
+      if (button.dataset.vote) {
+        button.disabled = true;
+        try {
+          const body = await requestJson("/api/aihot/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item_id: id, vote: button.dataset.vote }) });
+          replaceCurrentItem(body.item);
+          setFeedStatus(button.dataset.vote === "useful" ? "已记录“有用”，类似信号会优先出现" : "已记录“不相关”，类似信号会降低权重", "success");
+        } catch (error) { button.disabled = false; setFeedStatus(`反馈失败：${error.message}`, "error"); }
+        return;
+      }
+      if (button.dataset.opportunity === "create") {
+        button.disabled = true; button.textContent = "登记中…";
+        try {
+          const body = await requestJson("/api/aihot/opportunities", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item_id: id }) });
+          replaceCurrentItem({ ...currentItems.find((candidate) => String(candidate.id) === id), opportunity_work_item_id: body.item?.id, opportunity_status: body.item?.status || "open" });
+          setFeedStatus("已交给想法分析 Agent，可在应用通知和想法分析项目中继续", "success");
+        } catch (error) { button.disabled = false; button.textContent = "交给想法分析"; setFeedStatus(`登记失败：${error.message}`, "error"); }
+      }
+      if (button.dataset.reviewOpportunity) {
+        const verdict = window.prompt("这条机会当前判断？例如：继续验证 / 暂停 / 不相关", "继续验证");
+        if (!verdict) return;
+        const rationale = window.prompt("记录一句判断依据（可选）", "");
+        button.disabled = true; button.textContent = "保存中…";
+        try { await requestJson(`/api/aihot/opportunities/${encodeURIComponent(button.dataset.reviewOpportunity)}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ verdict, rationale: rationale || "", confirmed: true }) }); setFeedStatus("机会复盘已保存，可在想法分析中继续验证。", "success"); } catch (error) { button.disabled = false; setFeedStatus(`复盘失败：${error.message}`, "error"); }
+      }
+    });
+
+    function appendChat(role, content) { qs("#chat-log").insertAdjacentHTML("beforeend", `<div class="chat-message ${role}"><strong>${role === "user" ? "你" : "AI 热点研究 Agent"}</strong><p>${escapeHtml(content)}</p></div>`); qs("#chat-log").scrollTop = qs("#chat-log").scrollHeight; }
+    function renderAihotRuns(items = [], summary = {}) { const history = qs("#aihot-run-history"); const failed = Number(summary.failed || 0); qs("#aihot-run-summary").textContent = failed ? `${failed} 个失败，可重试` : `${items.length} 条记录`; if (!items.length) { history.innerHTML = '<div class="project-agent-runs-empty">分析后会显示运行状态、失败原因和重试入口。</div>'; return; } history.innerHTML = items.slice(0, 6).map((run) => `<article class="project-agent-run ${escapeHtml(run.status || "queued")}"><div class="project-agent-run-top"><span class="project-agent-run-state"><i></i>${escapeHtml(run.status_label || run.status)}</span><time>${escapeHtml(formatDate(run.updated_at || run.created_at))}</time></div><div class="project-agent-run-title">第 ${escapeHtml(run.attempt || 1)}/${escapeHtml(run.max_attempts || 1)} 次 · ${escapeHtml(run.title || "热点分析")}</div>${run.error ? `<p class="project-agent-run-error">${escapeHtml(run.error)}</p>` : ""}<div class="project-agent-run-foot">${run.retryable ? `<button class="project-agent-run-retry" type="button" data-aihot-retry="${escapeHtml(run.id)}">重试</button>` : ""}<span>查看详情</span></div></article>`).join(""); }
+    async function loadAihotRuns() { const body = await requestJson("/api/agent/aihot/runs?limit=6"); renderAihotRuns(body.runs || [], body.summary || {}); if (!sessionId && body.runs?.[0]?.session_id) sessionId = body.runs[0].session_id; }
+    async function updateAgentState() {
+      const state = document.querySelector(".agent-state");
+      if (!state) return;
+      try {
+        const body = await requestJson("/api/settings/llm");
+        const llm = body.llm || {};
+        if (llm.configured) { state.className = "agent-state"; state.innerHTML = "<i></i> Agent 就绪"; }
+        else { state.className = "agent-state warn"; state.innerHTML = "<i></i> 未配置 LLM"; state.title = "在「设置 → 全局 LLM」中配置后即可对话分析"; }
+      } catch (e) { state.className = "agent-state warn"; state.innerHTML = "<i></i> 状态未知"; }
+    }
+    qs("#aihot-run-history").addEventListener("click", async (event) => { const button = event.target.closest("[data-aihot-retry]"); if (!button) return; button.disabled = true; button.textContent = "重试中…"; try { const body = await requestJson(`/api/agent/aihot/runs/${encodeURIComponent(button.dataset.aihotRetry)}/retry`, { method: "POST" }); sessionId = body.session?.id || sessionId; appendChat("assistant", body.answer || "重试完成，但没有返回分析结果"); await loadAihotRuns(); } catch (error) { button.disabled = false; button.textContent = "重试"; appendChat("assistant", `重试失败：${error.message}`); } });
+    qs("#aihot-chat-form").addEventListener("submit", async (event) => { event.preventDefault(); const input = qs("#aihot-chat-input"); const message = input.value.trim(); if (!message) return; input.value = ""; appendChat("user", message); const button = event.currentTarget.querySelector("button[type=submit]"); button.disabled = true; button.textContent = "分析中…"; try { const body = await requestJson("/api/aihot/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message, mode: currentMode, item_ids: [...selected] }) }); sessionId = body.session?.id || sessionId; appendChat("assistant", body.answer || "没有返回分析结果"); await loadAihotRuns(); } catch (error) { appendChat("assistant", `分析失败：${error.message}`); await loadAihotRuns().catch(() => {}); } finally { button.disabled = false; button.textContent = "开始分析"; } });
+    document.querySelectorAll("[data-agent-prompt]").forEach((button) => button.addEventListener("click", () => { qs("#aihot-chat-input").value = button.dataset.agentPrompt || ""; qs("#aihot-chat-input").focus(); }));
+    loadAihotRuns().catch(() => {});
+    loadFeed();
+    updateAgentState();
+  </script>
+</body>
+</html>

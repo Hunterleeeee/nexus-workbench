@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0d1117" />
+    <title>Crawl4AI Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/styles.css?v=0.3.140" />
+    <link rel="stylesheet" href="/static/project-agent.css?v=0.3.140" />
+  </head>
+  <body data-project-id="crawl4ai">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Crawl4AI Studio 首页">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><path d="M8 12.5 16 8l8 4.5v7L16 24l-8-4.5v-7Z" stroke="currentColor" stroke-width="1.8"/><path d="m8.7 12.8 7.3 4 7.3-4M16 16.8V24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="24.8" cy="7.4" r="2.4" fill="currentColor"/></svg>
+          </span>
+          <span><strong>Crawl4AI</strong><small>STUDIO</small></span>
+        </a>
+        <div class="topbar-right">
+          <span class="system-pill"><span class="status-dot"></span><span id="system-status">线上研究工作台</span></span>
+          <button id="llm-settings-button" class="settings-button" type="button" aria-haspopup="dialog" aria-controls="settings-modal">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Z" stroke="currentColor" stroke-width="1.6"/><path d="m19.1 13.3 1.3 1-.9 1.6-1.6-.5a7.3 7.3 0 0 1-1.3 1.3l.5 1.6-1.6.9-1-1.3a7 7 0 0 1-1.7.2l-.6 1.5h-1.8l-.6-1.5a7 7 0 0 1-1.7-.2l-1 1.3-1.6-.9.5-1.6a7.3 7.3 0 0 1-1.3-1.3l-1.6.5-.9-1.6 1.3-1a7 7 0 0 1-.2-1.7l-1.5-.6v-1.8l1.5-.6a7 7 0 0 1 .2-1.7l-1.3-1 .9-1.6 1.6.5a7.3 7.3 0 0 1 1.3-1.3l-.5-1.6 1.6-.9 1 1.3a7 7 0 0 1 1.7-.2l.6-1.5h1.8l.6 1.5a7 7 0 0 1 1.7.2l1-1.3 1.6.9-.5 1.6a7.3 7.3 0 0 1 1.3 1.3l1.6-.5.9 1.6-1.3 1a7 7 0 0 1 .2 1.7l1.5.6V11l-1.5.6a7 7 0 0 1-.2 1.7Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>
+            <span>工作台全局 LLM</span><em id="llm-status-chip">未配置</em>
+          </button>
+          <span class="version-label">v0.3.140</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="control-panel">
+          <div class="eyebrow">网页研究工作台</div>
+          <h1>让网页自己<br /><em>把答案交出来</em></h1>
+          <p class="intro">给我一个地址，或者直接说你想知道什么。Crawl4AI 负责找内容，LLM 负责把它变成结论。</p>
+
+          <form id="crawl-form" class="crawl-form">
+            <div class="field-block">
+              <div class="field-heading"><label for="task">研究目标</label><span>可选</span></div>
+              <textarea id="task" rows="4" placeholder="例如：提取所有产品名、价格、库存，并指出最值得关注的 3 个产品。"></textarea>
+              <div class="prompt-pills" aria-label="研究目标示例">
+                <button type="button" class="prompt-pill" data-prompt="总结页面的核心观点，并列出 5 条关键事实。">总结重点</button>
+                <button type="button" class="prompt-pill" data-prompt="提取页面中的产品、价格和核心卖点，整理成表格。">提取产品</button>
+                <button type="button" class="prompt-pill" data-prompt="找出页面中可能影响购买决策的风险和缺失信息。">找风险</button>
+              </div>
+            </div>
+
+            <div class="field-block">
+              <div class="field-heading"><label for="urls">网页地址</label><span>每行一个</span></div>
+              <textarea id="urls" class="url-input" rows="4" placeholder="https://example.com\nhttps://example.org/article"></textarea>
+            </div>
+
+            <div class="options-row">
+              <label class="switch-label" for="render-js"><input id="render-js" type="checkbox" checked /><span class="switch"></span><span>执行 JavaScript</span></label>
+              <label class="switch-label" for="refresh"><input id="refresh" type="checkbox" /><span class="switch"></span><span>跳过缓存</span></label>
+            </div>
+
+            <div class="advanced-grid">
+              <label><span>爬取深度</span><select id="max-depth"><option value="1">单页</option><option value="2">深度 2</option><option value="3">深度 3</option></select></label>
+              <label><span>最多页面</span><input id="max-pages" type="number" min="1" max="50" value="5" /></label>
+            </div>
+
+            <button id="crawl-button" class="primary-button" type="submit">
+              <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span>开始爬取</span><span class="button-arrow">↗</span>
+            </button>
+          </form>
+
+          <div id="config-note" class="config-note"><span class="note-icon">i</span><span>启动后在右侧继续和网页内容对话。</span></div>
+        </aside>
+
+        <section class="content-panel">
+          <div class="content-header">
+            <div>
+              <div class="eyebrow">实时研究</div>
+              <h2>研究结果</h2>
+            </div>
+            <div class="run-badge" id="run-badge"><span class="status-dot muted"></span><span id="run-status">等待任务</span></div>
+          </div>
+
+          <div class="metrics-row">
+            <div class="metric-card"><span class="metric-label">页面</span><strong id="metric-pages">—</strong><small id="metric-page-note">尚未开始</small></div>
+            <div class="metric-card"><span class="metric-label">耗时</span><strong id="metric-time">—</strong><small>本次任务</small></div>
+            <div class="metric-card"><span class="metric-label">引擎</span><strong id="metric-engine">—</strong><small id="metric-model">等待配置</small></div>
+          </div>
+
+          <section class="history-card card" aria-label="网页研究历史任务">
+            <div class="card-header"><div><span class="card-kicker">RUN HISTORY</span><h3>历史研究</h3></div><span id="crawl-history-summary" class="history-summary">读取中…</span></div>
+            <div id="crawl-history-list" class="crawl-history-list"><div class="history-empty">完成或失败的研究任务会保存在这里。</div></div>
+          </section>
+
+          <section class="research-ops-card card" aria-label="研究队列与计划">
+            <div class="card-header"><div><span class="card-kicker">QUEUE / PLANS</span><h3>研究队列与计划</h3></div><button id="refresh-research-ops" class="quiet-button" type="button">刷新</button></div>
+            <div class="research-ops-summary"><span id="crawl-queue-summary">队列读取中…</span><small>同一工作台最多并发 2 个抓取任务</small></div>
+            <div id="crawl-queue-list" class="research-queue-list"><div class="history-empty">读取中…</div></div>
+            <details class="research-plan-details"><summary>创建一个研究计划</summary><form id="research-plan-form" class="research-plan-form"><input id="research-plan-title" maxlength="160" placeholder="计划名称，例如：每周追踪竞品定价" required /><textarea id="research-plan-query" rows="2" maxlength="2000" placeholder="研究问题或整理要求" required></textarea><textarea id="research-plan-urls" rows="3" placeholder="每行一个 http/https 地址" required></textarea><div class="research-plan-actions"><span id="research-plan-message" role="status"></span><button class="secondary-button" type="submit">保存计划</button></div></form></details>
+            <div class="research-plan-head"><strong>已保存计划</strong><small>计划创建后仍需点击运行，避免误触外部抓取。</small></div>
+            <div id="research-plan-list" class="research-plan-list"><div class="history-empty">读取中…</div></div>
+          </section>
+
+          <section class="research-ops-card observability-card card" aria-label="Crawl4AI 长期观察">
+            <div class="card-header"><div><span class="card-kicker">OBSERVABILITY / 7 DAYS</span><h3>Crawl4AI 稳定性观察</h3></div><button id="refresh-crawl-observability" class="quiet-button" type="button">刷新观察</button></div>
+            <div id="crawl-observability-summary" class="research-ops-summary"><span>正在读取观察窗口…</span><small>样本不足时不下长期结论</small></div>
+            <div id="crawl-observability-details" class="observability-details" aria-live="polite"><div class="history-empty">只读取脱敏 Run、来源质量和 Worker 心跳。</div></div>
+          </section>
+
+          <section class="research-ops-card card" aria-label="证据比较与交接">
+            <div class="card-header"><div><span class="card-kicker">EVIDENCE / HANDOFF</span><h3>证据比较与跨项目交接</h3></div><small>保留 Artifact 引用，不复制上游正文</small></div>
+            <div class="research-plan-form"><input id="crawl-evidence-artifact-ids" placeholder="Artifact ID，至少两个用于比较，例如 12, 18" /><input id="crawl-evidence-question" placeholder="比较问题（可选）" /><div class="research-plan-actions"><button id="crawl-compare-evidence" class="secondary-button" type="button">比较证据</button><select id="crawl-handoff-target" aria-label="交接目标"><option value="knowledge">交给知识库</option><option value="doc-factory">交给文档工厂</option><option value="idea-analysis">交给想法分析</option></select><button id="crawl-handoff-evidence" class="secondary-button" type="button">交接当前证据</button></div></div>
+            <div id="crawl-evidence-output" class="research-plan-message" role="status"></div>
+          </section>
+
+          <div class="dashboard-grid">
+            <section class="result-card card">
+              <div class="card-header">
+                <div><span class="card-kicker">SOURCE MATERIAL</span><h3>抓取内容</h3></div>
+                <button id="copy-button" class="quiet-button" type="button" disabled><svg viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.7"/></svg>复制内容</button>
+              </div>
+              <div id="source-list" class="source-list empty-state"><div class="empty-mark">01</div><strong>还没有研究材料</strong><p>填入地址后，抓取到的页面会出现在这里。</p></div>
+              <div id="document-view" class="document-view hidden"></div>
+              <div id="activity-log" class="activity-log"><div class="log-placeholder">任务日志会在这里实时出现</div></div>
+            </section>
+
+            <section class="assistant-card card">
+              <div class="card-header assistant-header">
+                <div class="assistant-title"><span class="assistant-avatar"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v3M7.5 7.5 5.4 5.4M16.5 7.5l2.1-2.1M5 12h-3M19 12h3M7.5 16.5l-2.1 2.1M16.5 16.5l2.1 2.1M12 17v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.7"/><circle cx="10" cy="11" r=".8" fill="currentColor"/><circle cx="14" cy="11" r=".8" fill="currentColor"/><path d="M10 14c1.2.8 2.8.8 4 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span><span><span class="card-kicker">RESEARCH COPILOT</span><h3>继续分析</h3></span></div>
+                <span class="online-label"><span class="status-dot"></span><span>AGENT · 本地检索</span></span>
+              </div>
+              <div id="chat-messages" class="chat-messages">
+                <div class="chat-message assistant-message"><div class="message-label">COPILOT</div><p>先从左侧开始。爬取完成后，你可以继续问我页面里的任何问题。</p></div>
+              </div>
+              <div class="quick-asks"><button type="button" data-ask="把重要事实整理成 JSON。">转成 JSON</button><button type="button" data-ask="只分析价格、成本和购买建议。">分析价格</button><button type="button" data-ask="指出信息缺口，并告诉我还需要查什么。">找信息缺口</button></div>
+              <form id="chat-form" class="chat-form"><textarea id="chat-input" rows="2" placeholder="继续问：哪一个方案最值得选？（Enter 发送，Shift+Enter 换行）" disabled></textarea><button id="chat-button" type="submit" aria-label="发送" disabled><svg viewBox="0 0 24 24" fill="none"><path d="m4 4 16 8-16 8 3-8-3-8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7 12h13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button></form>
+              <div class="chat-footnote">回答只基于本次抓取内容 · <span id="chat-model-label">LLM 未配置</span></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="settings-modal" class="settings-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <section class="settings-modal" role="document">
+        <header class="settings-header">
+          <div><span class="card-kicker">MODEL CONNECTION</span><h2 id="settings-title">配置 LLM</h2></div>
+          <button id="close-settings" class="modal-close" type="button" aria-label="关闭设置">×</button>
+        </header>
+        <p class="settings-intro">可配置多个 Provider；必须同时有 API Key、模型名和合法 http/https 地址才会调用。地址可填 API 基地址（如 <code>/v1</code>）或完整 <code>/chat/completions</code> 地址；主配置优先，失败后按保存顺序切换 fallback，环境变量只作最后兜底。</p>
+        <form id="llm-settings-form" class="settings-form">
+          <div id="global-providers" class="global-providers" aria-label="LLM 配置条目列表"></div>
+          <button id="global-add-provider" class="global-add-provider" type="button">＋ 添加一个配置条目</button>
+          <section class="companion-settings" aria-labelledby="companion-settings-title">
+            <div class="companion-settings-head">
+              <div><strong id="companion-settings-title">本机 Gemini 桥（来财 Companion）</strong><small>浏览 Google / Gemini 网页时按需启用；Workbench 不接触 OAuth、Cookie 或 hosts 内容。</small></div>
+              <span id="companion-state" class="companion-state">检查中…</span>
+            </div>
+            <div class="companion-settings-actions">
+              <button id="companion-toggle" class="secondary-button" type="button" disabled>检查本机 Companion</button>
+              <span id="companion-detail">Companion 未启动或当前浏览器不允许本机连接。</span>
+            </div>
+          </section>
+          <div id="llm-config-summary" class="settings-config-summary" role="status"></div>
+          <div id="settings-message" class="settings-message" role="status" aria-live="polite"></div>
+          <div class="settings-actions"><span></span><button id="cancel-settings" class="secondary-button" type="button">取消</button><button id="save-settings" class="save-button" type="submit">保存全局配置</button></div>
+        </form>
+      </section>
+    </div>
+    <script src="/static/request.js?v=0.3.140"></script>
+    <script src="/static/llm-settings.js?v=0.3.140"></script>
+    <script src="/static/app.js?v=0.3.140"></script>
+    <script src="/static/project.js?v=0.3.140"></script>
+  </body>
+</html>

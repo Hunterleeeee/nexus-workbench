@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Sub2API 账户 · Workbench</title><link rel="stylesheet" href="/static/sub2api.css?v=0.3.140"/><link rel="stylesheet" href="/static/project-agent.css?v=0.3.140"/><link rel="stylesheet" href="/static/sub2api-agent.css?v=0.3.140"/></head>
+<body><div class="shell"><header class="topbar"><a class="brand" href="/"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="brand-copy"><strong>Workbench</strong><small>ACCOUNT MONITOR</small></span></a><div class="actions"><a class="button" href="/">← 返回工作台</a><a class="external" href="https://sub.chengsir.asia/dashboard" target="_blank" rel="noreferrer">打开 Sub2API ↗</a></div></header>
+<main class="main"><section class="heading"><div><div class="eyebrow">账户监控2API</div><h1>Sub2API 账户</h1><p>把余额、订阅和用量放到工作台里，先看状态；需要最新数据时，登录原页面后回到这里同步。</p></div><div class="heading-actions"><div id="login-status" class="status" role="status" aria-live="polite"><i></i>正在读取</div><button id="evaluate-alerts" class="button" type="button">检查风险</button></div></section>
+<section class="metrics"><article class="metric"><span class="metric-label">每周额度</span><div class="metric-main"><strong id="weekly-quota">—</strong><small id="weekly-reset-top">—</small></div></article><article class="metric"><span class="metric-label">订阅剩余</span><div class="metric-main"><strong id="remaining">—</strong><small id="expires">—</small></div></article><article class="metric"><span class="metric-label">API Keys</span><div class="metric-main"><strong id="key-count">—</strong><small id="key-active">—</small></div></article><article class="metric"><span class="metric-label">今日消费</span><div class="metric-main"><strong id="today-cost">—</strong><small id="today-requests">—</small></div></article><article class="metric"><span class="metric-label">数据新鲜度</span><div class="metric-main"><strong id="data-freshness">—</strong><small id="data-age">—</small></div></article></section>
+<section class="grid"><article class="panel subscription"><div class="panel-head"><h2>订阅状态</h2><small id="checked-at">最近同步 —</small></div><div class="subscription-head"><div class="subscription-name"><strong id="subscription-name">—</strong><span id="subscription-provider">—</span></div><span id="subscription-status" class="valid">—</span></div><div class="sub-row"><span>到期时间</span><strong id="subscription-expires">—</strong></div><div class="sub-row"><span>账户余额（快照）</span><strong id="balance">—</strong></div><div class="sub-row"><span>每周额度</span><strong id="weekly-usage">—</strong><small id="weekly-reset">—</small></div><div class="sub-row"><span>每月额度</span><strong id="monthly-usage">—</strong><small id="monthly-reset">—</small></div></article><article class="panel usage"><div class="panel-head"><h2>用量概览</h2><small>最近一次同步</small></div><div class="usage-grid"><div class="usage-card"><label>今日请求</label><strong id="today-requests-card">—</strong><small id="today-tokens">— tokens</small></div><div class="usage-card"><label>累计请求</label><strong id="total-requests">—</strong><small id="total-tokens">— tokens</small></div><div class="usage-card"><label>今日消费</label><strong id="today-cost-card">—</strong><small>上游实际用量</small></div><div class="usage-card"><label>累计消费</label><strong id="total-cost">—</strong><small>历史累计</small></div></div><div id="cost-breakdown" class="cost-breakdown" role="status"><span class="loading">正在读取分组成本…</span></div></article></section>
+<section class="panel health-panel"><div class="panel-head"><h2>账户健康与提醒</h2><small id="health-status" role="status" aria-live="polite">正在评估…</small></div><div id="health-summary" class="health-summary" role="status" aria-live="polite">正在读取数据完整性、额度风险和到期风险…</div><div id="alert-list" class="alert-list" aria-live="polite"></div><div id="prediction-card" class="prediction-card" hidden><div class="prediction-head"><strong>额度消耗预测</strong><button id="explain-change" class="button small" type="button">解释变化</button></div><p id="prediction-note" class="prediction-note">—</p><p id="quota-change-explanation" class="change-explanation" role="status" aria-live="polite" hidden>—</p></div><p class="note">“检查风险”只会在本地创建可追踪的收件箱工作项和应用通知，不会充值、删除 Key 或修改 Sub2API。</p></section>
+<section class="panel history-panel"><div class="panel-head"><h2>额度趋势</h2><div class="panel-head-actions"><small>周 / 月剩余比例 · 来自脱敏历史快照</small><button id="explain-changes" class="button secondary" type="button">解释快照差异</button></div></div><div id="trend-chart" class="trend-chart"><div class="loading">需要至少 2 次同步记录才能画趋势。</div></div><div id="quota-forecast" class="quota-forecast" role="status"><div class="loading">正在计算保守预测…</div></div><div id="snapshot-change-explanation" class="loading" role="status" aria-live="polite" hidden></div></section>
+<section class="panel sync-panel"><div class="panel-head"><h2>连接面板</h2><small>登录一次 · 有续期凭证时自动同步</small></div>
+<p class="note">登录成功且面板提供可续期凭证时，工作台服务器会<b>每 30 分钟自动同步</b>账户数据；如果面板拒绝凭证，后台会暂停自动重试，重新登录后恢复。面板只返回短期登录态时，请使用浏览器书签同步。密码仅用于本次登录换取凭证，<b>不会保存</b>。</p>
+<div class="login-row"><input id="panel-email" type="email" placeholder="面板账号（邮箱）" autocomplete="username" /><input id="panel-password" type="password" placeholder="面板密码" autocomplete="current-password" /><button id="panel-login" class="button" type="button">登录并连接</button></div>
+<p id="auto-sync-state" class="auto-sync-state" role="status"></p>
+<div class="sync-actions"><button id="sync-auto-now" class="button" type="button">立即同步一次</button><span id="sync-message" role="status"></span></div>
+<div id="endpoint-results" class="endpoint-results"></div>
+<details class="extract-details"><summary>高级：浏览器书签一键同步 / 手动粘贴 JSON</summary><div class="browser-sync-steps"><strong>浏览器兜底步骤</strong><ol><li>打开 Sub2API 的<a href="https://sub.chengsir.asia/keys" target="_blank" rel="noreferrer">密钥页</a>并确认已登录。</li><li>把下面代码复制为浏览器书签，点击书签后等待同步提示。</li><li>看到“同步成功”后回到本页刷新；失败时重新登录 Sub2API，再点击一次书签。</li></ol></div><p id="extract-policy" class="note">正在读取安全同步脚本说明…</p><pre id="extract-script"></pre><button id="copy-extract-script" class="button secondary" type="button">复制书签代码</button><textarea id="snapshot-json" rows="5" spellcheck="false" placeholder='{"balance":"$0.00","subscription":{...},"keys":[...]}'></textarea><div class="sync-actions"><button id="submit-snapshot" class="button secondary" type="button">提交脱敏 JSON</button></div></details></section>
+<section class="panel history-panel"><div class="panel-head"><h2>同步历史</h2><small>最近 30 次脱敏快照</small></div><div id="history-list" class="history-list" aria-live="polite"><div class="loading">正在读取…</div></div></section>
+<section class="panel keys"><div class="panel-head"><h2>API Key 状态</h2><small>仅显示脱敏信息</small></div><div class="table-head"><span>名称 / Key</span><span>分组</span><span>并发</span><span>今日 / 近 30 天</span><span>状态</span></div><div id="key-list" class="key-list"><div class="loading">正在读取…</div></div><p class="note">数据来自当前已登录浏览器页面的最近一次同步，不保存完整 API Key、密码或浏览器 Cookie。需要最新数据时，打开 <a href="https://sub.chengsir.asia/keys" target="_blank" rel="noreferrer">Sub2API API 密钥页</a> 后重新同步。</p></section></main></div>
+<script src="/static/request.js?v=0.3.140"></script><script src="/static/project.js?v=0.3.140"></script><script>
+const $=(s)=>document.querySelector(s); const esc=(v)=>String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); const fmt=(v)=>v?new Date(v).toLocaleString("zh-CN",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+function renderTrend(history = []) {
+  const el = $("#trend-chart");
+  const points = history.filter((item) => Number.isFinite(item.weekly_remaining_pct) || Number.isFinite(item.monthly_remaining_pct));
+  if (points.length < 2) { el.innerHTML = '<div class="loading">需要至少 2 次同步记录才能画趋势。</div>'; return; }
+  const rows = points.slice().reverse();
+  const width = 640, height = 150, pad = { left: 34, right: 10, top: 12, bottom: 22 };
+  const xAt = (index) => pad.left + (width - pad.left - pad.right) * (rows.length === 1 ? 0.5 : index / (rows.length - 1));
+  const series = (key) => {
+    const values = rows.map((item) => (Number.isFinite(item[key]) ? Math.max(0, Math.min(100, item[key])) : null));
+    const usable = values.filter((value) => value !== null);
+    if (!usable.length) return null;
+    const min = Math.max(0, Math.floor((Math.min(...usable) - 10) / 20) * 20);
+    const max = Math.min(100, Math.ceil((Math.max(...usable) + 10) / 20) * 20);
+    const yAt = (value) => pad.top + (height - pad.top - pad.bottom) * (1 - (value - min) / Math.max(1, max - min));
+    return { values, min, max, yAt };
+  };
+  const weekly = series("weekly_remaining_pct"), monthly = series("monthly_remaining_pct");
+  const gridLines = [0, 25, 50, 75, 100].map((value) => {
+    const y = weekly ? weekly.yAt(value) : pad.top + (height - pad.top - pad.bottom) * (1 - value / 100);
+    return `<line x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}" stroke="#293640" stroke-width="1" stroke-dasharray="3 3"/><text x="${pad.left - 6}" y="${y + 3}" text-anchor="end" class="trend-label">${value}%</text>`;
+  }).join("");
+  const path = (d) => d ? d.values.map((value, index) => value === null ? "" : `${index === 0 ? "M" : "L"}${xAt(index)},${d.yAt(value)}`).filter(Boolean).join(" ") : "";
+  const dots = (d, color, key) => d ? d.values.map((value, index) => value === null ? "" : `<circle cx="${xAt(index)}" cy="${d.yAt(value)}" r="2.6" fill="${color}"><title>${key === "weekly" ? "周额度剩余" : "月额度剩余"} ${Math.round(value)}%（${fmt(rows[index].checked_at)}）</title></circle>`).join("") : "";
+  const labels = rows.map((item, index) => index % Math.max(1, Math.ceil(rows.length / 6)) === 0 ? `<text x="${xAt(index)}" y="${height - 6}" text-anchor="middle" class="trend-label">${fmt(item.checked_at)}</text>` : "").join("");
+  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" class="trend-svg" role="img" aria-label="Sub2API 额度趋势图"><title>Sub2API 额度趋势</title>${gridLines}${weekly ? `<path d="${path(weekly)}" fill="none" stroke="#3b82c4" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${dots(weekly, "#3b82c4", "weekly")}` : ""}${monthly ? `<path d="${path(monthly)}" fill="none" stroke="#8a7bd8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${dots(monthly, "#8a7bd8", "monthly")}` : ""}${labels}</svg><div class="trend-legend"><span class="legend-weekly">周额度剩余</span><span class="legend-monthly">月额度剩余</span><small>剩余比例越高越好；同步间隔不定，横轴为快照时间。</small></div>`;
+}
+
+async function load(){try{const response=await fetch("/api/sub2api");const body=await response.json();if(!response.ok)throw new Error(body.detail||"无法读取账户状态");const s=body.snapshot||{},sub=s.subscription||{},today=s.today||{},total=s.total||{};$("#login-status").innerHTML=`<i></i>${s.logged_in?"已登录":"未同步"}`;$("#balance").textContent=s.balance||"—";$("#weekly-quota").textContent=sub.weekly_usage||"—";$("#weekly-reset-top").textContent=sub.weekly_reset||"—";$("#remaining").textContent=sub.remaining||"—";$("#expires").textContent=sub.expires_at||"—";$("#key-count").textContent=s.api_keys?.total??s.keys?.length??"—";$("#key-active").textContent=`${s.api_keys?.active??"—"} 个启用`;$("#today-cost").textContent=today.cost||"—";$("#today-requests").textContent=`${today.requests||"—"} 次请求`;$("#checked-at").textContent=`最近同步 ${fmt(s.checked_at)}`;$("#subscription-name").textContent=sub.name||"—";$("#subscription-provider").textContent=sub.provider||"—";$("#subscription-status").textContent=sub.status||"—";$("#subscription-expires").textContent=sub.expires_at||"—";$("#weekly-usage").textContent=sub.weekly_usage||"—";$("#weekly-reset").textContent=sub.weekly_reset||"—";$("#monthly-usage").textContent=sub.monthly_usage||"—";$("#monthly-reset").textContent=sub.monthly_reset||"—";$("#today-requests-card").textContent=today.requests||"—";$("#today-tokens").textContent=`${today.tokens||"—"} tokens`;$("#total-requests").textContent=total.requests||"—";$("#total-tokens").textContent=`${total.tokens||"—"} tokens`;$("#today-cost-card").textContent=today.cost||"—";$("#total-cost").textContent=total.cost||"—";$("#key-list").innerHTML=(s.keys||[]).map((key)=>`<div class="key-row"><span><b class="name">${esc(key.name)}</b><br/><code>${esc(key.masked)}</code></span><span class="muted">${esc(key.group)}</span><span class="muted">${esc(key.concurrency)}</span><span class="muted">${esc(key.today_cost)} / ${esc(key.month_cost)}</span><span class="live">${esc(key.status)}</span></div>`).join("")||'<div class="loading">没有已同步的 Key 信息</div>';  const prediction = body.prediction || {};
+  const predictionCard = $("#prediction-card");
+  if (predictionCard) {
+    if (prediction.available) {
+      predictionCard.hidden = false;
+      $("#prediction-note").textContent = prediction.note || "额度消耗预测";
+      const suggestions = prediction.suggestions || [];
+      const suggestionNote = document.querySelector(".prediction-suggestions");
+      if (suggestionNote) suggestionNote.remove();
+      if (suggestions.length) {
+        const box = document.createElement("div");
+        box.className = "prediction-suggestions";
+        box.innerHTML = "<strong>建议</strong>" + suggestions.map((item) => "<p>" + esc(item) + "</p>").join("");
+        predictionCard.querySelector(".prediction-head")?.after(box);
+      }
+      $("#quota-change-explanation").hidden = true;
+    } else {
+      predictionCard.hidden = false;
+      $("#prediction-note").textContent = prediction.reason || "暂无预测";
+      $("#quota-change-explanation").hidden = true;
+    }
+  }
+renderTrend(body.history||[]); return body;}catch(error){$("#login-status").innerHTML=`<i></i>${esc(error.message)}`;$("#login-status").classList.add("error"); const summary=$("#health-summary"); if (summary) summary.innerHTML=wbRetryMarkup(error.message, "重试读取账户"); window.__sub2ApiLoadPromise = null; return null;}}
+async function loadPanelSettings() {
+  try { const r = await fetch("/api/sub2api/panel-settings"); const b = await r.json();
+    const el = $("#auto-sync-state");
+    if (window.renderSub2ApiSyncState && b.sync_state) window.renderSub2ApiSyncState(b.sync_state);
+    else if (b.auto_sync_available || b.has_credential) { el.textContent = "✓ 已连接面板 · 服务器每 30 分钟自动同步"; el.className = "auto-sync-state ok"; }
+    else if (b.has_access_token) { el.textContent = "已登录，但面板未提供可续期凭证 · 请用浏览器书签同步"; el.className = "auto-sync-state warn"; }
+    else { el.textContent = "尚未连接面板 — 用上方账号密码登录一次即可"; el.className = "auto-sync-state warn"; }
+  } catch (e) {
+    const el = $("#auto-sync-state");
+    if (el) { el.innerHTML = wbRetryMarkup("读取连接状态失败：" + e.message, "重试读取连接状态"); el.querySelector("[data-wb-retry]")?.addEventListener("click", loadPanelSettings, { once: true }); }
+  }
+}
+$("#panel-login").addEventListener("click", async () => {
+  const email = $("#panel-email").value.trim(); const password = $("#panel-password").value;
+  const msg = $("#auto-sync-state"); const btn = $("#panel-login");
+  if (!email || !password) { msg.textContent = "请输入面板账号和密码"; msg.className = "auto-sync-state warn"; return; }
+  window.WorkbenchUX?.wbSetBusy(btn, true, "连接中…"); msg.textContent = "正在连接面板…"; msg.className = "auto-sync-state";
+  try { const r = await fetch("/api/sub2api/panel-login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }); const b = await r.json(); if (!r.ok) throw new Error(b.detail || "登录失败");
+    $("#panel-email").value = ""; $("#panel-password").value = "";
+    msg.textContent = b.auto_sync_available ? "✓ 已连接，开始自动同步" : "✓ 已登录，但面板未提供可续期凭证；请用浏览器书签同步"; msg.className = b.auto_sync_available ? "auto-sync-state ok" : "auto-sync-state warn";
+  }
+  catch (e) { msg.textContent = e.message; msg.className = "auto-sync-state error"; }
+  finally { window.WorkbenchUX?.wbSetBusy(btn, false); }
+});
+$("#sync-auto-now").addEventListener("click", async () => {
+  const btn = $("#sync-auto-now"); const msg = $("#sync-message"); const results = $("#endpoint-results");
+  window.WorkbenchUX?.wbSetBusy(btn, true, "同步中…"); msg.textContent = "正在从面板读取数据…"; results.innerHTML = "";
+  try { const r = await fetch("/api/sub2api/sync-auto", { method: "POST" }); const b = await r.json(); if (!r.ok) throw new Error(b.detail || "同步失败");
+    msg.textContent = "✓ 同步完成 · " + ((b.snapshot && b.snapshot.checked_at || "").slice(0, 16).replace("T", " "));
+    const eps = b.endpoints || {};
+    results.innerHTML = Object.entries(eps).map(([path, info]) => `<span class="ep ${info.status}">${path} → ${info.status}${info.detail ? " · " + esc(info.detail) : ""}</span>`).join("");
+    await Promise.all([loadPanelSettings(), load()]);
+  } catch (e) { msg.textContent = e.message; msg.className = "sync-message error"; if (String(e.message).includes("Admin API Key")) { results.innerHTML = '<span class="ep denied">自动同步凭证已失效：请重新登录并连接面板；也可以展开“高级”使用书签或手动粘贴脱敏 JSON。</span>'; } }
+  finally { window.WorkbenchUX?.wbSetBusy(btn, false); }
+});
+
+let BOOKMARKLET_URL = "";
+async function loadBrowserSyncScript() {
+  const scriptNode = $("#extract-script");
+  const policyNode = $("#extract-policy");
+  try {
+    const response = await fetch("/api/sub2api/browser-sync-script");
+    const body = await response.json();
+    if (!response.ok || !body.script) throw new Error(body.detail || "安全同步脚本读取失败");
+    BOOKMARKLET_URL = body.script;
+    if (scriptNode) scriptNode.textContent = BOOKMARKLET_URL;
+    if (policyNode) policyNode.textContent = body.policy || "书签脚本只提交脱敏字段。";
+  } catch (error) {
+    if (scriptNode) scriptNode.textContent = "暂时无法生成脚本，请使用服务器自动同步或手动粘贴脱敏 JSON。";
+    if (policyNode) policyNode.textContent = error.message;
+  }
+}
+loadBrowserSyncScript();
+$("#copy-extract-script").addEventListener("click", () => { navigator.clipboard.writeText(BOOKMARKLET_URL).then(() => { const b = $("#copy-extract-script"); b.textContent = "已复制 ✓"; setTimeout(() => { b.textContent = "复制书签代码"; }, 1500); }); });
+$("#submit-snapshot").addEventListener("click", async () => {
+  const raw = $("#snapshot-json").value.trim();
+  const msg = $("#sync-message");
+  if (!raw) { msg.textContent = "请先粘贴 JSON"; return; }
+  let snapshot;
+  try { snapshot = JSON.parse(raw); } catch (e) { msg.textContent = "JSON 解析失败：" + e.message; return; }
+  const button = $("#submit-snapshot"); window.WorkbenchUX?.wbSetBusy(button, true, "提交中…"); msg.textContent = "正在提交…";
+  try {
+    const resp = await fetch("/api/sub2api/snapshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ snapshot, source: "manual_paste" }) });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.detail || "提交失败");
+    msg.textContent = "已同步 ✓";
+    $("#snapshot-json").value = "";
+    await Promise.all([load(), loadPanelSettings()]);
+  } catch (e) { msg.textContent = e.message; }
+  finally { window.WorkbenchUX?.wbSetBusy(button, false); }
+});
+// 「检查风险」按钮：评估额度/到期/新鲜度风险，产生本地工作项与应用通知。
+$("#evaluate-alerts").addEventListener("click", async () => {
+  const button = $("#evaluate-alerts");
+  window.WorkbenchUX?.wbSetBusy(button, true, "评估中…");
+  const healthStatus = $("#health-status");
+  try {
+    const resp = await fetch("/api/sub2api/alerts/evaluate", { method: "POST" });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.detail || "风险评估失败");
+    const analysis = body.analysis || {};
+    if (healthStatus) {
+      healthStatus.textContent = analysis.status_label || "评估完成";
+      const list = $("#alert-list");
+      if (list) {
+        const alerts = analysis.alerts || [];
+        list.innerHTML = alerts.length ? alerts.map((alert) => `<div class="alert-row alert-${escapeHtml(alert.level || "info")}"><strong>${escapeHtml(alert.title || alert.label || "提醒")}</strong><span>${escapeHtml(alert.detail || "")}</span></div>`).join("") : '<div class="alert-empty">暂时没有风险提醒</div>';
+      }
+    }
+    const msg = $("#sync-message");
+    if (msg) { msg.textContent = "✓ 风险评估完成，已记录工作项与通知"; }
+  } catch (e) {
+    if (healthStatus) healthStatus.textContent = "评估失败";
+    const msg = $("#sync-message");
+    if (msg) { msg.textContent = e.message; msg.className = "sync-message error"; }
+  } finally {
+    window.WorkbenchUX?.wbSetBusy(button, false);
+  }
+});
+$("#evaluate-alerts").dataset.sub2apiInlineBound = "true";
+// 「解释变化」按钮：对比最近两次快照，LLM 生成一句话原因解释。
+$("#explain-change").addEventListener("click", async () => {
+  const button = $("#explain-change");
+  const explainEl = $("#quota-change-explanation");
+  if (!explainEl) return;
+  window.WorkbenchUX?.wbSetBusy(button, true, "解释中…");
+  try {
+    const resp = await fetch("/api/sub2api/explain-change", { method: "POST" });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.detail || "解释失败");
+    explainEl.textContent = body.explanation || "暂无解释";
+    explainEl.hidden = false;
+  } catch (e) {
+    explainEl.textContent = "解释失败：" + e.message;
+    explainEl.hidden = false;
+  } finally {
+    window.WorkbenchUX?.wbSetBusy(button, false);
+  }
+});
+// 额度趋势 delta：显示较上次同步的变化量
+$("#explain-changes")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget; const output = $("#snapshot-change-explanation");
+  window.WorkbenchUX?.wbSetBusy(button, true, "读取中…"); output.hidden = false; output.textContent = "正在比较最近脱敏快照…";
+  try { const resp = await fetch("/api/sub2api/change-explanation"); const body = await resp.json(); if (!resp.ok) throw new Error(body.detail || "解释失败"); output.innerHTML = (body.changes || []).length ? (body.changes || []).map((item) => `<div>${esc(item.label)}：${esc(item.direction)} ${Math.abs(Number(item.delta || 0) * 100).toFixed(1)} 个百分点 <small>（${esc(item.reason)}）</small></div>`).join("") + `<p>${esc(body.policy || "")}</p>` : "暂无至少两次可比较的快照。"; } catch (error) { output.textContent = `快照差异读取失败：${error.message}`; } finally { window.WorkbenchUX?.wbSetBusy(button, false); }
+});
+async function loadTrendDelta() {
+  try {
+    const resp = await fetch("/api/sub2api/trend");
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.detail || "趋势读取失败");
+    const delta = body.delta || {};
+    const legend = document.querySelector(".trend-legend");
+    if (!legend) return;
+    const weeklyDelta = delta.weekly_remaining_pct;
+    const monthlyDelta = delta.monthly_remaining_pct;
+    let note = "";
+    if (typeof weeklyDelta === "number") note += `周剩余较上次 ${weeklyDelta >= 0 ? "+" : ""}${(weeklyDelta * 100).toFixed(1)}%`;
+    if (typeof monthlyDelta === "number") note += (note ? " · " : "") + `月剩余较上次 ${monthlyDelta >= 0 ? "+" : ""}${(monthlyDelta * 100).toFixed(1)}%`;
+    if (note) {
+      const el = document.createElement("small");
+      el.textContent = note;
+      legend.appendChild(el);
+    }
+    return body;
+  } catch (e) { /* 趋势不可用时不打扰 */ return null; }
+}
+window.__sub2ApiTrendPromise = loadTrendDelta();
+
+$("#health-summary")?.addEventListener("click", (event) => { if (!event.target.closest("[data-wb-retry]")) return; load(); });
+loadPanelSettings();
+window.__sub2ApiLoadPromise = load();
+</script><script src="/static/sub2api-agent.js?v=0.3.140"></script></body></html>

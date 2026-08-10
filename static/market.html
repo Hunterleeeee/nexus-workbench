@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>量化选股 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
+  <link rel="stylesheet" href="/static/market.css?v=0.3.140" />
+</head>
+<body data-project-id="market">
+  <div class="page-shell">
+    <header class="page-topbar">
+      <a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>MARKET RESEARCH</small></span></a>
+      <div class="page-actions"><a class="back-link" href="/">← 返回工作台</a><span class="market-note">行情仅供研究，不构成投资建议</span></div>
+    </header>
+    <main class="page-main">
+      <section class="page-heading">
+        <div>
+          <div class="eyebrow">量化选股</div>
+          <h1>量化选股</h1>
+          <p class="lede">看自选行情 → 让 AI 总结 → 输入代码出一张研究卡。所有数据只作参考，不会自动下单。</p>
+        </div>
+        <div class="page-kpi"><strong id="watch-count">0</strong><span>只自选</span><div id="market-kpi-today" class="market-kpi-today"></div></div>
+      </section>
+
+      <div class="m2-layout">
+        <main class="m2-main">
+
+          <section class="m2-card m2-ai" aria-labelledby="ai-scan-title">
+            <div class="m2-card-head">
+              <div><span class="card-kicker">AI 一眼看</span><h2 id="ai-scan-title">今天值得注意什么</h2></div>
+              <span id="ai-scan-state" class="m2-state">等待行情</span>
+            </div>
+            <div id="ai-scan-answer" class="m2-ai-answer"><div class="m2-empty">先添加自选并刷新行情，我会基于快照数据给你一句人话总结。</div></div>
+            <form id="ai-scan-form" class="m2-ai-form">
+              <input id="ai-scan-question" type="text" placeholder="追问，例如：长鑫和传智相比哪个更值得盯？（回车发送）" autocomplete="off" />
+              <button type="submit">追问</button>
+            </form>
+          </section>
+
+          <section class="m2-card" aria-labelledby="watch-title">
+            <div class="m2-card-head">
+              <div><span class="card-kicker">我的自选</span><h2 id="watch-title">自选与行情</h2><small id="checked-at">尚未同步</small></div>
+              <div class="m2-head-actions">
+                <button id="edit-watch" class="m2-button" type="button">编辑自选</button>
+                <button id="refresh-quotes" class="m2-button primary" type="button">刷新行情</button>
+              </div>
+            </div>
+            <div id="quote-list" class="quote-list" aria-live="polite"><div class="m2-empty">先添加自选股票，再刷新行情。</div></div>
+            <div id="quote-missing" class="quote-missing" hidden></div>
+          </section>
+
+          <section class="m2-card" aria-labelledby="research-card-title">
+            <div class="m2-card-head">
+              <div><span class="card-kicker">个股研究卡</span><h2 id="research-card-title">输入代码，出一张研究卡</h2><small>行情 + 估值 + 回测样本外，一次生成</small></div>
+              <form id="research-card-form" class="m2-inline-form">
+                <input id="research-card-symbol" type="text" placeholder="例如 600519 或 sh600519" autocomplete="off" />
+                <button type="submit">生成研究卡</button>
+              </form>
+            </div>
+            <div id="research-card-result" class="m2-research-card"><div class="m2-empty">输入股票代码后生成：先看行情和估值，再看量化回测与样本外结论。</div></div>
+          </section>
+
+          <section class="m2-tools" aria-label="研究工具">
+            <div class="m2-card">
+              <div class="m2-card-head"><div><span class="card-kicker">ETF 动量轮动</span><h3>宽基四选一</h3></div><button id="refresh-etf" class="m2-button" type="button">刷新</button></div>
+              <div id="etf-rotation" class="m2-tool-body"><div class="m2-empty">读取中…</div></div>
+            </div>
+            <div class="m2-card">
+              <div class="m2-card-head"><div><span class="card-kicker">可转债</span><h3>双低/低价筛选</h3></div><button id="refresh-cb" class="m2-button" type="button">刷新</button></div>
+              <div id="cb-list" class="m2-tool-body"><div class="m2-empty">读取中…</div></div>
+            </div>
+            <div class="m2-card">
+              <div class="m2-card-head"><div><span class="card-kicker">指数估值</span><h3>宽基贵不贵</h3></div><button id="refresh-valuation" class="m2-button" type="button">刷新</button></div>
+              <div id="valuation-percentile" class="m2-tool-body"><div class="m2-empty">读取中…</div></div>
+            </div>
+            <div class="m2-card">
+              <div class="m2-card-head"><div><span class="card-kicker">组合体检</span><h3>自选整体情况</h3></div><button id="refresh-portfolio" class="m2-button" type="button">刷新</button></div>
+              <div id="portfolio-check" class="m2-tool-body"><div class="m2-empty">读取中…</div></div>
+            </div>
+            <div class="m2-card">
+              <div class="m2-card-head"><div><span class="card-kicker">仓位计算器</span><h3>该买多少</h3></div></div>
+              <div class="m2-tool-body">
+                <div class="m2-form-grid">
+                  <label>总资金（元）<input id="ps-capital" type="number" value="100000" /></label>
+                  <label>单笔风险 %<input id="ps-risk" type="number" value="2" /></label>
+                  <label>止损距离 %<input id="ps-stop" type="number" value="8" /></label>
+                  <label>策略胜率 %<input id="ps-winrate" type="number" value="55" /></label>
+                  <label>盈亏比<input id="ps-ratio" type="number" value="1.5" step="0.1" /></label>
+                </div>
+                <p id="ps-result" class="m2-result">2% 法则：单笔最大亏损 ≤ 总资金 2%，根据止损距离算出建议买入金额。半凯利作为进阶参考。</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="m2-card" aria-labelledby="portfolio-detail-title">
+            <div class="m2-card-head"><div><span class="card-kicker">高级研究</span><h2 id="portfolio-detail-title">回测明细 / 策略对比 / 日报周报 / 历史采样</h2></div></div>
+            <details class="m2-details"><summary>展开高级研究工具（回测参数、样本外验证、策略对比、估值因子、日报周报、历史样本采集）</summary>
+              <div id="legacy-tools"></div>
+            </details>
+          </section>
+        </main>
+      </div>
+
+      <section class="market-agent-foot"><span class="market-step-num">·</span><div><strong>量化研究 Agent</strong><p>自选读写 · 行情快照 · AI 一眼看 · 研究卡 · ETF 轮动 · 可转债 · 指数估值 · 仓位参考 · 观察任务 · 回测研究 · 日报周报。所有结论只沉淀到知识库，不连接券商、不自动下单。</p></div></section>
+    </main>
+  </div>
+
+  <div id="watch-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="watch-modal-title">
+    <form id="watchlist-form" class="modal audit-modal">
+      <div class="modal-head"><div><h2 id="watch-modal-title">编辑自选</h2><p>搜索或粘贴代码，保存后自动拉行情。</p></div><button class="icon-button" data-close-watch type="button" aria-label="关闭">×</button></div>
+      <div class="market-search-wrap">
+        <label>搜索添加（输入名称或代码）<input id="market-search" type="text" placeholder="例如：茅台 / 沪深300ETF / 510300" autocomplete="off" /></label>
+        <div id="market-search-results" class="market-search-results" hidden></div>
+      </div>
+      <label>股票代码<textarea id="symbols" rows="6" placeholder="例如：\n600519\n000001\n510300（沪深300ETF）"></textarea></label>
+      <p class="form-note">支持 6 位 A 股代码（600519）、基金/ETF（510300、159915）；可直接输入名称搜索添加。代码只保存在本机工作台数据目录。</p>
+      <div class="modal-actions">
+        <button class="secondary-button" data-close-watch type="button">取消</button>
+        <button id="use-sample" class="secondary-button" type="button">试试示例自选</button>
+        <button class="primary-button" type="submit">保存自选</button>
+      </div>
+      <p id="market-message" class="modal-message" role="status"></p>
+    </form>
+  </div>
+  <script src="/static/request.js?v=0.3.140"></script>
+  <script src="/static/project.js?v=0.3.140"></script>
+  <script src="/static/market.js?v=0.3.140"></script>
+</body>
+</html>

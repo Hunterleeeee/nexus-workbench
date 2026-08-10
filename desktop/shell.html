@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <title>Workbench</title>
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; overflow: hidden; background: #eef1f4; }
+      #tabbar {
+        display: flex;
+        align-items: stretch;
+        gap: 4px;
+        height: 42px;
+        padding: 6px 8px 4px;
+        background: #e2e6eb;
+        border-bottom: 1px solid #cfd5dc;
+        user-select: none;
+        -webkit-app-region: drag;
+      }
+      #tabbar button, #tabbar .tab { -webkit-app-region: no-drag; }
+      .tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        max-width: 220px;
+        padding: 0 8px 0 12px;
+        border: 1px solid transparent;
+        border-radius: 8px 8px 0 0;
+        background: #d5dae0;
+        color: #4a5560;
+        font-size: 12px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tab.active { background: #f7f9fb; color: #17202a; font-weight: 600; border-color: #cfd5dc; border-bottom-color: transparent; }
+      .tab .title { overflow: hidden; text-overflow: ellipsis; }
+      .tab .close {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        border: 0;
+        border-radius: 50%;
+        background: transparent;
+        color: #7a8794;
+        font-size: 12px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .tab .close:hover { background: #c3cad2; color: #17202a; }
+      .tab.home .close { display: none; }
+      #new-tab {
+        flex: 0 0 auto;
+        align-self: center;
+        width: 22px;
+        height: 22px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #5a6672;
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      #new-tab:hover { background: #cfd5dc; color: #17202a; }
+      .spacer { flex: 1 1 auto; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #161b22; }
+        #tabbar { background: #1c2128; border-bottom-color: #30363d; }
+        .tab { background: #242a32; color: #9aa7b4; }
+        .tab.active { background: #2a313a; color: #e6edf3; border-color: #30363d; }
+        .tab .close { color: #8b949e; }
+        .tab .close:hover { background: #3d444d; color: #e6edf3; }
+        #new-tab { color: #9aa7b4; }
+        #new-tab:hover { background: #30363d; color: #e6edf3; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="tabbar" role="tablist" aria-label="打开的页面">
+      <div id="tabs"></div>
+      <button id="new-tab" type="button" title="新建标签页" aria-label="新建标签页">＋</button>
+      <div class="spacer"></div>
+    </div>
+    <script>
+      const tabsEl = document.getElementById("tabs");
+      const newTabEl = document.getElementById("new-tab");
+
+      function render(tabs) {
+        tabsEl.textContent = "";
+        for (const tab of tabs) {
+          const item = document.createElement("div");
+          item.className = "tab" + (tab.active ? " active" : "") + (tab.isHome ? " home" : "");
+          item.setAttribute("role", "tab");
+          item.setAttribute("aria-selected", String(tab.active));
+          item.dataset.id = tab.id;
+          const title = document.createElement("span");
+          title.className = "title";
+          title.textContent = tab.title || "加载中…";
+          title.title = tab.url || "";
+          item.appendChild(title);
+          if (!tab.isHome) {
+            const close = document.createElement("button");
+            close.className = "close";
+            close.type = "button";
+            close.textContent = "×";
+            close.setAttribute("aria-label", "关闭 " + (tab.title || "标签"));
+            close.addEventListener("click", (event) => {
+              event.stopPropagation();
+              window.desktopShell.closeTab(tab.id);
+            });
+            item.appendChild(close);
+          }
+          item.addEventListener("click", () => window.desktopShell.switchTab(tab.id));
+          tabsEl.appendChild(item);
+        }
+      }
+
+      if (window.desktopShell && window.desktopShell.onTabsChanged) {
+        window.desktopShell.onTabsChanged(render);
+      }
+      newTabEl.addEventListener("click", () => window.desktopShell.newTab());
+    </script>
+  </body>
+</html>

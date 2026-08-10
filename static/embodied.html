@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>具身智能学习 · Workbench</title><link rel="stylesheet" href="/static/project.css?v=0.3.140" /></head>
+<body>
+  <div class="page-shell">
+    <header class="page-topbar"><a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>EMBODIED AI</small></span></a><div class="page-actions"><a class="back-link" href="/"><span>←</span><span>返回工作台</span></a><button id="global-settings-button" class="global-button unconfigured" type="button"><i class="dot"></i><span class="global-label">配置全局 LLM</span></button></div></header>
+    <main class="page-main">
+      <section class="page-heading"><div><div class="eyebrow">学习与实践</div><h1>具身智能学习</h1><p class="lede">系统学习具身智能（Embodied AI）：从机器学习、强化学习到机器人操作与控制。研究任务交给网页研究 Agent，笔记沉淀到知识库，学习路线与资料清单都在这里。</p></div><div class="page-kpi"><div><strong id="emb-note-count">0</strong><span>已沉淀笔记</span></div><div><strong>5</strong><span>学习阶段</span></div><div><strong>4</strong><span>实践方向</span></div></div></section>
+
+      <section class="card panel"><div class="panel-head"><div><h2>学习路线</h2><p class="panel-subtitle">按顺序推进；每步完成标准 = 能独立跑通一个对应的最小示例</p></div></div><div class="emb-roadmap"><div class="emb-stage"><span class="emb-stage-num">1</span><div><strong>基础：Python + 数学</strong><small>线性代数 / 概率论 / 微积分；NumPy + PyTorch 熟练读写张量</small></div></div><div class="emb-stage"><span class="emb-stage-num">2</span><div><strong>机器学习与深度学习</strong><small>监督/无监督学习、CNN/Transformer；用 PyTorch 复现一个图像分类模型</small></div></div><div class="emb-stage"><span class="emb-stage-num">3</span><div><strong>强化学习</strong><small>MDP / 策略梯度 / Q-Learning / PPO；在 Gymnasium 里训一个 CartPole</small></div></div><div class="emb-stage"><span class="emb-stage-num">4</span><div><strong>具身智能核心概念</strong><small>感知-动作闭环、Sim-to-Real、行为克隆、VLA（视觉-语言-动作）模型</small></div></div><div class="emb-stage"><span class="emb-stage-num">5</span><div><strong>实操框架</strong><small>LeRobot 训练真实操作策略；Isaac Lab 仿真；把模型部署到低成本硬件（如树莓派小车/机械臂）</small></div></div></div></section>
+
+      <section class="workspace-grid">
+        <form id="emb-research-form" class="card panel form-stack"><div class="panel-head"><h2>发起研究</h2><small>交给网页研究 Agent</small></div><label>学习主题<input id="emb-research-topic" placeholder="例如：VLA 模型（视觉-语言-动作）综述 / LeRobot 入门" required /></label><label>补充资料链接（可选）<input id="emb-research-url" placeholder="https://… 一篇论文 / GitHub 仓库" /></label><button class="primary-button" type="submit">创建研究任务</button><p id="emb-research-message" class="form-note">研究任务进入 Crawl4AI，完成后结果可沉淀到知识库。</p></form>
+        <form id="emb-note-form" class="card panel form-stack"><div class="panel-head"><h2>沉淀笔记</h2><small>存入知识库</small></div><label>笔记标题<input id="emb-note-title" placeholder="例如：PPO 的核心思想" required /></label><label>正文<textarea id="emb-note-content" rows="4" placeholder="写下一个结论、方法或可复用经验…" required></textarea></label><button class="primary-button" type="submit">保存到知识库</button><p id="emb-note-message" class="form-note">笔记带 <code>具身智能</code> 标签，之后可在知识库搜索。</p></form>
+      </section>
+
+      <section class="workspace-grid">
+        <section class="card panel"><div class="panel-head"><div><h2>资料清单</h2><p class="panel-subtitle">书 / 课程 / 论文 / 开源项目，按需研究</p></div></div><ul class="emb-resource-list"><li><strong>强化学习</strong><a href="https://spinningup.openai.com" target="_blank" rel="noopener noreferrer">OpenAI Spinning Up</a><small>RL 入门圣经，含代码</small></li><li><strong>具身综述</strong><a href="https://arxiv.org/abs/2303.12712" target="_blank" rel="noopener noreferrer">Palm-E（具身多模态）</a><small>VLA 代表性工作</small></li><li><strong>开源框架</strong><a href="https://github.com/huggingface/lerobot" target="_blank" rel="noopener noreferrer">HuggingFace LeRobot</a><small>真实机器人操作策略训练</small></li><li><strong>仿真环境</strong><a href="https://github.com/isaac-sim/IsaacLab" target="_blank" rel="noopener noreferrer">NVIDIA Isaac Lab</a><small>机器人学习仿真</small></li><li><strong>课程</strong><a href="https://www.deepmind.com/learning-resources" target="_blank" rel="noopener noreferrer">DeepMind Learning Resources</a><small>强化学习与智能体</small></li><li><strong>经典论文</strong><a href="https://arxiv.org/abs/2203.12602" target="_blank" rel="noopener noreferrer">RT-1（Robotics Transformer）</a><small>机器人 Transformer 开端</small></li></ul></section>
+        <section class="card panel"><div class="panel-head"><div><h2>实践方向</h2><p class="panel-subtitle">从仿真到硬件，由浅入深</p></div></div><ul class="emb-resource-list"><li><strong>仿真入门</strong><span>MuJoCo / Isaac Lab</span><small>训一个简单机械臂或四足走路</small></li><li><strong>操作学习</strong><span>LeRobot + Gymnasium</span><small>行为克隆一个抓取/推箱子策略</small></li><li><strong>VLA 微调</strong><span>OpenVLA / RT-2 思路</span><small>在公开数据集上微调视觉-语言-动作模型</small></li><li><strong>低成本硬件</strong><span>树莓派 + 舵机小车 / SO-100 机械臂</span><small>把模型部署到真实设备，做 Sim-to-Real</small></li></ul></section>
+      </section>
+
+      <section class="card panel"><div class="panel-head"><div><h2>最近沉淀</h2><p class="panel-subtitle">你关于具身智能的笔记与研究成果</p></div></div><div id="emb-note-list" class="note-list" aria-live="polite"><div class="empty-state">正在读取知识库…</div></div></section>
+    </main>
+  </div>
+  <script src="/static/request.js?v=0.3.140"></script><script src="/static/project.js?v=0.3.140"></script>
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    const noteMessage = $("#emb-note-message");
+    const researchMessage = $("#emb-research-message");
+
+    // 研究任务 → Crawl4AI
+    $("#emb-research-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = event.submitter || $("#emb-research-form .primary-button");
+      window.WorkbenchUX?.wbSetBusy(button, true, "创建中…");
+      researchMessage.textContent = "正在创建研究任务…";
+      try {
+        const topic = $("#emb-research-topic").value.trim();
+        const url = $("#emb-research-url").value.trim();
+        const urls = url ? [url] : [];
+        const body = await requestJson("/api/crawl/plans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: `具身智能研究：${topic}`, urls, task: topic, source_project: "embodied" }) });
+        researchMessage.textContent = body.plan ? `研究任务已创建（#${body.plan.id}），在 Crawl4AI 页可查看进度。` : "研究任务已创建，去 Crawl4AI 页查看。";
+        $("#emb-research-topic").value = "";
+      } catch (error) { researchMessage.textContent = `创建失败：${error.message}`; }
+      finally { window.WorkbenchUX?.wbSetBusy(button, false); }
+    });
+
+    // 笔记 → 知识库
+    $("#emb-note-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = event.submitter || $("#emb-note-form .primary-button");
+      window.WorkbenchUX?.wbSetBusy(button, true, "保存中…");
+      noteMessage.textContent = "正在保存…";
+      try {
+        const title = $("#emb-note-title").value.trim();
+        const content = $("#emb-note-content").value.trim();
+        const body = await requestJson("/api/knowledge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, kind: title, tags: "具身智能", source: "embodied" }) });
+        noteMessage.textContent = body.artifact ? `已保存笔记 #${body.artifact.id}。` : "已保存到知识库。";
+        $("#emb-note-title").value = ""; $("#emb-note-content").value = "";
+        loadNotes();
+      } catch (error) { noteMessage.textContent = `保存失败：${error.message}`; }
+      finally { window.WorkbenchUX?.wbSetBusy(button, false); }
+    });
+
+    // 最近笔记
+    async function loadNotes() {
+      const list = $("#emb-note-list");
+      try {
+        const body = await requestJson("/api/knowledge?q=具身智能&limit=12");
+        const notes = body.notes || [];
+        const count = $("#emb-note-count"); if (count) count.textContent = String(notes.length);
+        list.innerHTML = notes.length ? notes.map((note) => `<article class="note-item"><a class="note-link" href="/projects/knowledge" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(note.title || note.name || "未命名笔记")}</strong><small>${escapeHtml(note.path || "")}</small></a></article>`).join("") : '<div class="empty-state">还没有具身智能相关笔记。先发一条研究或写一篇笔记。</div>';
+      } catch (error) { list.innerHTML = `<div class="empty-state">读取失败：${escapeHtml(error.message)}</div>`; }
+    }
+    loadNotes();
+  </script>
+</body>
+</html>

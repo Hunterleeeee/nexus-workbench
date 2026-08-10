@@ -1,0 +1,178 @@
+/* Standalone Agent surface for project pages with their own visual theme. */
+.project-agent-launcher,
+.project-agent-panel { --agent-surface: var(--surface, var(--panel, #fff)); --agent-surface-muted: var(--surface-muted, var(--raised, #f8fafb)); --agent-ink: var(--ink, #17212b); --agent-muted: var(--muted, #65727e); --agent-faint: var(--faint, #9aa5ae); --agent-line: var(--line, #e2e7eb); --agent-line-strong: var(--line-strong, #cfd8df); --agent-accent: var(--accent, #3b82f6); --agent-violet: var(--violet, #6763ce); --agent-green: var(--green, #238b72); }
+.project-agent-launcher { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 13px; color: #fff; background: var(--agent-ink); border: 1px solid var(--agent-ink); border-radius: 999px; box-shadow: 0 10px 24px rgba(0,0,0,.2); font: inherit; font-size: 11px; font-weight: 700; line-height: 1.2; cursor: pointer; transition: transform .18s ease, background .18s ease, box-shadow .18s ease; }
+.project-agent-launcher:hover, .project-agent-launcher[aria-expanded="true"] { background: var(--agent-accent); border-color: var(--agent-accent); box-shadow: 0 12px 28px rgba(238,112,77,.23); transform: translateY(-2px); }
+.project-agent-launcher[aria-expanded="true"] { opacity: 0; pointer-events: none; transform: translateY(6px); }
+.project-agent-launcher small { color: rgba(255,255,255,.72); font-size: 9px; font-weight: 500; }
+.project-agent-launcher-dot { width: 7px; height: 7px; background: #74d1b0; border-radius: 50%; box-shadow: 0 0 0 3px rgba(116,209,176,.16); }
+.project-agent-panel { position: fixed; right: 24px; bottom: 76px; z-index: 19; display: flex; flex-direction: column; width: min(410px, calc(100vw - 36px)); max-height: min(690px, calc(100vh - 100px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; color: var(--agent-ink); background: var(--agent-surface); border: 1px solid var(--agent-line-strong); border-radius: 14px; box-shadow: 0 24px 62px rgba(0,0,0,.2); font-family: inherit; scrollbar-width: thin; }
+.project-agent-panel.hidden { display: none; }
+.project-agent-panel.is-open { animation: agent-panel-pop .18s ease-out; }
+@keyframes agent-panel-pop { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+/* 面板打开时锁住背景滚动：触屏在面板内滑动不再带动整页跳动（滑动 Bug 修复）。 */
+body[data-agent-panel-open] { overflow: hidden; }
+.project-agent-head, .project-agent-toolbar, .project-agent-capability, .project-agent-incoming, .project-agent-runs, .project-agent-form, .project-agent-handoff { flex: 0 0 auto; }
+.project-agent-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 16px 17px 13px; border-bottom: 1px solid var(--agent-line); }
+.project-agent-kicker { color: var(--agent-accent); font-size: 9px; font-weight: 800; letter-spacing: .13em; }
+.project-agent-head h2 { margin: 5px 0 3px; color: var(--agent-ink); font-size: 17px; line-height: 1.2; }
+.project-agent-head p { margin: 0; color: var(--agent-muted); font-size: 10px; }
+.project-agent-close { display: grid; place-items: center; width: 28px; height: 28px; color: var(--agent-muted); background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.project-agent-close:hover { color: var(--agent-ink); border-color: var(--agent-line-strong); }
+.project-agent-toolbar { display: flex; gap: 7px; padding: 10px 17px; background: var(--agent-surface-muted); border-bottom: 1px solid var(--agent-line); }
+.project-agent-toolbar select, .project-agent-handoff-row select { flex: 1; min-width: 0; height: 31px; padding: 0 8px; color: var(--agent-ink); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 6px; font-size: 10px; }
+.project-agent-toolbar button, .project-agent-handoff button { flex: 0 0 auto; padding: 0 8px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 6px; font: inherit; font-size: 10px; line-height: 1; cursor: pointer; }
+.project-agent-toolbar button:hover, .project-agent-handoff button:hover { color: var(--agent-ink); border-color: var(--agent-line-strong); }
+.project-agent-handoff button.pending { color: var(--agent-accent); border-color: color-mix(in srgb, var(--agent-accent) 42%, var(--agent-line)); background: color-mix(in srgb, var(--agent-accent) 8%, var(--agent-surface)); }
+.project-agent-capability { display: block; min-height: 36px; padding: 8px 17px; color: var(--agent-muted); background: color-mix(in srgb, var(--agent-surface) 92%, var(--agent-surface-muted)); border-bottom: 1px solid var(--agent-line); font-size: 10px; }
+.project-agent-capability-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.project-agent-capability-meta { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; color: var(--agent-faint); font-size: 9px; }
+.project-agent-capability-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-agent-capability-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-agent-capability-details { margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--agent-line); color: var(--agent-muted); }
+.project-agent-capability-details summary { color: var(--agent-violet); cursor: pointer; font-size: 9px; }
+.project-agent-capability-details > div { margin-top: 7px; }
+.project-agent-capability-details strong { color: var(--agent-ink); font-size: 9px; }
+.project-agent-capability-details p { margin: 3px 0 0; color: var(--agent-muted); font-size: 9px; line-height: 1.5; }
+.project-agent-quick-actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 17px; background: var(--agent-surface); border-bottom: 1px solid var(--agent-line); }
+.project-agent-quick-actions:empty { display: none; }
+.project-agent-quick-actions::before { flex: 0 0 100%; color: var(--agent-faint); content: "从这里开始"; font-size: 9px; }
+.project-agent-quick-actions button { padding: 5px 7px; color: var(--agent-violet); background: color-mix(in srgb, var(--agent-violet) 7%, var(--agent-surface)); border: 1px solid color-mix(in srgb, var(--agent-violet) 23%, var(--agent-line)); border-radius: 6px; font: inherit; font-size: 9px; line-height: 1.2; cursor: pointer; transition: background .18s ease, border-color .18s ease, color .18s ease; }
+.project-agent-quick-actions button:hover { color: var(--agent-ink); background: color-mix(in srgb, var(--agent-violet) 13%, var(--agent-surface)); border-color: color-mix(in srgb, var(--agent-violet) 42%, var(--agent-line)); }
+.project-agent-permissions { flex: 0 0 auto; color: var(--agent-faint); font-size: 9px; white-space: nowrap; }
+.project-agent-status { flex: 0 0 auto; padding: 2px 6px; color: var(--agent-green); background: color-mix(in srgb, var(--agent-green) 12%, var(--agent-surface)); border: 1px solid color-mix(in srgb, var(--agent-green) 25%, var(--agent-line)); border-radius: 999px; font-size: 9px; }
+.project-agent-incoming { padding: 9px 17px; background: var(--agent-surface); border-bottom: 1px solid var(--agent-line); }
+.project-agent-incoming.is-empty, .project-agent-runs.is-empty { padding-top: 7px; padding-bottom: 7px; }
+.project-agent-incoming.is-empty > [data-incoming-list], .project-agent-incoming.is-empty > #project-agent-incoming-list, .project-agent-runs.is-empty > #project-agent-runs-list { display: none; }
+.project-agent-incoming.is-empty .project-agent-incoming-head, .project-agent-runs.is-empty .project-agent-runs-head { margin-bottom: 0; }
+.project-agent-incoming-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.project-agent-incoming-head strong { color: var(--agent-ink); font-size: 10px; }
+.project-agent-incoming-head span { color: var(--agent-faint); font-size: 9px; }
+.project-agent-incoming-item { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 7px 8px; background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; }
+.project-agent-incoming-item + .project-agent-incoming-item { margin-top: 5px; }
+.project-agent-incoming-item > div { min-width: 0; }
+.project-agent-incoming-item strong { display: block; overflow: hidden; color: var(--agent-ink); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.project-agent-incoming-item p { margin: 3px 0 0; overflow: hidden; color: var(--agent-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.project-agent-incoming-item small { display: block; margin-top: 4px; color: var(--agent-faint); font-size: 8px; }
+.project-agent-incoming-next { color: var(--agent-muted) !important; line-height: 1.4; }
+.project-agent-incoming-source { display: inline-block; margin-top: 4px; color: var(--agent-violet); font-size: 8px; text-decoration: none; }
+.project-agent-incoming-source:hover { text-decoration: underline; }
+.project-agent-incoming-item button { flex: 0 0 auto; min-height: 27px; padding: 0 8px; color: var(--agent-violet); background: var(--agent-surface); border: 1px solid color-mix(in srgb, var(--agent-violet) 35%, var(--agent-line)); border-radius: 5px; font: inherit; font-size: 9px; cursor: pointer; }
+.project-agent-incoming-item button:hover { background: color-mix(in srgb, var(--agent-violet) 10%, var(--agent-surface)); }
+.project-agent-incoming-item button:disabled { cursor: wait; opacity: .55; }
+.project-agent-runs { padding: 9px 17px; background: var(--agent-surface); border-bottom: 1px solid var(--agent-line); }
+.project-agent-runs-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.project-agent-runs-head strong { color: var(--agent-ink); font-size: 10px; }
+.project-agent-runs-head span { color: var(--agent-faint); font-size: 9px; }
+#project-agent-runs-list { display: grid; gap: 5px; max-height: 142px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.project-agent-runs-empty { padding: 5px 2px; color: var(--agent-faint); font-size: 9px; line-height: 1.5; }
+.project-agent-run { padding: 7px 8px; color: var(--agent-muted); background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; font-size: 9px; }
+.project-agent-run-top, .project-agent-run-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.project-agent-run-top time, .project-agent-run-foot > span { color: var(--agent-faint); font-size: 8px; }
+.project-agent-run-state { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; }
+.project-agent-run-state i { width: 5px; height: 5px; background: var(--agent-faint); border-radius: 50%; }
+.project-agent-run.running .project-agent-run-state, .project-agent-run.queued .project-agent-run-state { color: #b28a45; }
+.project-agent-run.running .project-agent-run-state i { background: #d9aa54; box-shadow: 0 0 0 3px rgba(217,170,84,.14); }
+.project-agent-run.succeeded .project-agent-run-state { color: var(--agent-green); }
+.project-agent-run.succeeded .project-agent-run-state i { background: var(--agent-green); }
+.project-agent-run.partial .project-agent-run-state, .project-agent-run.failed .project-agent-run-state { color: #bf7569; }
+.project-agent-run.partial .project-agent-run-state i, .project-agent-run.failed .project-agent-run-state i { background: #c9675d; }
+.project-agent-run-title { margin-top: 4px; color: var(--agent-ink); font-size: 9px; font-weight: 700; }
+.project-agent-run p { margin: 3px 0 0; overflow: hidden; color: var(--agent-muted); text-overflow: ellipsis; white-space: nowrap; }
+.project-agent-run-error { color: #bf7569 !important; }
+.project-agent-run-foot { margin-top: 5px; }
+.project-agent-run-retry { padding: 3px 7px; color: var(--agent-violet); background: var(--agent-surface); border: 1px solid color-mix(in srgb, var(--agent-violet) 32%, var(--agent-line)); border-radius: 5px; font: inherit; font-size: 9px; cursor: pointer; }
+.project-agent-run-retry:hover { background: color-mix(in srgb, var(--agent-violet) 10%, var(--agent-surface)); }
+.project-agent-run-retry:disabled { cursor: wait; opacity: .55; }
+.project-agent-run[data-run-detail] { cursor: pointer; }
+.project-agent-run[data-run-detail]:hover { border-color: var(--agent-line-strong); }
+.project-agent-run-detail { margin-top: 8px; padding: 8px; background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; }
+.project-agent-run-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--agent-ink); font-size: 10px; }
+.project-agent-run-detail-head button { padding: 3px 6px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 5px; font: inherit; font-size: 9px; cursor: pointer; }
+.project-agent-timeline { display: grid; gap: 6px; margin-top: 8px; max-height: 180px; overflow: auto; overscroll-behavior: contain; }
+.project-agent-timeline-event { display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 7px; align-items: start; color: var(--agent-muted); font-size: 9px; line-height: 1.45; }
+.project-agent-timeline-event > i { width: 6px; height: 6px; margin-top: 4px; background: var(--agent-faint); border-radius: 50%; }
+.project-agent-timeline-event.success > i { background: var(--agent-green); }
+.project-agent-timeline-event.error > i { background: #c9675d; }
+.project-agent-timeline-event strong, .project-agent-run-detail-actions > strong, .project-agent-citations > strong { display: block; color: var(--agent-ink); font-size: 9px; }
+.project-agent-timeline-event small { display: block; margin-top: 2px; color: var(--agent-faint); font-size: 8px; }
+.project-agent-run-detail-actions { margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--agent-line); }
+.project-agent-run-detail-actions > div { margin-top: 5px; }
+.project-agent-citations { margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--agent-line); }
+.project-agent-citations p { margin: 4px 0 0; color: var(--agent-muted); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.project-agent-citations a { color: var(--agent-violet); }
+.project-agent-messages { display: grid; flex: 0 1 38vh; gap: 9px; min-height: 96px; max-height: 38vh; padding: 13px 17px; overflow-y: auto; overscroll-behavior: contain; color: var(--agent-muted); background: var(--agent-surface-muted); scrollbar-width: thin; }
+.project-agent-message { max-width: 94%; padding: 9px 10px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 9px; font-size: 11px; line-height: 1.6; }
+.project-agent-message.user { justify-self: end; color: #fff; background: var(--agent-violet); border-color: var(--agent-violet); border-bottom-right-radius: 3px; }
+.project-agent-message.assistant { border-bottom-left-radius: 3px; }
+.project-agent-message.error { color: #eb8b82; background: color-mix(in srgb, #c7534f 12%, var(--agent-surface)); border-color: color-mix(in srgb, #c7534f 35%, var(--agent-line)); }
+.project-agent-thinking p { display: flex; align-items: center; gap: 5px; margin: 2px 0 0; }
+.project-agent-thinking i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .45; animation: agent-dot 1.1s ease-in-out infinite; }
+.project-agent-thinking i:nth-child(2) { animation-delay: .16s; }
+.project-agent-thinking i:nth-child(3) { animation-delay: .32s; }
+@keyframes agent-dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+.project-agent-message strong { display: block; margin-bottom: 3px; color: var(--agent-ink); font-size: 10px; }
+.project-agent-message.user strong { color: rgba(255,255,255,.78); }
+.project-agent-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-agent-empty { align-self: center; padding: 19px 12px; color: var(--agent-faint); text-align: center; font-size: 10px; line-height: 1.65; }
+.project-agent-inline-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.project-agent-action { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 5px; font-size: 9px; }
+.project-agent-action b { font: 9px ui-monospace, monospace; }
+.project-agent-action.executed { color: var(--agent-green); border-color: color-mix(in srgb, var(--agent-green) 30%, var(--agent-line)); }
+.project-agent-action.pending { color: #d8ad65; border-color: #806541; }
+.project-agent-action.failed { color: #eb8b82; border-color: #784743; }
+.agent-contract-review { color: #d8ad65; }
+.project-agent-form { padding: 10px 17px; background: var(--agent-surface); border-top: 1px solid var(--agent-line); }
+.project-agent-form textarea { width: 100%; min-height: 48px; max-height: 110px; padding: 8px 9px; color: var(--agent-ink); background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; font: inherit; font-size: 11px; line-height: 1.55; resize: vertical; }
+.project-agent-form-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 7px; }
+.project-agent-form-foot span { min-width: 0; overflow: hidden; color: var(--agent-faint); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.project-agent-form-foot button { min-height: 29px; padding: 0 11px; color: #fff; background: var(--agent-ink); border: 1px solid var(--agent-ink); border-radius: 6px; font: inherit; font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer; }
+.project-agent-form-foot button:hover { background: var(--agent-accent); border-color: var(--agent-accent); }
+.project-agent-form-foot button:disabled { cursor: wait; opacity: .55; }
+.project-agent-handoff { display: grid; gap: 7px; padding: 10px 17px 12px; color: var(--agent-muted); background: var(--agent-surface-muted); border-top: 1px solid var(--agent-line); }
+.project-agent-handoff > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.project-agent-handoff strong { color: var(--agent-ink); font-size: 10px; }
+.project-agent-handoff small { min-width: 0; overflow: hidden; color: var(--agent-faint); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.project-agent-handoff-row { display: flex; gap: 6px; }
+.project-agent-handoff button { min-height: 31px; color: var(--agent-violet); border-color: color-mix(in srgb, var(--agent-violet) 35%, var(--agent-line)); }
+.project-agent-handoff button:hover { color: var(--agent-violet); background: color-mix(in srgb, var(--agent-violet) 10%, var(--agent-surface)); }
+.project-agent-handoff button:disabled { cursor: not-allowed; opacity: .45; }
+
+/* Crawl4AI uses a dark research canvas; keep the shared Agent surface legible
+   without changing the light project pages that consume this stylesheet. */
+body[data-project-id="crawl4ai"] .project-agent-launcher,
+body[data-project-id="crawl4ai"] .project-agent-panel {
+  --agent-surface: var(--panel);
+  --agent-surface-muted: var(--panel-2);
+  --agent-ink: var(--text);
+  --agent-muted: var(--muted);
+  --agent-faint: var(--faint);
+  --agent-line: var(--line);
+  --agent-line-strong: #3b4a57;
+  --agent-accent: var(--accent);
+  --agent-violet: #a896ff;
+  --agent-green: var(--teal);
+}
+
+.project-agent-panel button:focus-visible,
+.project-agent-panel select:focus-visible,
+.project-agent-panel textarea:focus-visible,
+.project-agent-panel a:focus-visible,
+.project-agent-launcher:focus-visible { outline: 2px solid var(--agent-accent); outline-offset: 2px; }
+
+@media (max-width: 520px) {
+  .project-agent-launcher { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); }
+  .project-agent-panel { right: 8px; bottom: 62px; width: calc(100vw - 16px); max-height: calc(100vh - 76px); border-radius: 12px; }
+  .project-agent-head, .project-agent-toolbar, .project-agent-capability, .project-agent-incoming, .project-agent-runs, .project-agent-form, .project-agent-handoff { padding-left: 12px; padding-right: 12px; }
+  .project-agent-incoming-item { align-items: stretch; flex-direction: column; }
+  .project-agent-incoming-item button { width: 100%; }
+  .project-agent-form-foot, .project-agent-handoff-row { align-items: stretch; flex-direction: column; }
+  .project-agent-form-foot button, .project-agent-handoff-row button { width: 100%; min-height: 34px; }
+  .project-agent-form-foot span { white-space: normal; }
+  .project-agent-capability-meta { align-items: start; flex-direction: column; gap: 4px; }
+  .project-agent-messages { max-height: 34vh; min-height: 84px; padding-left: 12px; padding-right: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-agent-launcher, .project-agent-quick-actions button, .project-agent-panel.is-open { transition: none; animation: none; }
+}

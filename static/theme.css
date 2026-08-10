@@ -1,0 +1,21 @@
+.theme-toggle { min-height: 28px; padding: 0 8px; color: var(--muted, #66727d); background: var(--surface, var(--panel, #fff)); border: 1px solid var(--line, #dfe5e9); border-radius: 6px; font-size: 10px; cursor: pointer; }
+.theme-toggle:hover { color: var(--ink, var(--text, #17212b)); border-color: var(--violet, var(--accent, #3b82f6)); }
+
+/* Project and platform pages share the same persisted theme preference. */
+html[data-theme="dark"] {
+  --platform-bg: #0d1117; --platform-panel: #111820; --platform-soft: #151e28; --platform-ink: #eff5f5; --platform-muted: #aab7c1; --platform-faint: #71808d; --platform-line: #273442; --platform-line-strong: #3b4b59; --platform-orange-soft: #14233c; --platform-blue-soft: #17243a; --platform-violet-soft: #211e3b; --platform-teal-soft: #162b2a; --platform-danger-soft: #2b1b1d;
+  --bg: #0d1117; --panel: #111820; --raised: #151e28; --panel-soft: #151e28; --surface: #111820; --surface-muted: #151e28; --ink: #eff5f5; --muted: #aab7c1; --faint: #71808d; --line: #273442; --line-strong: #3b4b59; --accent-soft: #14233c;
+}
+html[data-theme="dark"] .platform-topbar { background: rgba(17, 24, 32, .94); }
+html[data-theme="dark"] .page-topbar { border-color: var(--line); }
+html[data-theme="dark"] .card, html[data-theme="dark"] .platform-card, html[data-theme="dark"] .global-button, html[data-theme="dark"] .secondary-button { box-shadow: none; }
+html[data-theme="dark"] .chip, html[data-theme="dark"] .priority-chip, html[data-theme="dark"] .item-more-actions summary, html[data-theme="dark"] .platform-row-actions button { background: var(--surface); }
+
+/* The Workbench/Crawl studio defaults are dark; light mode changes the shared
+   surface variables and the few fixed chrome colors that otherwise remain. */
+html[data-theme="light"] {
+  --bg: #f4f6f8; --panel: #ffffff; --panel-2: #f8fafb; --panel-3: #eef2f5; --line: #dfe5e9; --line-soft: #e9eef1; --text: #17212b; --muted: #5d6b77; --faint: #7d8a95; --accent: #3b82f6; --accent-soft: #7aa8f5; --teal: #17866d; --danger: #bd4d49;
+}
+html[data-theme="light"] .topbar { background: rgba(255,255,255,.94); }
+html[data-theme="light"] .control-panel { background: #fff; }
+html[data-theme="light"] .document-view { background: #fbfcfd; }

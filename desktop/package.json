@@ -1,0 +1,42 @@
+{
+  "name": "workbench-desktop",
+  "version": "0.3.140",
+  "private": true,
+  "description": "Workbench desktop shell",
+  "main": "main.cjs",
+  "scripts": {
+    "verify": "node verify.mjs",
+    "package": "electron-builder --mac --arm64",
+    "package:intel": "electron-builder --mac --x64"
+  },
+  "build": {
+    "appId": "com.workbench.desktop",
+    "productName": "Workbench",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "shell.html",
+      "verify.mjs",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "dmg": {
+      "artifactName": "Workbench-${version}-${arch}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.0"
+  }
+}

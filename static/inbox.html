@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>快速收件箱 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="page-topbar">
+      <a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>QUICK INBOX</small></span></a>
+      <div class="page-actions"><a class="back-link" href="/"><span>←</span><span>返回工作台</span></a><button id="global-settings-button" class="global-button unconfigured" type="button"><i class="dot"></i><span class="global-label">配置全局 LLM</span></button></div>
+    </header>
+    <main class="page-main">
+      <section class="page-heading"><div><div class="eyebrow">先记下来</div><h1>快速收件箱</h1><p class="lede">先把想法、链接和待办放进来，稍后再整理。减少切换，让捕捉动作保持足够轻。</p></div><div class="page-kpi inbox-kpis"><div><strong id="inbox-count">0</strong><span>条待处理</span></div><div><strong id="inbox-overdue">0</strong><span>条已过期</span></div></div></section>
+      <section class="workspace-grid">
+        <form id="inbox-form" class="card panel form-stack"><div class="panel-head"><h2>快速记录</h2><small>⌘ ↵ 保存</small></div><label>内容<textarea id="inbox-content" placeholder="想到什么就写什么，也可以直接粘贴链接…" required></textarea></label><div class="two-col"><label>类型<select id="inbox-kind"><option value="note">笔记</option><option value="task">待办</option><option value="link">链接</option><option value="idea">想法</option><option value="research">研究</option><option value="document">文档</option><option value="alert">告警</option></select></label><label>优先级<select id="inbox-priority"><option value="normal">普通</option><option value="high">高</option><option value="urgent">紧急</option><option value="low">低</option></select></label></div><label>来源（可选）<input id="inbox-source" placeholder="例如：https://… 或 会议 / 项目名" /></label><label>标签<input id="inbox-tags" placeholder="例如：产品, 待研究" /></label><button class="primary-button" type="submit">保存到收件箱 <span>↵</span></button><p id="inbox-message" class="form-note" role="status" aria-live="polite">保存后，收件箱 Agent 会自动分类、提取截止时间、检查重复，并给出目标项目建议。</p></form>
+        <section class="card panel"><div class="filter-row"><div class="filter-buttons" role="tablist" aria-label="收件箱视图"><button class="filter-button active" data-status="inbox" type="button">待处理</button><button class="filter-button" data-status="done" type="button">已完成</button><button class="filter-button" data-status="archived" type="button">已归档</button><button class="filter-button" data-status="all" type="button">全部</button></div><small id="inbox-refresh-note">按优先级和截止时间排序</small></div><div id="inbox-classifier-stats" class="inbox-classifier-stats" role="status" aria-live="polite">正在读取分类样本…</div><div id="inbox-bulk-toolbar" class="inbox-bulk-toolbar hidden"><label class="select-all-label"><input id="inbox-select-all" type="checkbox" /> 全选当前视图</label><span id="inbox-selected-count">已选 0 条</span><div class="bulk-actions"><button class="item-action" data-bulk-action="complete" type="button">批量完成</button><button class="item-action" data-bulk-action="archive" type="button">批量归档</button><button class="item-action" data-bulk-action="reopen" type="button" hidden>批量恢复</button><select id="bulk-priority" aria-label="批量设置优先级"><option value="">设置优先级</option><option value="urgent">紧急</option><option value="high">高</option><option value="normal">普通</option><option value="low">低</option></select></div></div><div id="merge-suggestions" class="merge-suggestions hidden"></div><div id="inbox-list" class="item-list" aria-live="polite"><div class="empty-state">正在读取收件箱…</div></div></section>
+      </section>
+    </main>
+  </div>
+  <div id="global-settings-modal" class="modal-backdrop hidden"><form id="global-settings-form" class="modal"><div class="modal-head"><div><h2>工作台全局 LLM</h2><p>可配置多个 URL / Key 条目；主配置优先调用，失败时按顺序切换到 fallback。</p></div><button class="icon-button" data-close-global-settings type="button" aria-label="关闭">×</button></div><div id="global-providers" class="global-providers" aria-label="LLM 配置条目列表"></div><button id="global-add-provider" class="global-add-provider" type="button">＋ 添加一个配置条目</button><p id="global-llm-summary" class="global-llm-summary" role="status"></p><p id="global-settings-message" class="modal-message" role="status"></p><div class="modal-actions"><button class="secondary-button" data-close-global-settings type="button">取消</button><button class="primary-button" type="submit">保存全局配置</button></div></form></div>
+      <script src="/static/request.js?v=0.3.140"></script><script src="/static/llm-settings.js?v=0.3.140"></script><script src="/static/project.js?v=0.3.140"></script><script>
+    let currentStatus = "inbox";
+    const selectedIds = new Set();
+    const content = document.querySelector("#inbox-content");
+    const tags = document.querySelector("#inbox-tags");
+    const kind = document.querySelector("#inbox-kind");
+    const priority = document.querySelector("#inbox-priority");
+    const sourceInput = document.querySelector("#inbox-source");
+    const list = document.querySelector("#inbox-list");
+    const count = document.querySelector("#inbox-count");
+    const overdueCount = document.querySelector("#inbox-overdue");
+    const message = document.querySelector("#inbox-message");
+    const classifierStats = document.querySelector("#inbox-classifier-stats");
+    const bulkToolbar = document.querySelector("#inbox-bulk-toolbar");
+    const selectAll = document.querySelector("#inbox-select-all");
+    const selectedCount = document.querySelector("#inbox-selected-count");
+    const priorityNames = { urgent: "紧急", high: "高", normal: "普通", low: "低" };
+    const kindNames = { note: "笔记", task: "待办", link: "链接", idea: "想法", research: "研究", document: "文档", alert: "告警" };
+    const routeStatusNames = { suggested: "待确认交接", accepted: "已交接", rejected: "已忽略", none: "无交接" };
+    const statusNames = { inbox: "待处理", done: "已完成", archived: "已归档" };
+    const classifierNames = { note: "笔记", task: "待办", link: "链接", idea: "想法", alert: "告警", document: "文档", research: "研究" };
+    function renderClassifierStats(body) {
+      const sampleCount = Number(body.sample_count || 0);
+      const minimumSamples = Number(body.minimum_samples || 10);
+      const sampleReady = body.sample_status === "ready";
+      const classes = (body.classes || []).slice(0, 7);
+      const classMarkup = classes.length ? classes.map((item) => `<span class="inbox-classifier-chip">${escapeHtml(item.label || classifierNames[item.classification] || item.classification || "未分类")} ${escapeHtml(item.count || 0)}</span>`).join("") : '<span class="inbox-classifier-muted">暂无分类记录</span>';
+      const accuracy = body.accuracy == null ? "—" : `${Math.round(Number(body.accuracy) * 100)}%`;
+      const macroF1 = body.macro_f1 == null ? "—" : `${Math.round(Number(body.macro_f1) * 100)}%`;
+      classifierStats.innerHTML = `<div class="inbox-classifier-head"><strong>分类反馈</strong><span class="inbox-classifier-state ${sampleReady ? "ready" : "insufficient"}">${sampleReady ? "样本可观察" : "样本不足"}</span></div><div class="inbox-classifier-metrics"><span>已确认 <b>${escapeHtml(sampleCount)}</b> / ${escapeHtml(minimumSamples)} 条</span><span>修正 <b>${escapeHtml(body.correction_count || 0)}</b> 条</span><span>准确率 <b>${escapeHtml(accuracy)}</b></span><span>Macro-F1 <b>${escapeHtml(macroF1)}</b></span><span>已分类 <b>${escapeHtml(body.classified_count || 0)}</b> / ${escapeHtml(body.total_count || 0)}</span></div><div class="inbox-classifier-chips">${classMarkup}</div><small>${escapeHtml(body.learning || "确认样本只作为后续分类参考。")}</small></div>`;
+    }
+    async function loadClassifierStats() {
+      try { renderClassifierStats(await requestJson("/api/inbox/classifier-stats")); }
+      catch (error) { classifierStats.innerHTML = wbRetryMarkup(`分类统计暂不可用：${error.message}`, "重试分类统计"); }
+    }
+    const dueMarkup = (item) => item.due_at ? `<span class="inbox-due ${item.is_overdue ? "overdue" : ""}">${item.is_overdue ? "已过期" : "截止"} ${escapeHtml(item.due_at)}</span>` : "";
+    function updateBulkToolbar(items = []) {
+      const visibleIds = new Set(items.map((item) => String(item.id)));
+      [...selectedIds].forEach((id) => { if (!visibleIds.has(String(id))) selectedIds.delete(id); });
+      const selected = selectedIds.size;
+      bulkToolbar.classList.toggle("hidden", !items.length);
+      selectedCount.textContent = `已选 ${selected} 条`;
+      selectAll.checked = Boolean(items.length && items.every((item) => selectedIds.has(String(item.id))));
+      selectAll.indeterminate = Boolean(selected && !selectAll.checked);
+      document.querySelectorAll("[data-select-item]").forEach((checkbox) => { checkbox.checked = selectedIds.has(String(checkbox.dataset.selectItem)); });
+    }
+    function triageMarkup(item) {
+      const analysis = item.analysis || {};
+      const summary = analysis.summary || (analysis.classification_label ? `判断为${analysis.classification_label}` : "等待 Agent 整理");
+      const due = dueMarkup(item);
+      const duplicate = item.duplicate_of ? `<span class="inbox-triage-duplicate">可能重复：#${escapeHtml(item.duplicate_of)}</span><button class="item-action inbox-merge" data-merge="${escapeHtml(item.id)}" data-merge-target="${escapeHtml(item.duplicate_of)}" type="button">合并到 #${escapeHtml(item.duplicate_of)}</button>` : "";
+      const routes = (item.routes || []).filter((route) => route.status === "suggested");
+      const routeMarkup = routes.length ? `<div class="inbox-routes"><div class="inbox-routes-head"><span>Agent 建议交给</span><small>确认一次后立即执行并回写结果</small></div>${routes.map((route) => `<div class="inbox-route"><div><strong>${escapeHtml(route.target_name)}</strong><p>${escapeHtml(route.reason)}</p><small>匹配度 ${escapeHtml(route.confidence_percent)}%</small></div><div class="inbox-route-actions"><button class="item-action route-accept" data-route-accept="${escapeHtml(route.id)}" type="button">确认并执行</button><button class="item-action route-reject" data-route-reject="${escapeHtml(route.id)}" type="button">忽略</button></div></div>`).join("")}</div>` : item.route_status === "accepted" ? `<div class="inbox-routed-note">已交接给目标 Agent，工作台已生成可追踪工作项。</div>` : "";
+      const feedback = item.classification ? `<button class="inbox-classification-feedback" data-classification-feedback="${escapeHtml(item.id)}" data-accepted="${escapeHtml(item.classification)}" type="button">确认分类「${escapeHtml(kindNames[item.classification] || item.classification)}」</button>` : "";
+      const nextSteps = Array.isArray(analysis.next_steps) ? analysis.next_steps.filter(Boolean).slice(0, 3) : [];
+      const nextStepMarkup = nextSteps.length ? `<div class="inbox-next-steps"><strong>下一步建议</strong><ol>${nextSteps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><small>${analysis.next_steps_source === "captured_text" ? "来自原始记录，可直接修改" : "保守建议，请确认后再执行"}</small></div>` : "";
+      return `<div class="inbox-triage"><div class="inbox-triage-top"><span class="inbox-triage-label">收件箱 Agent</span><span>${escapeHtml(summary)}</span><span class="inbox-route-status">${escapeHtml(routeStatusNames[item.route_status] || "无交接")}</span>${due}${duplicate}${feedback}<button class="inbox-analyze" data-analyze="${escapeHtml(item.id)}" type="button">重新整理</button></div>${nextStepMarkup}${routeMarkup}</div>`;
+    }
+    function collapseSecondaryActions() {
+      list.querySelectorAll(".item-actions").forEach((actions) => {
+        const secondary = [...actions.querySelectorAll("[data-archive], [data-note]")];
+        if (!secondary.length) return;
+        const details = document.createElement("details");
+        details.className = "item-more-actions";
+        details.innerHTML = "<summary>更多</summary>";
+        secondary.forEach((button) => details.append(button));
+        actions.append(details);
+      });
+    }
+    async function loadInbox() {
+      const body = await requestJson(`/api/inbox?status=${currentStatus}`);
+      const items = body.items || [];
+      count.textContent = body.summary?.inbox ?? items.filter((item) => item.status === "inbox").length;
+      overdueCount.textContent = (currentStatus === "inbox" ? items : (await requestJson("/api/inbox?status=inbox")).items || []).filter((item) => item.is_overdue).length;
+      list.innerHTML = items.length ? items.map((item) => `<article class="list-item ${item.is_overdue ? "is-overdue" : ""}" data-item-id="${escapeHtml(item.id)}"><div class="item-top"><label class="item-select"><input type="checkbox" data-select-item="${escapeHtml(item.id)}" aria-label="选择第 ${escapeHtml(item.id)} 条" /><span class="item-kind">${escapeHtml(kindNames[item.classification] || kindNames[item.kind] || item.kind)}</span></label><div class="item-chips"><span class="priority-chip priority-${escapeHtml(item.priority || "normal")}">${escapeHtml(item.priority_label || priorityNames[item.priority] || "普通")}</span><span class="chip">${escapeHtml(statusNames[item.status] || item.status)}</span></div></div><p class="item-content">${escapeHtml(item.content)}</p><div class="item-meta"><span>${escapeHtml(formatDate(item.created_at))}${item.source ? ` · 来自 ${escapeHtml(item.source)}` : ""}${item.tags ? ` · ${escapeHtml(item.tags)}` : ""}</span><span>${escapeHtml(routeStatusNames[item.route_status] || "无交接")}</span></div>${triageMarkup(item)}<div class="item-actions">${item.status === "inbox" ? `<button class="item-action" data-done="${item.id}" type="button">完成</button><button class="item-action" data-archive="${item.id}" type="button">归档</button><button class="item-action" data-note="${item.id}" type="button">转为笔记</button>` : item.status === "archived" ? `<button class="item-action" data-reopen="${item.id}" type="button">恢复</button>` : `<button class="item-action" data-reopen="${item.id}" type="button">重新打开</button><button class="item-action" data-archive="${item.id}" type="button">归档</button>`}</div></article>`).join("") : `<div class="empty-state">${currentStatus === "archived" ? "还没有归档内容。" : "这里还没有内容。先记录一条，给自己一个不丢想法的入口。"}</div>`;
+      collapseSecondaryActions();
+      document.querySelector('[data-bulk-action="complete"]').hidden = currentStatus === "archived";
+      document.querySelector('[data-bulk-action="archive"]').hidden = currentStatus === "archived";
+      document.querySelector('[data-bulk-action="reopen"]').hidden = currentStatus !== "archived";
+      updateBulkToolbar(items);
+      if (currentStatus === "inbox") await loadMergeSuggestions();
+    }
+    async function loadMergeSuggestions() {
+      const box = document.querySelector("#merge-suggestions");
+      if (!box) return;
+      try {
+        const body = await requestJson("/api/inbox/merge-suggestions");
+        const suggestions = body.suggestions || [];
+        box.classList.toggle("hidden", !suggestions.length);
+        box.innerHTML = suggestions.length ? `<div class="merge-suggestions-head"><strong>可能重复的建议</strong><small>仅建议，不会自动合并</small></div>${suggestions.slice(0, 5).map((s, index) => `<div class="merge-suggestion-row"><span class="merge-score">${Math.round(s.similarity * 100)}%</span><p><b>${escapeHtml((s.source?.content || "").slice(0, 40))}</b><br><small>${escapeHtml((s.duplicate?.content || "").slice(0, 40))}</small></p><button class="item-action" data-merge-source="${escapeHtml(s.source.id)}" data-merge-target="${escapeHtml(s.duplicate.id)}" type="button">合并</button></div>`).join("")}` : "";
+        box.querySelectorAll("[data-merge-source]").forEach((button) => button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await requestJson(`/api/inbox/${button.dataset.mergeSource}/merge`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_id: Number(button.dataset.mergeTarget), confirmed: true }) });
+            message.textContent = "已合并，重复项已归档。";
+            await loadInbox();
+          } catch (error) { message.textContent = error.message; button.disabled = false; }
+        }));
+      } catch (e) { /* 合并建议失败不打扰 */ }
+    }
+    document.querySelector("#inbox-form").addEventListener("submit", async (event) => { event.preventDefault(); const button = event.target.querySelector("button[type=submit]"); wbSetBusy(button, true, "保存中…"); try { await requestJson("/api/inbox", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: content.value.trim(), kind: kind.value, tags: tags.value.trim(), priority: priority.value, source: sourceInput ? sourceInput.value.trim() : "" }) }); content.value = ""; tags.value = ""; priority.value = "normal"; if (sourceInput) sourceInput.value = ""; message.textContent = "已保存，继续记录即可。"; currentStatus = "inbox"; await loadInbox(); } catch (error) { message.textContent = error.message; message.dataset.tone = "error"; } finally { wbSetBusy(button, false); } });
+    document.querySelectorAll("[data-status]").forEach((button) => button.addEventListener("click", async () => { document.querySelectorAll("[data-status]").forEach((item) => item.classList.remove("active")); button.classList.add("active"); currentStatus = button.dataset.status; selectedIds.clear(); try { await loadInbox(); } catch (error) { wbShowRetry(list, error.message); message.textContent = `视图切换失败：${error.message}`; } }));
+    selectAll.addEventListener("change", () => { document.querySelectorAll("[data-select-item]").forEach((checkbox) => { if (selectAll.checked) selectedIds.add(String(checkbox.dataset.selectItem)); else selectedIds.delete(String(checkbox.dataset.selectItem)); checkbox.checked = selectAll.checked; }); updateBulkToolbar([...document.querySelectorAll("[data-select-item]")].map((checkbox) => ({ id: checkbox.dataset.selectItem }))); });
+    document.querySelector("#bulk-priority").addEventListener("change", async (event) => { if (!event.target.value || !selectedIds.size) return; await runBulk("priority", event.target.value); event.target.value = ""; });
+    document.querySelectorAll("[data-bulk-action]").forEach((button) => button.addEventListener("click", () => runBulk(button.dataset.bulkAction)));
+    async function runBulk(action, selectedPriority = "") { if (!selectedIds.size) { message.textContent = "先选择至少一条记录。"; return; } const buttons = document.querySelectorAll("[data-bulk-action], #bulk-priority"); buttons.forEach((button) => { button.disabled = true; }); try { const body = await requestJson("/api/inbox/batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [...selectedIds].map(Number), action, priority: selectedPriority || null }) }); message.textContent = body.failed ? `已处理 ${body.succeeded} 条，${body.failed} 条失败，失败项已保留。` : `已批量处理 ${body.succeeded} 条。`; selectedIds.clear(); await loadInbox(); } catch (error) { message.textContent = error.message; } finally { buttons.forEach((button) => { button.disabled = false; }); } }
+    list.addEventListener("change", (event) => { const checkbox = event.target.closest("[data-select-item]"); if (!checkbox) return; if (checkbox.checked) selectedIds.add(String(checkbox.dataset.selectItem)); else selectedIds.delete(String(checkbox.dataset.selectItem)); updateBulkToolbar([...document.querySelectorAll("[data-select-item]")].map((item) => ({ id: item.dataset.selectItem }))); });
+    list.addEventListener("click", async (event) => { if (event.target.closest("[data-wb-retry]")) { loadInbox().catch((error) => wbShowRetry(list, error.message)); return; } const done = event.target.closest("[data-done]"), archive = event.target.closest("[data-archive]"), reopen = event.target.closest("[data-reopen]"), note = event.target.closest("[data-note]"), analyze = event.target.closest("[data-analyze]"), accept = event.target.closest("[data-route-accept]"), reject = event.target.closest("[data-route-reject]"), merge = event.target.closest("[data-merge]"); const action = done || archive || reopen || note || analyze || accept || reject || merge; if (action) action.disabled = true; try { const itemId = action?.closest(".list-item")?.dataset.itemId; if (done) await requestJson(`/api/inbox/${done.dataset.done}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "done" }) }); if (archive) await requestJson(`/api/inbox/${archive.dataset.archive}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "archived" }) }); if (reopen) await requestJson(`/api/inbox/${reopen.dataset.reopen}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "inbox" }) }); if (note) { const item = (await requestJson("/api/inbox?status=all")).items.find((entry) => String(entry.id) === note.dataset.note); if (item) await requestJson("/api/knowledge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: item.content, kind: `收件箱-${item.id}-${item.kind}`, tags: item.tags, source: `inbox:${item.id}` }) }); message.textContent = "已复制到工作区知识库，可回溯原收件箱来源。"; } if (analyze) { await requestJson(`/api/inbox/${analyze.dataset.analyze}/analyze`, { method: "POST" }); message.textContent = "收件箱 Agent 已重新整理。"; } if (accept) { const body = await requestJson(`/api/inbox/${itemId}/routes/${accept.dataset.routeAccept}/accept-and-run`, { method: "POST" }); message.textContent = body.message || "已确认并执行项目交接。"; } if (merge) { const body = await requestJson(`/api/inbox/${merge.dataset.merge}/merge`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_id: Number(merge.dataset.mergeTarget), keep_source: true }) }); message.textContent = body.message || "已合并。"; }
+      if (reject) { const body = await requestJson(`/api/inbox/${itemId}/routes/${reject.dataset.routeReject}/reject`, { method: "POST" }); message.textContent = body.message || "已忽略交接建议，自动跳到下一条。"; } if (action) await loadInbox(); if (reject) { const items = [...list.querySelectorAll(".list-item")]; const idx = items.findIndex((el) => el.dataset.itemId === String(itemId)); const next = items[idx + 1] || items[0]; if (next) { next.scrollIntoView({ behavior: "smooth", block: "center" }); next.style.outline = "2px solid var(--violet, #6763ce)"; next.style.outlineOffset = "2px"; window.setTimeout(() => { next.style.outline = ""; }, 1600); } } } catch (error) { message.textContent = error.message; } finally { if (action) action.disabled = false; } });
+    list.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-classification-feedback]");
+      if (!button) return;
+      button.disabled = true;
+      try {
+        await requestJson(`/api/inbox/${button.dataset.classificationFeedback}/classification-feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accepted: button.dataset.accepted }) });
+        message.textContent = "已记录这次分类确认，后续相似内容会参考它。";
+        await Promise.all([loadInbox(), loadClassifierStats()]);
+      } catch (error) { button.disabled = false; message.textContent = error.message; }
+    });
+    content.addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") document.querySelector("#inbox-form").requestSubmit(); });
+    classifierStats.addEventListener("click", (event) => { if (!event.target.closest("[data-wb-retry]")) return; loadClassifierStats(); });
+    loadInbox().catch((error) => { wbShowRetry(list, error.message); });
+    loadClassifierStats();
+  </script>
+</body>
+</html>

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>想法分析 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
+  <link rel="stylesheet" href="/static/idea-analysis.css?v=0.3.140" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="page-topbar">
+      <a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span><span><strong>Workbench</strong><small>想法研究</small></span></a>
+      <div class="page-actions"><a class="back-link" href="/">← 返回工作台</a><span class="idea-note">不负责替你拍板，负责帮你验证</span></div>
+    </header>
+    <main class="page-main">
+      <section class="page-heading"><div><div class="eyebrow">想法分析</div><h1>想法分析</h1><p class="lede">奇怪想法、突然冒出的商机、想做但说不清的事，都可以先拿来聊。Agent 会追问、拆解、判断，再给出最小验证路径。</p></div><div class="page-kpi"><strong id="session-count">0</strong><span>个想法记录</span></div></section>
+      <section class="idea-layout">
+      <aside class="card panel session-panel"><div class="panel-head"><div><h2>我的想法</h2><small>本地持久保存</small></div><button id="new-session" class="secondary-button" type="button">＋ 新想法</button></div><section class="opportunity-inbox" aria-label="待验证机会"><div class="opportunity-inbox-head"><div><strong>待验证机会</strong><small id="idea-opportunity-count">读取中…</small></div><span class="opportunity-pulse" aria-hidden="true"></span></div><div id="idea-opportunity-list" class="opportunity-list"><div class="empty-state">正在读取交接…</div></div><p id="idea-operation" class="idea-operation" role="status"></p></section><div id="session-list" class="session-list"><div class="empty-state">还没有想法记录。</div></div></aside>
+      <section class="card panel conversation-panel"><div class="conversation-head"><div><span class="eyebrow">想法分析 Agent</span><h2 id="conversation-title">从一个想法开始</h2></div><span id="verdict" class="verdict neutral">等待判断</span></div><div class="conversation-tip">先说你想做什么、为什么突然想到它，哪怕只有一句话。后面由 Agent 帮你把问题问清楚。</div><div class="agent-quick-actions" aria-label="想法分析快捷提问"><button type="button" data-agent-prompt="先用一句话复述这个想法，并指出最关键的未知">先复述并找未知</button><button type="button" data-agent-prompt="判断这个想法最可能服务谁、解决什么痛点，以及谁可能付费">判断用户与付费</button><button type="button" data-agent-prompt="给我一个 7 天内能完成、成本最低的验证计划">生成 7 天验证</button></div><div id="idea-chat-log" class="idea-chat-log"><div class="idea-message assistant"><strong>想法分析 Agent</strong><p>把你的想法丢过来吧。我会和你一起判断：有没有真实需求、谁会付费、怎么低成本验证，以及哪里可能只是自我感动。</p></div></div><form id="idea-chat-form" class="idea-chat-form"><textarea id="idea-chat-input" rows="4" placeholder="例如：我想做一个帮助小酒店自动处理差评的 Agent，但不知道有没有人愿意付费"></textarea><div class="chat-form-foot"><span>全局 LLM · 会话自动保存</span><button class="primary-button" type="submit">继续聊</button></div></form><section id="validation-workbench" class="validation-workbench" aria-label="验证工作台"><div class="validation-head"><div><span class="eyebrow">验证工作台</span><h3>验证工作台</h3><p>把对话变成假设、7 天任务和明确的继续/停止条件。</p></div><div class="validation-actions"><span id="plan-version" class="plan-version">尚未生成</span><button id="generate-plan" class="primary-button" type="button" disabled>生成验证工作台</button></div></div><p id="plan-operation" class="plan-operation" role="status"></p><div id="plan-empty" class="plan-empty">先完成一轮想法对话，再生成第一版验证计划。</div><div id="plan-content" class="plan-content hidden"><div class="decision-strip"><div><span class="plan-label">当前判断</span><strong id="plan-verdict">先验证</strong></div><div><span class="plan-label">决策依据</span><p id="plan-rationale"></p></div><div><span class="plan-label">版本说明</span><p id="plan-evidence"></p></div></div><div class="decision-rules"><div><span class="plan-label">继续条件</span><p id="plan-continue"></p></div><div><span class="plan-label">停止条件</span><p id="plan-stop"></p></div></div><div class="plan-columns"><section class="plan-section"><div class="plan-section-head"><div><h4>关键假设</h4><small id="hypothesis-count">0 项</small></div><span>每个假设都要有证据</span></div><div id="hypothesis-list" class="hypothesis-list"></div></section><section class="plan-section"><div class="plan-section-head"><div><h4>7 天验证任务</h4><small id="task-count">0 项</small></div><span>任务会进入工作台待处理</span></div><div id="validation-task-list" class="validation-task-list"></div></section></div><section class="evidence-section"><div class="plan-section-head"><div><h4>证据与决策</h4><small id="evidence-count">0 条</small></div><span class="evidence-actions"><button id="add-evidence" class="secondary-button" type="button">记录证据</button><button id="add-metric" class="secondary-button" type="button">回填指标</button><button id="compare-decision" class="secondary-button" type="button">继续 / 暂停 / 转向</button><button id="view-evidence-pack" class="secondary-button" type="button">回放证据包</button></span></div><div id="evidence-panel" class="evidence-panel"><div class="plan-list-empty">还没有证据记录。完成验证任务后，把事实和原话记在这里。</div></div><details id="metric-form" class="metric-form-details"><summary>回填一个指标</summary><div class="metric-form-grid"><input id="metric-name" placeholder="指标名，例如：付费意愿访谈数" /><input id="metric-value" placeholder="当前值" /><input id="metric-target" placeholder="目标值" /><select id="metric-status"><option value="pending">待达成</option><option value="met">已达成</option><option value="missed">未达成</option><option value="unknown">未知</option></select><button id="submit-metric" class="primary-button" type="button">保存指标</button></div></details><div id="evidence-pack-output" class="evidence-panel" hidden></div></section></div></section><section class="followup-panel" aria-label="验证任务提醒"><div class="plan-section-head"><div><h4>验证任务提醒</h4><small id="followup-summary">读取中…</small></div><button id="run-followup-reminders" class="secondary-button" type="button">生成提醒</button></div><div id="followup-list" class="followup-list"><div class="plan-list-empty">正在读取到期任务…</div></div></section><section class="project-agent-runs" aria-label="想法分析 Agent 运行"><div class="project-agent-runs-head"><strong>Agent 运行记录</strong><span id="idea-run-summary">读取中…</span></div><div id="idea-run-history"><div class="project-agent-runs-empty">分析后会显示运行状态、失败原因和重试入口。</div></div></section></section>
+      </section>
+    </main>
+  </div>
+  <div id="evidence-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="evidence-overlay-title"><form id="evidence-form" class="modal"><div class="modal-head"><div><h2 id="evidence-overlay-title">记录验证证据</h2><p>把访谈原话、试用结果、竞品核查事实记下来，作为继续/停止判断的依据。</p></div><button class="icon-button" data-close-evidence type="button" aria-label="关闭">×</button></div><div class="form-stack"><label>标题<input id="evidence-title" placeholder="例如：访谈了 3 位酒店前台，都提到差评处理耗时" /></label><label>内容<textarea id="evidence-content" rows="4" placeholder="记录事实和原话，不写结论"></textarea></label><div class="two-col"><label>类别<select id="evidence-kind"><option value="market">市场</option><option value="interview">访谈</option><option value="competitor">竞品</option><option value="prototype">原型</option><option value="delivery">交付</option><option value="research">研究</option></select></label><label>证据倾向<select id="evidence-status"><option value="unverified">待验证</option><option value="supported">支持假设</option><option value="contradicted">反证</option><option value="partial">部分支持</option></select></label></div><label>来源（可选）<input id="evidence-source" placeholder="例如：2026-08-01 电话访谈" /></label></div><div class="modal-actions"><button class="secondary-button" data-close-evidence type="button">取消</button><button class="primary-button" type="submit">保存证据</button></div></form></div>
+  <div id="interview-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="interview-overlay-title" aria-describedby="interview-overlay-description"><form id="interview-form" class="modal interview-modal"><div class="modal-head"><div><h2 id="interview-overlay-title">记录结构化访谈</h2><p id="interview-overlay-description">只记录具体问题和原话，不把一次访谈直接当成结论；后续可以在证据包里回放。</p></div><button class="icon-button" data-close-interview type="button" aria-label="关闭访谈记录">×</button></div><div class="form-stack"><label>参与者<input id="interview-participant" maxlength="160" autocomplete="off" placeholder="例如：某酒店前台负责人" required /></label><label>具体问题<textarea id="interview-question" rows="3" maxlength="2000" placeholder="例如：你最近一次处理差评花了多长时间？" required></textarea></label><label>原话 / 回答<textarea id="interview-answer" rows="5" maxlength="12000" placeholder="尽量保留原话、具体行为和上下文；不要只写“对方觉得不错”。" required></textarea></label><div class="two-col"><label>来源（可选）<input id="interview-source" maxlength="2000" autocomplete="off" placeholder="例如：2026-08-09 电话访谈 / 录音 03:12" /></label><label>证据状态<select id="interview-status"><option value="unverified">待验证</option><option value="supported">支持假设</option><option value="contradicted">反证</option><option value="partial">部分支持</option></select></label></div><p id="interview-form-message" class="modal-message" role="status" aria-live="polite"></p></div><div class="modal-actions"><button class="secondary-button" data-close-interview type="button">取消</button><button class="primary-button" type="submit">保存访谈</button></div></form></div>
+      <script src="/static/request.js?v=0.3.140"></script><script src="/static/project.js?v=0.3.140"></script>
+  <script>
+    let sessionId = "";
+    let sessions = [];
+    let currentPlan = { hypotheses: [], tasks: [], decisions: [] };
+    let evidenceRecords = [];
+    let modalReturnFocus = null;
+    const sessionList = qs("#session-list");
+    const opportunityList = qs("#idea-opportunity-list");
+    const chatLog = qs("#idea-chat-log");
+    const planContent = qs("#plan-content");
+    const planEmpty = qs("#plan-empty");
+    const generatePlanButton = qs("#generate-plan");
+    const taskTypeNames = { interview: "访谈", landing_page: "落地页", competitor: "竞品核查", prototype: "原型", delivery: "手工交付", research: "研究" };
+    const taskStatusNames = { open: "待开始", running: "进行中", done: "已完成", blocked: "被阻塞", failed: "失败" };
+
+    function renderSessions() {
+      qs("#session-count").textContent = sessions.length;
+      sessionList.innerHTML = sessions.length ? sessions.map((session) => `<button class="session-item ${session.id === sessionId ? "active" : ""}" data-session-id="${escapeHtml(session.id)}" type="button"><strong>${escapeHtml(session.title)}</strong><small>${escapeHtml(session.summary?.verdict || "继续澄清")} · ${escapeHtml(formatDate(session.updated_at))}</small></button>`).join("") : '<div class="empty-state">还没有想法记录。</div>';
+    }
+
+    function renderOpportunities(items = []) {
+      qs("#idea-opportunity-count").textContent = items.length ? `${items.filter((item) => item.status === "open").length} 条待领取` : "暂无交接";
+      if (!items.length) { opportunityList.innerHTML = '<div class="opportunity-empty">AI 热点或其他项目交接后，会出现在这里。</div>'; return; }
+      opportunityList.innerHTML = items.slice(0, 8).map((item) => {
+        const signal = item.metadata?.signal || {};
+        const result = item.result || {};
+        const done = item.status === "done";
+        const running = item.status === "running";
+        const failed = item.status === "failed";
+        const action = done ? `<button class="opportunity-start done" type="button" data-open-session="${escapeHtml(result.idea_session_id || "")}" ${result.idea_session_id ? "" : "disabled"}>查看验证结果</button>` : `<button class="opportunity-start" type="button" data-start-opportunity="${escapeHtml(item.id)}" ${running ? "disabled" : ""}>${running ? "分析中…" : failed ? "重试验证" : "开始验证"}</button>`;
+        return `<article class="opportunity-item ${done ? "is-done" : failed ? "is-failed" : ""}"><div class="opportunity-item-top"><span>${escapeHtml(item.source_agent_name || "项目 Agent")}</span><time>${escapeHtml(formatDate(item.updated_at || item.created_at))}</time></div><strong>${escapeHtml(signal.title || item.title)}</strong><p>${escapeHtml(signal.description || "已登记一条待验证机会")}</p><div class="opportunity-item-foot"><span class="opportunity-status">${done ? "已完成初判" : failed ? "上次失败" : running ? "正在分析" : "待领取"}</span>${action}</div></article>`;
+      }).join("");
+    }
+
+    function renderMessages(messages) { chatLog.innerHTML = messages?.length ? messages.map((item) => `<div class="idea-message ${item.role === "user" ? "user" : "assistant"}"><strong>${item.role === "user" ? "你" : "想法分析 Agent"}</strong><p>${escapeHtml(item.content)}</p></div>`).join("") : '<div class="idea-message assistant"><strong>想法分析 Agent</strong><p>把你的想法丢过来吧。我会和你一起判断：有没有真实需求、谁会付费、怎么低成本验证，以及哪里可能只是自我感动。</p></div>'; chatLog.scrollTop = chatLog.scrollHeight; }
+    function setVerdict(value) { const verdict = qs("#verdict"); verdict.textContent = value || "等待判断"; verdict.className = `verdict ${value === "值得做" ? "good" : value === "先验证" ? "check" : value === "暂不建议" ? "hold" : "neutral"}`; }
+    function setOperation(message, tone = "") { const node = qs("#idea-operation"); node.textContent = message; node.dataset.tone = tone; }
+    function setPlanOperation(message, tone = "") { const node = qs("#plan-operation"); node.textContent = message; node.dataset.tone = tone; }
+    function evidenceStatus(evidence = {}) { return String(evidence.status || evidence.state || "待验证"); }
+    function renderPlan(body = {}) {
+      const plan = body.plan || {};
+      currentPlan = { hypotheses: plan.hypotheses || [], tasks: plan.tasks || [], decisions: plan.decisions || [] };
+      const decision = currentPlan.decisions[0];
+      const hasPlan = Boolean(decision || currentPlan.hypotheses.length || currentPlan.tasks.length);
+      planEmpty.classList.toggle("hidden", hasPlan);
+      planContent.classList.toggle("hidden", !hasPlan);
+      generatePlanButton.disabled = !sessionId;
+      generatePlanButton.textContent = hasPlan ? "刷新验证计划" : "生成验证工作台";
+      qs("#plan-version").textContent = decision ? `计划 v${decision.version}` : "尚未生成";
+      if (!hasPlan) return;
+      const verdict = decision?.verdict || body.session?.summary?.verdict || "先验证";
+      qs("#plan-verdict").textContent = verdict;
+      qs("#plan-verdict").className = `plan-decision-value ${verdict === "值得做" ? "good" : verdict === "暂不建议" ? "hold" : "check"}`;
+      qs("#plan-rationale").textContent = decision?.rationale || "关键事实还不足，先执行最小验证。";
+      qs("#plan-evidence").textContent = decision ? `v${decision.version} · ${formatDate(decision.created_at)}` : "结构化计划正在建立";
+      qs("#plan-continue").textContent = decision?.continue_if || "达到至少一个成功指标，并且用户愿意继续参与。";
+      qs("#plan-stop").textContent = decision?.stop_if || "连续验证没有需求信号，或成本明显高于可获得价值。";
+      qs("#hypothesis-count").textContent = `${currentPlan.hypotheses.length} 项`;
+      qs("#task-count").textContent = `${currentPlan.tasks.length} 项`;
+      const evidenceCount = qs("#evidence-count");
+      if (evidenceCount) evidenceCount.textContent = `${evidenceRecords.length} 条`;
+      qs("#hypothesis-list").innerHTML = currentPlan.hypotheses.length ? currentPlan.hypotheses.map((item, index) => { const status = evidenceStatus(item.evidence); return `<article class="hypothesis-card"><div class="hypothesis-top"><span class="hypothesis-index">H${index + 1}</span><span class="hypothesis-status ${status === "已验证" || status === "confirmed" ? "confirmed" : "pending"}">${escapeHtml(status)}</span></div><strong>${escapeHtml(item.statement)}</strong><div class="hypothesis-meta"><span>${escapeHtml(item.category || "需求")} · ${escapeHtml(item.priority || "normal")}</span></div><dl><div><dt>成功指标</dt><dd>${escapeHtml(item.success_metric || "待补充")}</dd></div><div><dt>停止条件</dt><dd>${escapeHtml(item.stop_condition || "待补充")}</dd></div></dl></article>`; }).join("") : '<div class="plan-list-empty">暂未生成假设。</div>';
+      qs("#validation-task-list").innerHTML = currentPlan.tasks.length ? currentPlan.tasks.map((item, index) => { const workItemId = Number(item.work_item_id || item.work_item?.id || 0); const taskStatus = taskStatusNames[item.status] || item.status || "待开始"; return `<article class="validation-task-card"><div class="validation-task-top"><span class="task-index">DAY ${index + 1}</span><span class="task-status status-${escapeHtml(item.status || "open")}">${escapeHtml(taskStatus)}</span></div><strong>${escapeHtml(item.title)}</strong><div class="validation-task-meta"><span>${escapeHtml(taskTypeNames[item.task_type] || item.task_type || "验证")}</span><time>${escapeHtml(item.due_at || "7 天内")}</time></div><p>${escapeHtml(item.success_metric || item.acceptance || "完成后记录事实和原话")}</p><div class="validation-task-foot">${workItemId ? `<a href="/#activity" target="_blank" rel="noopener">工作台待处理 #${escapeHtml(workItemId)} ↗</a>` : "未关联工作项"}<span>${escapeHtml(item.acceptance || "完成后回填结果")}</span></div></article>`; }).join("") : '<div class="plan-list-empty">暂未生成验证任务。</div>';
+      renderEvidencePanel();
+    }
+    function renderEvidencePanel() {
+      const panel = qs("#evidence-panel");
+      if (!panel || !sessionId) return;
+      const rows = evidenceRecords.filter((item) => item.session_id === sessionId);
+      panel.innerHTML = rows.length ? rows.map((item) => { const locator = item.metadata?.source_locator || item.metadata?.locator || {}; const locatorText = locator.path ? `${locator.path}${locator.line_start ? ` · 第 ${locator.line_start}–${locator.line_end || locator.line_start} 行` : ""}` : (item.metadata?.source || ""); return `<div class="evidence-row"><span class="evidence-status ${escapeHtml(item.metadata?.status || "unverified")}">${escapeHtml({ supported: "支持", contradicted: "反证", partial: "部分", unverified: "待验证" }[item.metadata?.status] || "待验证")}</span><div><strong>${escapeHtml(item.metadata?.title || "证据")}</strong><small>${escapeHtml(locatorText)}</small></div></div>`; }).join("") : '<div class="plan-list-empty">还没有证据记录。完成验证任务后，把事实和原话记在这里。</div>';
+    }
+    async function loadEvidenceRecords() {
+      if (!sessionId) return;
+      try {
+        const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/evidence`);
+        evidenceRecords = (body.evidence || []).map((item) => {
+          const metadata = item.metadata || {};
+          return { ...item, session_id: item.session_id || metadata.session_id || "", metadata: { ...metadata, title: metadata.title || (metadata.participant ? `访谈 · ${metadata.participant}` : item.name || "证据"), source: metadata.source || (metadata.question ? `问题：${metadata.question}` : "") } };
+        });
+        renderEvidencePanel();
+      } catch (e) { /* 证据读取失败不打扰 */ }
+    }
+    async function loadEvidencePack() {
+      if (!sessionId) { setPlanOperation("先打开一个想法会话，再回放证据包。", "error"); return; }
+      const output = qs("#evidence-pack-output"); const button = qs("#view-evidence-pack");
+      button.disabled = true; button.textContent = "读取中…"; output.hidden = false; output.innerHTML = "正在聚合证据、决策版本和来源关系…";
+      try {
+        const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/evidence-pack`);
+        const summary = body.summary || {};
+        const artifactRows = (body.artifacts || []).slice(0, 12).map((item) => {
+          const meta = item.metadata || {};
+          const locators = meta.source_locators || [];
+          const locatorText = locators.length
+            ? locators.map((loc) => `${loc.path || "来源"} · ${loc.line_start || 0}–${loc.line_end || loc.line_start || 0}`).join("；")
+            : `Artifact #${item.id}`;
+          return `<div class="evidence-row"><span class="evidence-status">${escapeHtml(meta.status || "待验证")}</span><div><strong>${escapeHtml(item.name || "Evidence")}</strong><small>${escapeHtml(locatorText)}</small></div></div>`;
+        }).join("");
+        const sampleText = summary.sample_status === "ready" ? "样本可观察" : `样本不足（${summary.evidence_total || 0}/${summary.minimum_samples || 3}）`;
+        const coverage = summary.decision_source_coverage || {};
+        const rateText = summary.support_rate == null ? "支持率 —" : `支持率 ${Math.round(summary.support_rate * 100)}% · 反证率 ${Math.round((summary.contradicted_rate || 0) * 100)}%`;
+        const decisionText = summary.latest_decision_at ? `最近决策 ${escapeHtml(formatDate(summary.latest_decision_at))}` : "尚无版本化决策";
+        output.innerHTML = `<div><strong>证据包回放</strong><p>支持 ${summary.supported || 0} · 反证 ${summary.contradicted || 0} · 部分 ${summary.partial || 0} · 待验证 ${summary.pending || 0}</p><p class="evidence-pack-summary">${escapeHtml(sampleText)} · ${escapeHtml(rateText)} · ${escapeHtml(decisionText)} · 来源可读 ${escapeHtml(coverage.readable || 0)}/${escapeHtml(coverage.available || 0)}</p>${artifactRows || "<p>还没有可回放的来源记录。</p>"}</div>`;
+      } catch (error) { output.textContent = error.message; } finally { button.disabled = false; button.textContent = "回放证据包"; }
+    }
+    function openEvidenceForm() {
+      if (!sessionId) { setPlanOperation("先创建一个想法会话，再记录证据。", "error"); return; }
+      const overlay = qs("#evidence-overlay");
+      if (overlay) overlay.classList.remove("hidden");
+    }
+    function closeEvidenceForm() { const overlay = qs("#evidence-overlay"); if (overlay) overlay.classList.add("hidden"); }
+    function setInterviewMessage(message, tone = "") { const node = qs("#interview-form-message"); if (!node) return; node.textContent = message; node.dataset.tone = tone; }
+    function openInterviewForm() {
+      if (!sessionId) { setPlanOperation("先创建一个想法会话，再记录访谈。", "error"); return; }
+      const overlay = qs("#interview-overlay");
+      if (!overlay) return;
+      modalReturnFocus = document.activeElement;
+      setInterviewMessage("");
+      overlay.classList.remove("hidden");
+      qs("#interview-participant")?.focus();
+    }
+    function closeInterviewForm() {
+      const overlay = qs("#interview-overlay");
+      if (overlay) overlay.classList.add("hidden");
+      if (modalReturnFocus && typeof modalReturnFocus.focus === "function") modalReturnFocus.focus();
+      modalReturnFocus = null;
+    }
+    async function submitInterview() {
+      if (!sessionId) return;
+      const form = qs("#interview-form");
+      const button = form?.querySelector("button[type=submit]");
+      const participant = qs("#interview-participant")?.value.trim() || "";
+      const question = qs("#interview-question")?.value.trim() || "";
+      const answer = qs("#interview-answer")?.value.trim() || "";
+      const source = qs("#interview-source")?.value.trim() || "";
+      const status = qs("#interview-status")?.value || "unverified";
+      if (!participant || !question || !answer) { setInterviewMessage("参与者、问题和原话/回答都需要填写。", "error"); return; }
+      if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); button.textContent = "保存中…"; }
+      setInterviewMessage("正在保存访谈记录…");
+      try {
+        await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/interviews`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ participant, question, answer, source, status }) });
+        qs("#interview-participant").value = ""; qs("#interview-question").value = ""; qs("#interview-answer").value = ""; qs("#interview-source").value = ""; qs("#interview-status").value = "unverified";
+        closeInterviewForm(); setPlanOperation("访谈已保存，已进入证据包和继续/暂停/转向比较。", "success");
+        await Promise.all([loadEvidenceRecords(), loadPlan(sessionId)]);
+      } catch (error) { setInterviewMessage(`保存失败：${error.message}`, "error"); }
+      finally { if (button) { button.disabled = false; button.removeAttribute("aria-busy"); button.textContent = "保存访谈"; } }
+    }
+    async function submitEvidence() {
+      if (!sessionId) return;
+      const title = qs("#evidence-title").value.trim();
+      const content = qs("#evidence-content").value.trim();
+      const kind = qs("#evidence-kind").value;
+      const status = qs("#evidence-status").value;
+      const source = qs("#evidence-source").value.trim();
+      if (!title || !content) { setPlanOperation("标题和内容不能为空。", "error"); return; }
+      try {
+        await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/evidence`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, title, content, source, status }) });
+        qs("#evidence-title").value = ""; qs("#evidence-content").value = ""; qs("#evidence-source").value = "";
+        closeEvidenceForm(); setPlanOperation("证据已记录，会进入版本化决策依据。", "success");
+        await loadEvidenceRecords();
+      } catch (error) { setPlanOperation(`证据记录失败：${error.message}`, "error"); }
+    }
+    async function submitMetric() {
+      if (!sessionId) return;
+      const name = qs("#metric-name").value.trim();
+      const value = qs("#metric-value").value.trim();
+      const target = qs("#metric-target").value.trim();
+      const status = qs("#metric-status").value;
+      if (!name) { setPlanOperation("指标名不能为空。", "error"); return; }
+      try {
+        await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/metrics`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, value, target, status }) });
+        qs("#metric-name").value = ""; qs("#metric-value").value = ""; qs("#metric-target").value = "";
+        setPlanOperation("指标已回填，可作为继续/停止判断依据。", "success");
+        await Promise.all([loadEvidenceRecords(), loadPlan(sessionId)]);
+      } catch (error) { setPlanOperation(`指标回填失败：${error.message}`, "error"); }
+    }
+    async function compareDecision() {
+      if (!sessionId) { setPlanOperation("先创建一个想法会话。", "error"); return; }
+      try {
+        const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/decision/compare`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmed: false }) });
+        const cmp = body.comparison || {};
+        setPlanOperation(`比较结果：支持 ${cmp.supported || 0} · 反证 ${cmp.contradicted || 0} · 未决 ${cmp.unknown || 0}；建议「${cmp.suggested_verdict || "继续"}」。确认后会在运行记录中记录决策。`, "success");
+      } catch (error) { setPlanOperation(`决策比较失败：${error.message}`, "error"); }
+    }
+    async function loadSessions() { const body = await requestJson("/api/idea-analysis/sessions"); sessions = body.sessions || []; renderSessions(); if (!sessionId && sessions.length) await openSession(sessions[0].id); }
+    async function loadOpportunities() { const body = await requestJson("/api/idea-analysis/opportunities"); renderOpportunities(body.items || []); }
+    async function loadFollowups() { const summaryNode = qs("#followup-summary"); const list = qs("#followup-list"); if (!list) return; try { const body = await requestJson("/api/idea-analysis/followups?days=3"); const summary = body.summary || {}; const actionable = [...(body.tasks || [])].filter((item) => ["overdue", "due_soon"].includes(item.bucket)); if (summaryNode) summaryNode.textContent = `逾期 ${summary.overdue || 0} · 3 天内 ${summary.due_soon || 0} · 更晚 ${summary.later || 0}`; list.innerHTML = actionable.length ? actionable.slice(0, 8).map((item) => `<div class="followup-row ${escapeHtml(item.bucket || "later")}"><div><strong>${escapeHtml(item.title || "验证任务")}</strong><small>${escapeHtml(item.session_title || "未命名想法")} · 截止 ${escapeHtml(item.due_at || "未设置")}</small></div><span>${escapeHtml(item.bucket === "overdue" ? "已逾期" : `${item.days_remaining ?? "—"} 天内`)}</span></div>`).join("") : '<div class="plan-list-empty">未来 3 天没有到期任务，继续按计划验证即可。</div>'; } catch (error) { if (summaryNode) summaryNode.textContent = "读取失败"; list.innerHTML = `<div class="plan-list-empty">${escapeHtml(error.message)}</div>`; } }
+    async function loadPlan(id = sessionId) { if (!id) { renderPlan({ plan: {} }); return; } const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(id)}/plan`); renderPlan(body); return body; }
+    async function generatePlan() { if (!sessionId) { setPlanOperation("先描述一个想法，再生成验证工作台。", "error"); return; } generatePlanButton.disabled = true; generatePlanButton.textContent = "生成中…"; setPlanOperation("Agent 正在把对话拆成假设、任务和决策条件…"); try { const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/plan`, { method: "POST" }); sessionId = body.session?.id || sessionId; renderPlan(body); setVerdict(body.decision?.verdict || body.session?.summary?.verdict); setPlanOperation(`已生成 v${body.decision?.version || ""}：${body.plan?.hypotheses?.length || 0} 个假设、${body.plan?.tasks?.length || 0} 个验证任务。`, "success"); await Promise.all([loadSessions(), loadIdeaRuns(sessionId)]); } catch (error) { generatePlanButton.disabled = false; setPlanOperation(`生成失败：${error.message}；可在运行记录中重试。`, "error"); await loadPlan(sessionId).catch(() => {}); await loadIdeaRuns(sessionId).catch(() => {}); } }
+    function renderIdeaRuns(items = [], summary = {}) { const history = qs("#idea-run-history"); const failed = Number(summary.failed || 0); qs("#idea-run-summary").textContent = failed ? `${failed} 个失败，可重试` : `${items.length} 条记录`; if (!items.length) { history.innerHTML = '<div class="project-agent-runs-empty">分析后会显示运行状态、失败原因和重试入口。</div>'; return; } history.innerHTML = items.slice(0, 8).map((run) => `<article class="project-agent-run ${escapeHtml(run.status || "queued")}"><div class="project-agent-run-top"><span class="project-agent-run-state"><i></i>${escapeHtml(run.status_label || run.status)}</span><time>${escapeHtml(formatDate(run.updated_at || run.created_at))}</time></div><div class="project-agent-run-title">第 ${escapeHtml(run.attempt || 1)}/${escapeHtml(run.max_attempts || 1)} 次 · ${escapeHtml(run.title || "想法分析")}</div>${run.error ? `<p class="project-agent-run-error">${escapeHtml(run.error)}</p>` : ""}<div class="project-agent-run-foot">${run.retryable ? `<button class="project-agent-run-retry" type="button" data-idea-retry="${escapeHtml(run.id)}">重试</button>` : ""}<span>${escapeHtml(String(run.id).slice(0, 8))}</span></div></article>`).join(""); }
+    async function loadIdeaRuns(id = sessionId) { const query = id ? `&session_id=${encodeURIComponent(id)}` : ""; const body = await requestJson(`/api/agent/idea-analysis/runs?limit=8${query}`); renderIdeaRuns(body.runs || [], body.summary || {}); }
+    async function openSession(id) { if (!id) return; const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(id)}`); sessionId = id; qs("#conversation-title").textContent = body.session?.title || "想法分析"; setVerdict(body.session?.summary?.verdict); renderMessages(body.messages || []); renderSessions(); await Promise.all([loadPlan(id), loadIdeaRuns(id), loadEvidenceRecords()]); }
+    function startNewSession() { sessionId = ""; qs("#conversation-title").textContent = "从一个想法开始"; setVerdict(""); renderMessages([]); renderSessions(); setPlanOperation(""); renderPlan({ plan: {} }); qs("#idea-chat-input").focus(); }
+    async function startOpportunity(button) { const itemId = button.dataset.startOpportunity; button.disabled = true; button.textContent = "分析中…"; setOperation("正在领取机会并生成结构化验证计划…"); try { const body = await requestJson(`/api/idea-analysis/opportunities/${encodeURIComponent(itemId)}/run`, { method: "POST" }); sessionId = body.session?.id || sessionId; qs("#conversation-title").textContent = body.session?.title || "机会验证"; setVerdict(body.session?.summary?.verdict); renderMessages(body.messages || []); await loadPlan(sessionId); setOperation("机会已完成初判，下面可以生成验证工作台并执行任务。", "success"); await Promise.all([loadSessions(), loadOpportunities(), loadIdeaRuns(sessionId)]); } catch (error) { button.disabled = false; button.textContent = "重试验证"; setOperation(`验证失败：${error.message}`, "error"); } }
+
+    function installInterviewAction() {
+      const actions = qs(".evidence-actions");
+      if (!actions || qs("#add-interview")) return;
+      const button = document.createElement("button");
+      button.id = "add-interview";
+      button.className = "secondary-button interview-action";
+      button.type = "button";
+      button.textContent = "记录访谈";
+      button.title = "保存参与者、问题、原话和来源，不直接替代判断";
+      actions.insertBefore(button, actions.firstChild);
+    }
+
+    sessionList.addEventListener("click", (event) => { const item = event.target.closest("[data-session-id]"); if (item) openSession(item.dataset.sessionId).catch((error) => setOperation(`读取会话失败：${error.message}`, "error")); });
+    opportunityList.addEventListener("click", (event) => { const start = event.target.closest("[data-start-opportunity]"); if (start) return startOpportunity(start); const open = event.target.closest("[data-open-session]"); if (open) openSession(open.dataset.openSession).catch((error) => setOperation(`打开会话失败：${error.message}`, "error")); });
+    qs("#new-session").addEventListener("click", startNewSession);
+    generatePlanButton.addEventListener("click", generatePlan);
+    qs("#idea-run-history").addEventListener("click", async (event) => { const button = event.target.closest("[data-idea-retry]"); if (!button) return; button.disabled = true; button.textContent = "重试中…"; try { const body = await requestJson(`/api/agent/idea-analysis/runs/${encodeURIComponent(button.dataset.ideaRetry)}/retry`, { method: "POST" }); sessionId = body.session?.id || sessionId; qs("#conversation-title").textContent = body.session?.title || "想法分析"; setVerdict(body.decision?.verdict || body.session?.summary?.verdict); renderMessages(body.messages || []); if (body.plan) renderPlan(body); setPlanOperation("已完成验证计划重试，旧版本仍保留。", "success"); setOperation("已完成重试。", "success"); await loadSessions(); await loadOpportunities(); await loadIdeaRuns(sessionId); } catch (error) { button.disabled = false; button.textContent = "重试"; setPlanOperation(`重试失败：${error.message}`, "error"); setOperation(`重试失败：${error.message}`, "error"); } });
+    qs("#idea-chat-form").addEventListener("submit", async (event) => { event.preventDefault(); const input = qs("#idea-chat-input"); const text = input.value.trim(); if (!text) return; const button = event.currentTarget.querySelector("button[type=submit]"); const hadPlan = currentPlan.decisions.length > 0; button.disabled = true; button.textContent = "分析中…"; input.value = ""; chatLog.insertAdjacentHTML("beforeend", `<div class="idea-message user"><strong>你</strong><p>${escapeHtml(text)}</p></div>`); chatLog.scrollTop = chatLog.scrollHeight; try { const body = await requestJson("/api/idea-analysis/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message: text }) }); sessionId = body.session?.id || sessionId; qs("#conversation-title").textContent = body.session?.title || "想法分析"; setVerdict(body.session?.summary?.verdict); chatLog.insertAdjacentHTML("beforeend", `<div class="idea-message assistant"><strong>想法分析 Agent</strong><p>${escapeHtml(body.message?.content || "没有返回分析结果")}</p></div>`); chatLog.scrollTop = chatLog.scrollHeight; await loadSessions(); await loadPlan(sessionId); await loadIdeaRuns(sessionId); if (hadPlan) setPlanOperation("对话已更新；当前展示的是上一版计划，点击“刷新验证计划”吸收新信息。", "warning"); } catch (error) { chatLog.insertAdjacentHTML("beforeend", `<div class="idea-message assistant error"><strong>系统提示</strong><p>${escapeHtml(error.message)}</p></div>`); } finally { button.disabled = false; button.textContent = "继续聊"; } });
+    document.querySelectorAll("[data-agent-prompt]").forEach((button) => button.addEventListener("click", () => { qs("#idea-chat-input").value = button.dataset.agentPrompt || ""; qs("#idea-chat-input").focus(); }));
+    // —— 证据与决策 ——
+    installInterviewAction();
+    qs("#add-evidence").addEventListener("click", openEvidenceForm);
+    qs("#add-interview")?.addEventListener("click", openInterviewForm);
+    qs("#add-metric").addEventListener("click", () => { const details = qs("#metric-form"); if (details) details.open = !details.open; });
+    qs("#compare-decision").addEventListener("click", compareDecision);
+    qs("#view-evidence-pack").addEventListener("click", loadEvidencePack);
+    qs("#submit-metric").addEventListener("click", submitMetric);
+    qs("#run-followup-reminders")?.addEventListener("click", async (event) => { const button = event.currentTarget; button.disabled = true; button.textContent = "生成中…"; try { const body = await requestJson("/api/idea-analysis/reminders/run?days=3", { method: "POST" }); setPlanOperation(body.matched ? `已生成 ${body.matched} 条验证任务提醒。` : "当前没有逾期或临近到期任务。", "success"); await loadFollowups(); } catch (error) { setPlanOperation(`提醒生成失败：${error.message}`, "error"); } finally { button.disabled = false; button.textContent = "生成提醒"; } });
+    document.querySelectorAll("[data-close-evidence]").forEach((item) => item.addEventListener("click", closeEvidenceForm));
+    document.querySelectorAll("[data-close-interview]").forEach((item) => item.addEventListener("click", closeInterviewForm));
+    qs("#evidence-form").addEventListener("submit", (event) => { event.preventDefault(); void submitEvidence(); });
+    qs("#interview-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitInterview(); });
+    qs("#evidence-overlay").addEventListener("click", (event) => { if (event.target === qs("#evidence-overlay")) closeEvidenceForm(); });
+    qs("#interview-overlay")?.addEventListener("click", (event) => { if (event.target === qs("#interview-overlay")) closeInterviewForm(); });
+    document.addEventListener("keydown", (event) => { if (event.key !== "Escape") return; if (!qs("#interview-overlay")?.classList.contains("hidden")) closeInterviewForm(); else closeEvidenceForm(); });
+    loadSessions().catch((error) => { sessionList.innerHTML = `<div class="empty-state">读取失败：${escapeHtml(error.message)}</div>`; });
+    loadOpportunities().catch((error) => { opportunityList.innerHTML = `<div class="opportunity-empty">读取失败：${escapeHtml(error.message)}</div>`; });
+    loadIdeaRuns().catch(() => {});
+    loadFollowups();
+  </script>
+</body>
+</html>
