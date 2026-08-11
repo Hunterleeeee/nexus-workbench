@@ -10,6 +10,7 @@ import ipaddress
 import importlib.util
 import io
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -33,7 +34,6 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -41,6 +41,20 @@ from dotenv import load_dotenv
 
 
 ROOT = Path(__file__).resolve().parent
+
+# ---------------------------------------------------------------------------
+# Logging.  Until now every failure path was a bare `except Exception: pass`,
+# which meant production incidents left no trace at all.  systemd captures
+# stdout/stderr into the journal, so a plain StreamHandler is enough:
+#   journalctl -u workbench -f
+# Set WORKBENCH_LOG_LEVEL=DEBUG to raise verbosity without a code change.
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=getattr(logging, os.getenv("WORKBENCH_LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+)
+log = logging.getLogger("workbench")
+
 # Release marker: keep the development server's reload watcher aligned with VERSION.
 STATIC_DIR = ROOT / "static"
 PROJECTS_FILE = ROOT / "projects.json"
@@ -123,6 +137,28 @@ MAX_MEMORY_MATCHED_ITEMS = 3
 MAX_MEMORY_PINNED_ITEMS = 2
 MAX_MEMORY_ITEM_CONTEXT_CHARS = 280
 MAX_MEMORY_CONTEXT_CHARS = 1_200
+
+
+def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Read a tunable integer from the environment without letting a typo break startup."""
+    try:
+        value = int(str(os.getenv(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+# ---------------------------------------------------------------------------
+# Agent 运行参数（全部可通过环境变量调，无需改代码）
+#
+# 之前这些都是散落在函数体里的字面量：并发写死 2、ReAct 轮次写死 4、没有任何
+# 超时。结果是子 Agent 一慢就整条调度陪着等，而想调快一点又只能改源码。
+# ---------------------------------------------------------------------------
+AGENT_CHILD_CONCURRENCY = _int_env("WORKBENCH_AGENT_CHILD_CONCURRENCY", 3, minimum=1, maximum=8)
+AGENT_MAX_TOOL_ROUNDS = _int_env("WORKBENCH_AGENT_MAX_TOOL_ROUNDS", 4, minimum=1, maximum=8)
+AGENT_TOOL_TIMEOUT_SECONDS = _int_env("WORKBENCH_AGENT_TOOL_TIMEOUT_SECONDS", 60, minimum=5, maximum=600)
+AGENT_CHILD_TIMEOUT_SECONDS = _int_env("WORKBENCH_AGENT_CHILD_TIMEOUT_SECONDS", 420, minimum=30, maximum=1800)
+AGENT_MAX_PARALLEL_TOOL_CALLS = _int_env("WORKBENCH_AGENT_MAX_PARALLEL_TOOL_CALLS", 4, minimum=1, maximum=8)
 
 # 模型输出能力表：max_tokens 上限应跟随模型能力，而不是硬编码。
 # key 用模型名前缀匹配（大小写不敏感）；命中顺序取最长匹配。
@@ -613,13 +649,83 @@ app = FastAPI(title="Workbench", version=WORKBENCH_VERSION)
 # 允许 Sub2API 面板页面的书签脚本一键同步快照（浏览器端 fetch 面板同源 API 后提交）。
 # 只放行用户自己的面板源，避免其他来源伪造快照。
 _SUB2API_PANEL_ORIGINS = [origin.strip().rstrip("/") for origin in os.getenv("SUB2API_PANEL_ORIGINS", "https://sub.chengsir.asia").split(",") if origin.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_SUB2API_PANEL_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
-)
+
+# 这里刻意 **不** 使用全局 CORSMiddleware。
+#
+# 之前的写法是 add_middleware(CORSMiddleware, allow_origins=面板域名,
+# allow_credentials=True)，但中间件是全站生效的：等于声明"面板域名可以带着
+# 浏览器里缓存的 Basic Auth 凭证，POST 到 Workbench 的任意接口并读取响应"。
+# 面板域名一旦被 XSS 或域名过期被抢注，就能触发 Agent 调度、写收件箱等操作。
+#
+# 实际需要跨域的只有 /api/sub2api/sync-raw 一个路由，而它本来就在处理函数里
+# 校验了 Origin。所以改成只给那一个路由回 CORS 头，其余路由维持同源。
+_SUB2API_CORS_PATH = "/api/sub2api/sync-raw"
+
+
+@app.middleware("http")
+async def scoped_cors_middleware(request: Request, call_next: Any) -> Any:
+    """只为 Sub2API 书签同步这一个路由发放跨域许可。"""
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    allowed = origin and origin in _SUB2API_PANEL_ORIGINS and request.url.path == _SUB2API_CORS_PATH
+
+    if request.method == "OPTIONS" and request.url.path == _SUB2API_CORS_PATH:
+        from starlette.responses import Response as _Response
+
+        preflight = _Response(status_code=204 if allowed else 403)
+        if allowed:
+            preflight.headers["Access-Control-Allow-Origin"] = origin
+            preflight.headers["Access-Control-Allow-Credentials"] = "true"
+            preflight.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            preflight.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            preflight.headers["Access-Control-Max-Age"] = "600"
+            preflight.headers["Vary"] = "Origin"
+        return preflight
+
+    response = await call_next(request)
+    if allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# 应用层鉴权（纵深防御）
+#
+# 线上所有保护都来自 nginx 的 auth_basic。这意味着 nginx 配置改错一行、或者
+# 服务器上任何本地进程直连 127.0.0.1:18765，全部 300 多个接口就完全裸奔——包括
+# 写库、触发 Agent、提交云开发构建。
+#
+# 这里加一道独立的应用层校验：设置 WORKBENCH_API_TOKEN 后，非白名单路径必须带
+# X-Workbench-Token 头或 workbench_token Cookie。默认不设置时保持原有行为
+# （只依赖 nginx），所以升级不会把自己锁在门外；确认前端能正常带 token 之后再
+# 在 .env 里打开即可。
+# ---------------------------------------------------------------------------
+AUTH_EXEMPT_PREFIXES = ("/static/", "/feishu/")
+AUTH_EXEMPT_PATHS = {
+    "/api/health",              # 健康检查脚本，无凭证
+    "/api/git/inventory-push",  # 有自己的 WORKBENCH_GIT_PUSH_TOKEN 常数时间校验
+    _SUB2API_CORS_PATH,         # 有自己的 Origin 校验
+    "/favicon.ico",
+    "/manifest.webmanifest",
+}
+
+
+@app.middleware("http")
+async def app_token_auth_middleware(request: Request, call_next: Any) -> Any:
+    expected = os.getenv("WORKBENCH_API_TOKEN", "").strip()
+    if not expected:
+        return await call_next(request)
+    path = request.url.path
+    if path in AUTH_EXEMPT_PATHS or path.startswith(AUTH_EXEMPT_PREFIXES) or request.method == "OPTIONS":
+        return await call_next(request)
+    provided = str(request.headers.get("x-workbench-token") or request.cookies.get("workbench_token") or "")
+    if not secrets.compare_digest(provided, expected):
+        from starlette.responses import JSONResponse as _JSONResponse
+
+        log.warning("拒绝未携带有效 token 的请求：%s %s", request.method, path)
+        return _JSONResponse({"detail": "缺少或错误的 Workbench 访问令牌"}, status_code=401)
+    return await call_next(request)
 
 
 @app.get("/static/sw.js")
@@ -2528,6 +2634,41 @@ def _initialize_extended_schema(connection: sqlite3.Connection) -> None:
     if "practice_output" not in ai_learning_lesson_columns:
         connection.execute("ALTER TABLE ai_learning_lessons ADD COLUMN practice_output TEXT NOT NULL DEFAULT ''")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_learning_lessons_status ON ai_learning_lessons(status, lesson_date DESC)")
+
+    # ------------------------------------------------------------------
+    # Hot-path indexes for the five core tables that had none.
+    #
+    # inbox / work_items / relations / artifacts are read on almost every
+    # page load (首页待办、联动矩阵、交接记录、产物列表).  Without these
+    # SQLite full-scans the table and then sorts the whole result set just to
+    # return the newest 200 rows, which is the dominant cost of "/" and
+    # "/api/work-items" once the tables pass a few thousand rows.
+    # ------------------------------------------------------------------
+    for index_sql in (
+        # inbox: WHERE status = ? + ORDER BY priority/due_at/created_at, plus daily counters.
+        "CREATE INDEX IF NOT EXISTS idx_inbox_status_id ON inbox(status, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_updated_at ON inbox(updated_at DESC, id DESC)",
+        # work_items: the homepage list, per-status queues and per-kind lookups.
+        "CREATE INDEX IF NOT EXISTS idx_work_items_updated_at ON work_items(updated_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status, updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_work_items_kind ON work_items(kind, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_work_items_created_at ON work_items(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_work_items_target_project ON work_items(target_project, updated_at DESC)",
+        # relations: `WHERE from_id = ? OR to_id = ?` needs one index per side so
+        # SQLite can run its OR-optimization instead of scanning the table twice.
+        "CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_relations_created_at ON relations(created_at DESC)",
+        # artifacts: global newest-first list and the per-project variant.
+        "CREATE INDEX IF NOT EXISTS idx_artifacts_created_at ON artifacts(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id, created_at DESC)",
+    ):
+        try:
+            connection.execute(index_sql)
+        except sqlite3.Error as exc:  # A partially migrated table must not block startup.
+            log.warning("跳过索引创建：%s（%s）", index_sql, exc)
+
     connection.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
     current_schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0] or 0)
     timestamp = now_iso()
@@ -6452,11 +6593,36 @@ def record_llm_usage_event(
         connection.commit()
     except Exception:
         # Metrics must never turn a successful Agent call into a failed call.
+        log.warning("写入 LLM 用量事件失败（已忽略）", exc_info=True)
         if connection:
             connection.rollback()
     finally:
         if connection:
             connection.close()
+
+
+# Background tasks need a strong reference, otherwise the event loop may garbage
+# collect them mid-flight and the metric silently disappears.
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def schedule_llm_usage_event(provider: dict[str, Any], **fields: Any) -> None:
+    """Record LLM metrics off the event loop.
+
+    ``record_llm_usage_event`` opens a SQLite connection and commits.  It used to
+    run inline inside ``call_llm``, so every single LLM request performed a
+    blocking write on the event loop -- and with ``busy_timeout = 30000`` a lock
+    held by one of the five worker processes could freeze the *entire* API for up
+    to 30 seconds.  Observability must never be able to stall the request path.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # Called from a plain worker thread: write inline.
+        record_llm_usage_event(provider, **fields)
+        return
+    task = loop.create_task(asyncio.to_thread(record_llm_usage_event, provider, **fields))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def llm_usage_metrics_payload(hours: int = 24) -> dict[str, Any]:
@@ -11739,6 +11905,63 @@ SUBAGENT_TOOL_MAP: dict[str, list[str]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Shared LLM HTTP client.
+#
+# Every LLM call used to build its own ``httpx.AsyncClient``, which meant a fresh
+# TCP + TLS handshake per request.  A single dispatch fans out to several child
+# Agents, each running up to a few ReAct tool rounds, so one user message could
+# pay that handshake ten-plus times.  A pooled client keeps the connections warm.
+#
+# Timeouts are split rather than flat: a dead endpoint now fails over to the next
+# provider after ``connect`` seconds instead of holding the run for two minutes,
+# while long generations still get the full read budget.
+# ---------------------------------------------------------------------------
+def _llm_timeout() -> httpx.Timeout:
+    try:
+        read = float(os.getenv("WORKBENCH_LLM_READ_TIMEOUT_SECONDS", "120") or 120)
+    except (TypeError, ValueError):
+        read = 120.0
+    try:
+        connect = float(os.getenv("WORKBENCH_LLM_CONNECT_TIMEOUT_SECONDS", "10") or 10)
+    except (TypeError, ValueError):
+        connect = 10.0
+    return httpx.Timeout(read, connect=connect, write=30.0, pool=10.0)
+
+
+_LLM_HTTP_CLIENTS: dict[str, httpx.AsyncClient] = {}
+_LLM_HTTP_CLIENT_LOCK = asyncio.Lock()
+
+
+async def llm_http_client() -> httpx.AsyncClient:
+    """Return the pooled client for the current proxy setting."""
+    proxy = os.getenv("LLM_PROXY", "").strip()
+    async with _LLM_HTTP_CLIENT_LOCK:
+        client = _LLM_HTTP_CLIENTS.get(proxy)
+        if client is not None and not client.is_closed:
+            return client
+        options: dict[str, Any] = {
+            "timeout": _llm_timeout(),
+            "trust_env": False,
+            "limits": httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=90.0),
+        }
+        if proxy:
+            options["proxy"] = proxy
+        client = httpx.AsyncClient(**options)
+        _LLM_HTTP_CLIENTS[proxy] = client
+        return client
+
+
+async def close_llm_http_clients() -> None:
+    async with _LLM_HTTP_CLIENT_LOCK:
+        for client in list(_LLM_HTTP_CLIENTS.values()):
+            try:
+                await client.aclose()
+            except Exception:
+                log.warning("关闭 LLM HTTP 客户端失败", exc_info=True)
+        _LLM_HTTP_CLIENTS.clear()
+
+
 async def call_llm(
     messages: list[dict[str, str]],
     credentials: dict[str, str] | None = None,
@@ -11764,20 +11987,17 @@ async def call_llm(
             "temperature": temperature,
             "max_tokens": effective_max_tokens,
         }
-        client_options: dict[str, Any] = {"timeout": 120, "trust_env": False}
-        if os.getenv("LLM_PROXY"):
-            client_options["proxy"] = os.getenv("LLM_PROXY")
         try:
-            async with httpx.AsyncClient(**client_options) as client:
-                response = await client.post(
-                    chat_completions_url(settings["base_url"]),
-                    headers=headers,
-                    json=payload,
-                )
-                response.raise_for_status()
-                body = response.json()
+            client = await llm_http_client()
+            response = await client.post(
+                chat_completions_url(settings["base_url"]),
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            body = response.json()
         except Exception as exc:
-            record_llm_usage_event(
+            schedule_llm_usage_event(
                 settings,
                 status="failed",
                 error_kind=_llm_error_kind(exc),
@@ -11793,7 +12013,7 @@ async def call_llm(
             finish_reason = str((body.get("choices") or [{}])[0].get("finish_reason") or "")
         except (KeyError, IndexError, TypeError) as exc:
             error = RuntimeError("LLM 返回格式不符合 OpenAI Chat Completions 规范")
-            record_llm_usage_event(
+            schedule_llm_usage_event(
                 settings,
                 status="failed",
                 error_kind="invalid_response",
@@ -11806,7 +12026,7 @@ async def call_llm(
         # 记录告警事件，便于排查"回答不完整"。
         if finish_reason == "length":
             try:
-                record_llm_usage_event(
+                schedule_llm_usage_event(
                     settings,
                     status="truncated",
                     error_kind="max_tokens_exceeded",
@@ -11822,7 +12042,7 @@ async def call_llm(
         result = str(content).strip() or str(reasoning).strip()
         if not result:
             error = RuntimeError("LLM 返回为空")
-            record_llm_usage_event(
+            schedule_llm_usage_event(
                 settings,
                 status="failed",
                 error_kind=_llm_error_kind(error),
@@ -11834,7 +12054,7 @@ async def call_llm(
         usage = body.get("usage") if isinstance(body, dict) and isinstance(body.get("usage"), dict) else {}
         input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or (sum(len(str(message.get("content") or "")) for message in messages) // 4))
         output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or (len(result) // 4))
-        record_llm_usage_event(
+        schedule_llm_usage_event(
             settings,
             status="succeeded",
             latency_ms=int((time.monotonic() - started_at) * 1000),
@@ -13318,31 +13538,87 @@ async def call_llm_with_tools(messages: list[dict[str, Any]], tools: list[dict[s
     """带工具 schema 调用 LLM（OpenAI function calling），返回完整响应体。
 
     使用 llm_provider_state()["candidates"]（含真实 api_key），与 call_llm 一致。
+
+    与 ``call_llm`` 保持同样的 fallback 语义：主配置失败后依次尝试 fallback
+    条目，而不是让整条 ReAct 链路随第一个 Provider 一起失败。
+
+    这是之前 Agent 最大的可用性缺口——``call_llm`` 有完整的候选链，
+    ``call_llm_with_tools`` 却只挑一个 Provider，所以主 Provider 一限流，
+    所有"会调用工具"的子 Agent 立刻全灭，而"只聊天"的路径却还正常。
     """
     state = llm_provider_state()
     candidates = state.get("candidates") or []
     if not candidates:
         raise RuntimeError("未配置可调用的 LLM Provider")
-    provider = next((item for item in candidates if not (_llm_health(item).get("status") == "cooling")), candidates[0])
-    api_key = str(provider.get("api_key") or "")
-    model = str(provider.get("model") or "")
-    base_url = str(provider.get("base_url") or "")
-    if not api_key or not model or not base_url:
-        raise RuntimeError("LLM Provider 配置不完整")
-    effective_max_tokens = model_output_token_limit(model, 3000)
-    payload = {
-        "model": model,
-        "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
-        "max_tokens": effective_max_tokens,
-    }
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
-        response = await client.post(chat_completions_url(base_url), headers=headers, json=payload)
-        response.raise_for_status()
-        body = response.json()
-    return body
+
+    async def call_once(provider: dict[str, Any]) -> dict[str, Any]:
+        started_at = time.monotonic()
+        api_key = str(provider.get("api_key") or "")
+        model = str(provider.get("model") or "")
+        base_url = str(provider.get("base_url") or "")
+        if not api_key or not model or not base_url:
+            raise RuntimeError("LLM Provider 配置不完整")
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_tokens": model_output_token_limit(model, 3000),
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            client = await llm_http_client()
+            response = await client.post(chat_completions_url(base_url), headers=headers, json=payload)
+            response.raise_for_status()
+            body = response.json()
+        except Exception as exc:
+            schedule_llm_usage_event(
+                provider,
+                status="failed",
+                error_kind=_llm_error_kind(exc),
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                purpose="agent_tools",
+            )
+            raise
+        usage = body.get("usage") if isinstance(body, dict) and isinstance(body.get("usage"), dict) else {}
+        schedule_llm_usage_event(
+            provider,
+            status="succeeded",
+            latency_ms=int((time.monotonic() - started_at) * 1000),
+            input_tokens=int(usage.get("prompt_tokens") or 0),
+            output_tokens=int(usage.get("completion_tokens") or 0),
+            purpose="agent_tools",
+        )
+        return body
+
+    errors: list[str] = []
+    first_error: Exception | None = None
+    for provider in candidates:
+        if _llm_health(provider).get("status") == "cooling":
+            errors.append(f"{provider.get('name', '未命名')}:rate_limit_cooling")
+            continue
+        try:
+            body = await call_once(provider)
+            _record_llm_success(provider)
+            return body
+        except Exception as exc:
+            _record_llm_failure(provider, exc)
+            errors.append(f"{provider.get('name', '未命名')}:{_llm_error_kind(exc)}")
+            if first_error is None:
+                first_error = exc
+            log.warning("工具调用 Provider 失败，尝试下一个：%s", errors[-1])
+
+    # 所有候选都在冷却时，仍然拿第一个硬试一次，避免"明明有配置却直接报错"。
+    if first_error is None and candidates:
+        try:
+            body = await call_once(candidates[0])
+            _record_llm_success(candidates[0])
+            return body
+        except Exception as exc:
+            first_error = exc
+            errors.append(f"{candidates[0].get('name', '未命名')}:{_llm_error_kind(exc)}")
+
+    raise RuntimeError(f"所有 LLM Provider 都无法完成工具调用（{'; '.join(errors) or '无可用候选'}）") from first_error
 
 
 async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: str = "") -> dict[str, Any]:
@@ -13448,7 +13724,7 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
                 react_messages.append({"role": "user", "content": f"总调度任务：\n{request.message}\n\n同一会话最近上下文：\n{conversation_block}\n\n明确意图：\n{intent or '未单独填写，请从任务中提炼并标记为推断'}\n\n用户额外上下文：\n{context_text}\n\n项目实时上下文（只读快照，可能滞后）：\n{project_context_text}{react_context_block}\n\n涉及当前状态、额度、行情、网页内容、收件箱等场景，请先调用对应工具获取最新真实数据，拿到结果后再按以下顺序回答：\n1. 一句话结论\n2. 已知事实与证据（带数据时间/来源）\n3. 判断、假设与不确定性\n4. 可直接执行的本地动作\n5. 需要我确认的动作\n6. 下一步（负责人 + 最小动作）"})
                 answer = ""
                 tool_rounds = 0
-                max_tool_rounds = 4
+                max_tool_rounds = AGENT_MAX_TOOL_ROUNDS
                 while tool_rounds < max_tool_rounds:
                     react_body = await call_llm_with_tools(react_messages, child_tools)
                     react_message = ((react_body.get("choices") or [{}])[0]).get("message") or {}
@@ -13459,19 +13735,58 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
                     if not tool_calls:
                         break
                     react_messages.append({"role": "assistant", "content": react_content, "tool_calls": tool_calls})
-                    for tool_call in tool_calls:
+                    # 同一轮里的多个工具调用相互独立，并发执行；单个工具超时或
+                    # 失败都转成结构化结果回喂给模型，让它自己换路子，而不是让
+                    # 整个子 Agent 直接失败。
+                    tool_semaphore = asyncio.Semaphore(AGENT_MAX_PARALLEL_TOOL_CALLS)
+
+                    async def _run_one_tool(tool_call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
                         fn = tool_call.get("function") or {}
                         tool_name = str(fn.get("name") or "")
+                        raw_arguments = fn.get("arguments")
                         try:
-                            tool_arguments = json.loads(fn.get("arguments") or "{}") if isinstance(fn.get("arguments"), str) else (fn.get("arguments") or {})
+                            tool_arguments = json.loads(raw_arguments or "{}") if isinstance(raw_arguments, str) else (raw_arguments or {})
                         except (TypeError, ValueError):
                             tool_arguments = {}
-                        tool_result = await asyncio.to_thread(execute_react_tool, tool_name, tool_arguments)
-                        add_agent_run_event(child_run["id"], "agent_tool_call", f"{agent_display_name(project_id)} 调用工具 {tool_name}。", metadata={"tool": tool_name, "result_ok": bool(tool_result.get("ok"))})
-                        react_messages.append({"role": "tool", "tool_call_id": str(tool_call.get("id") or ""), "content": json.dumps(tool_result, ensure_ascii=False)})
+                        if not isinstance(tool_arguments, dict):
+                            tool_arguments = {}
+                        async with tool_semaphore:
+                            try:
+                                result = await asyncio.wait_for(
+                                    asyncio.to_thread(execute_react_tool, tool_name, tool_arguments),
+                                    timeout=AGENT_TOOL_TIMEOUT_SECONDS,
+                                )
+                            except asyncio.TimeoutError:
+                                log.warning("子 Agent %s 工具 %s 超时（%ss）", project_id, tool_name, AGENT_TOOL_TIMEOUT_SECONDS)
+                                result = {"ok": False, "error": f"{tool_name} 超过 {AGENT_TOOL_TIMEOUT_SECONDS} 秒未返回，已放弃本次调用，请换一个工具或直接基于已有信息作答"}
+                            except Exception as exc:
+                                log.warning("子 Agent %s 工具 %s 异常：%s", project_id, tool_name, exc, exc_info=True)
+                                result = {"ok": False, "error": f"{tool_name} 执行异常：{clip(str(exc), 300)}"}
+                        return str(tool_call.get("id") or ""), tool_name, result
+
+                    tool_outcomes = await asyncio.gather(*(_run_one_tool(item) for item in tool_calls[:12]))
+                    for tool_call_id, tool_name, tool_result in tool_outcomes:
+                        add_agent_run_event(
+                            child_run["id"],
+                            "agent_tool_call",
+                            f"{agent_display_name(project_id)} 调用工具 {tool_name}。",
+                            level="info" if tool_result.get("ok") else "warning",
+                            metadata={"tool": tool_name, "result_ok": bool(tool_result.get("ok")), "error": clip(str(tool_result.get("error") or ""), 200)},
+                        )
+                        react_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps(tool_result, ensure_ascii=False)})
                     tool_rounds += 1
                 if not answer:
-                    answer = "已完成工具探查，基于真实数据汇总中。"
+                    # 工具轮次用尽却还没写出结论：再要一次不带工具的收敛回答，
+                    # 而不是把"汇总中"这种半成品当作子 Agent 的最终结果返回。
+                    add_agent_run_event(child_run["id"], "react_forced_summary", f"{agent_display_name(project_id)} 用满 {max_tool_rounds} 轮工具仍未给出结论，改为强制收敛作答。", level="warning")
+                    try:
+                        answer = await call_llm(
+                            [*react_messages, {"role": "user", "content": "工具调用已达上限，现在不要再调用工具。请只基于以上已获得的工具结果直接给出结论；证据不足的部分明确标注为“未验证”。"}],
+                            purpose="agent_forced_summary",
+                        )
+                    except Exception as exc:
+                        log.warning("子 Agent %s 强制收敛作答失败：%s", project_id, exc)
+                        answer = f"（已完成 {max_tool_rounds} 轮工具探查，但未能形成结论：{clip(str(exc), 200)}）"
                 actions = materialize_agent_actions(project_id, request.message, answer, parent_run_id=child_run["id"])
                 child_trace = agent_context_result_metadata({"project_context": project_context, "request_context": request.context or {}})
                 child_plan = build_agent_execution_plan(project_id, request.message, intent=intent, requested_tools=child_tool_ids, route=route, status="completed")
@@ -13508,13 +13823,36 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
         react_evidence = await react_gather_evidence(request.message, parent_run_id=run["id"])
         if react_evidence and "无工具数据可探查" not in react_evidence:
             add_agent_run_event(run["id"], "react_evidence", f"ReAct 收集到工具证据（{len(react_evidence)} 字符）。", level="success")
-        # 子 Agent 并发限制为 2：多个子 Agent 同时跑 ReAct 工具循环会放大 LLM
-        # 调用次数，容易触发 Provider 429 限流。串行化一部分后整体更稳。
-        child_semaphore = asyncio.Semaphore(2)
+        # 子 Agent 并发上限：多个子 Agent 同时跑 ReAct 工具循环会放大 LLM 调用
+        # 次数，容易触发 Provider 429。默认 3，可用
+        # WORKBENCH_AGENT_CHILD_CONCURRENCY 调整；限流时 call_llm_with_tools 现在
+        # 会自动切到 fallback Provider，所以比原来的写死 2 更安全。
+        child_semaphore = asyncio.Semaphore(AGENT_CHILD_CONCURRENCY)
 
         async def _call_child_limited(project_id: str) -> dict[str, Any]:
             async with child_semaphore:
-                return await call_child(project_id)
+                try:
+                    # 单个子 Agent 卡住不该让整条调度无限等待：超时按失败隔离，
+                    # 其他子 Agent 的结果照常返回（partial）。
+                    return await asyncio.wait_for(call_child(project_id), timeout=AGENT_CHILD_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    log.warning("子 Agent %s 超过 %ss 未返回，按失败隔离", project_id, AGENT_CHILD_TIMEOUT_SECONDS)
+                    add_agent_run_event(
+                        run["id"],
+                        "child_timeout",
+                        f"{agent_display_name(project_id)} 超过 {AGENT_CHILD_TIMEOUT_SECONDS} 秒未返回，已按失败隔离。",
+                        level="error",
+                        metadata={"project_id": project_id, "timeout_seconds": AGENT_CHILD_TIMEOUT_SECONDS},
+                    )
+                    return {
+                        "project_id": project_id,
+                        "name": agent_display_name(project_id),
+                        "answer": f"（超时：{AGENT_CHILD_TIMEOUT_SECONDS} 秒内未返回）",
+                        "actions": [],
+                        "result_contract": agent_result_contract(project_id, f"子 Agent 超时（{AGENT_CHILD_TIMEOUT_SECONDS}s）"),
+                        "child_run_id": "",
+                        "failed": True,
+                    }
 
         child_results = await asyncio.gather(*(_call_child_limited(project_id) for project_id in targets))
         combined_memory_refs: list[dict[str, Any]] = []
@@ -14695,7 +15033,7 @@ async def get_ai_learning_dashboard() -> dict[str, Any]:
 
 
 @app.put("/api/ai-learning/profile")
-async def update_ai_learning_profile(request: AILearningProfileRequest) -> dict[str, Any]:
+def update_ai_learning_profile(request: AILearningProfileRequest) -> dict[str, Any]:
     profile = save_ai_learning_profile(request)
     return {"ok": True, "profile": profile, "automation": sync_ai_learning_automation(profile)}
 
@@ -14707,17 +15045,17 @@ async def post_ai_learning_lesson(request: AILearningGenerateRequest) -> dict[st
 
 
 @app.post("/api/ai-learning/lessons/{lesson_id}/complete")
-async def post_ai_learning_complete(lesson_id: int, request: AILearningCompleteRequest) -> dict[str, Any]:
+def post_ai_learning_complete(lesson_id: int, request: AILearningCompleteRequest) -> dict[str, Any]:
     return {"ok": True, **complete_ai_learning_lesson(lesson_id, request)}
 
 
 @app.patch("/api/ai-learning/lessons/{lesson_id}/progress")
-async def patch_ai_learning_progress(lesson_id: int, request: AILearningProgressRequest) -> dict[str, Any]:
+def patch_ai_learning_progress(lesson_id: int, request: AILearningProgressRequest) -> dict[str, Any]:
     return {"ok": True, **save_ai_learning_progress(lesson_id, request)}
 
 
 @app.post("/api/ai-learning/lessons/{lesson_id}/note")
-async def post_ai_learning_note(lesson_id: int) -> dict[str, Any]:
+def post_ai_learning_note(lesson_id: int) -> dict[str, Any]:
     return save_ai_learning_note(lesson_id)
 
 
@@ -14764,7 +15102,7 @@ async def cid_dashboard_source() -> FileResponse:
 
 
 @app.get("/api/projects")
-async def projects() -> dict[str, Any]:
+def projects() -> dict[str, Any]:
     return {
         "projects": public_projects(),
         # Keep the first paint on one project payload instead of issuing two
@@ -14777,7 +15115,7 @@ async def projects() -> dict[str, Any]:
 
 
 @app.post("/api/projects")
-async def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
+def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
     """新增一个项目入口（写入 projects.json，前端主页立即可见）。"""
     existing = load_projects()
     if any(str(item.get("id")) == request.id for item in existing):
@@ -14869,14 +15207,14 @@ def update_project_preferences(request: ProjectPreferencesRequest) -> dict[str, 
 
 
 @app.get("/api/inbox")
-async def get_inbox(status: str = "all") -> dict[str, Any]:
+def get_inbox(status: str = "all") -> dict[str, Any]:
     if status not in {"all", "inbox", "done", "archived"}:
         raise HTTPException(400, "不支持的收件箱视图")
     return {"items": list_inbox(status), "summary": inbox_summary()}
 
 
 @app.post("/api/inbox")
-async def create_inbox_item(request: InboxRequest) -> dict[str, Any]:
+def create_inbox_item(request: InboxRequest) -> dict[str, Any]:
     return {"item": create_inbox_record(content=request.content, kind=request.kind, tags=request.tags, priority=request.priority, source=request.source)}
 
 
@@ -14925,7 +15263,7 @@ def batch_update_inbox_items(request: InboxBatchRequest) -> dict[str, Any]:
 
 
 @app.post("/api/inbox/{item_id}/analyze")
-async def analyze_inbox_item(item_id: int) -> dict[str, Any]:
+def analyze_inbox_item(item_id: int) -> dict[str, Any]:
     return {"item": triage_inbox_record(item_id)}
 
 
@@ -15190,7 +15528,7 @@ async def get_knowledge(q: str = "", vector: int = 0) -> dict[str, Any]:
 
 
 @app.get("/api/knowledge/evaluation")
-async def knowledge_evaluation() -> dict[str, Any]:
+def knowledge_evaluation() -> dict[str, Any]:
     """检索命中率评估：用一组内置查询对比关键词与语义检索的覆盖。
 
     只读评估，不修改任何笔记；结果用于判断向量检索是否真的带来了
@@ -15256,24 +15594,24 @@ async def get_obsidian(q: str = "", limit: int = 40, scope: str = "all") -> dict
 
 
 @app.get("/api/obsidian/related")
-async def get_obsidian_related(path: str, limit: int = 8) -> dict[str, Any]:
+def get_obsidian_related(path: str, limit: int = 8) -> dict[str, Any]:
     return {"path": path, "notes": obsidian_related(path, limit=limit)}
 
 
 @app.get("/api/obsidian/moc-suggestions")
-async def get_obsidian_moc_suggestions() -> dict[str, Any]:
+def get_obsidian_moc_suggestions() -> dict[str, Any]:
     return obsidian_moc_suggestions()
 
 
 @app.post("/api/obsidian/inbox/{item_id}/sync")
-async def sync_obsidian_inbox(item_id: int, request: ObsidianInboxSyncRequest) -> dict[str, Any]:
+def sync_obsidian_inbox(item_id: int, request: ObsidianInboxSyncRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(400, "写入 Obsidian Inbox 前需要明确确认")
     return sync_inbox_to_obsidian(item_id, content=request.content, title_override=request.title)
 
 
 @app.post("/api/obsidian/inbox/batch-sync")
-async def batch_sync_obsidian_inbox(request: ObsidianInboxBatchSyncRequest) -> dict[str, Any]:
+def batch_sync_obsidian_inbox(request: ObsidianInboxBatchSyncRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(400, "批量写入 Obsidian Inbox 前需要明确确认")
     item_ids = list(dict.fromkeys(int(item_id) for item_id in request.item_ids))
@@ -15296,12 +15634,12 @@ async def batch_sync_obsidian_inbox(request: ObsidianInboxBatchSyncRequest) -> d
 
 
 @app.post("/api/obsidian/index")
-async def index_obsidian() -> dict[str, Any]:
+def index_obsidian() -> dict[str, Any]:
     return {"status": obsidian_index_vault()}
 
 
 @app.post("/api/knowledge")
-async def create_knowledge_note(request: InboxRequest) -> dict[str, Any]:
+def create_knowledge_note(request: InboxRequest) -> dict[str, Any]:
     source = request.source.strip()
     source_inbox_id = 0
     match = re.fullmatch(r"inbox:(\d+)", source)
@@ -15327,17 +15665,17 @@ async def create_knowledge_note(request: InboxRequest) -> dict[str, Any]:
 
 
 @app.get("/api/knowledge/inbox-candidates")
-async def get_knowledge_inbox_candidates() -> dict[str, Any]:
+def get_knowledge_inbox_candidates() -> dict[str, Any]:
     return {"candidates": knowledge_inbox_candidates(), "policy": "只在用户点击确认后写入 Obsidian Inbox；原收件箱内容保留。"}
 
 
 @app.get("/api/artifacts")
-async def get_artifacts(project_id: str = "") -> dict[str, Any]:
+def get_artifacts(project_id: str = "") -> dict[str, Any]:
     return {"artifacts": list_artifacts(project_id)}
 
 
 @app.post("/api/artifacts")
-async def create_artifact(request: ArtifactRequest) -> dict[str, Any]:
+def create_artifact(request: ArtifactRequest) -> dict[str, Any]:
     if request.project_id not in AGENT_REGISTRY:
         raise HTTPException(400, "来源项目 Agent 不存在")
     payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
@@ -15345,7 +15683,7 @@ async def create_artifact(request: ArtifactRequest) -> dict[str, Any]:
 
 
 @app.get("/api/relations")
-async def get_relations(entity_id: str = "") -> dict[str, Any]:
+def get_relations(entity_id: str = "") -> dict[str, Any]:
     return {"relations": list_relations(entity_id)}
 
 
@@ -15359,19 +15697,19 @@ async def get_project_links(project_id: str = "") -> dict[str, Any]:
 
 
 @app.get("/api/project-audit")
-async def get_project_audit(project_id: str = "") -> dict[str, Any]:
+def get_project_audit(project_id: str = "") -> dict[str, Any]:
     if project_id and project_id not in AGENT_REGISTRY:
         raise HTTPException(404, "项目 Agent 不存在")
     return project_audit(project_id)
 
 
 @app.get("/api/work-items")
-async def get_work_items(status: str = "all", project_id: str = "") -> dict[str, Any]:
+def get_work_items(status: str = "all", project_id: str = "") -> dict[str, Any]:
     return {"items": list_work_items(status=status, project_id=project_id)}
 
 
 @app.post("/api/work-items")
-async def create_work_item(request: WorkItemRequest) -> dict[str, Any]:
+def create_work_item(request: WorkItemRequest) -> dict[str, Any]:
     if request.status not in {"open", "running", "blocked", "done", "archived", "failed"}:
         raise HTTPException(400, "不支持的工作项状态")
     payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
@@ -15379,7 +15717,7 @@ async def create_work_item(request: WorkItemRequest) -> dict[str, Any]:
 
 
 @app.patch("/api/work-items/{item_id}")
-async def update_work_item(item_id: int, request: WorkItemUpdateRequest) -> dict[str, Any]:
+def update_work_item(item_id: int, request: WorkItemUpdateRequest) -> dict[str, Any]:
     values = request.model_dump(exclude_unset=True) if hasattr(request, "model_dump") else request.dict(exclude_unset=True)
     if values.get("status") and values["status"] not in {"open", "running", "blocked", "done", "archived", "failed"}:
         raise HTTPException(400, "不支持的工作项状态")
@@ -15392,12 +15730,12 @@ async def update_work_item(item_id: int, request: WorkItemUpdateRequest) -> dict
 
 
 @app.get("/api/notifications")
-async def get_notifications(unread_only: bool = False, limit: int = 30) -> dict[str, Any]:
+def get_notifications(unread_only: bool = False, limit: int = 30) -> dict[str, Any]:
     return {"notifications": list_notifications(unread_only=unread_only, limit=limit)}
 
 
 @app.get("/api/feishu")
-async def feishu_status() -> dict[str, Any]:
+def feishu_status() -> dict[str, Any]:
     """飞书接入状态（只返回脱敏信息）。"""
     return {
         "configured": feishu_bot.configured(),
@@ -16152,7 +16490,7 @@ async def feishu_event(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/notifications/{notification_id}/read")
-async def read_notification(notification_id: int) -> dict[str, Any]:
+def read_notification(notification_id: int) -> dict[str, Any]:
     notification = mark_notification_read(notification_id)
     if not notification:
         raise HTTPException(404, "通知不存在")
@@ -16160,12 +16498,12 @@ async def read_notification(notification_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/notifications/read-all")
-async def read_all_notifications() -> dict[str, Any]:
+def read_all_notifications() -> dict[str, Any]:
     return {"ok": True, "count": mark_all_notifications_read()}
 
 
 @app.post("/api/handoffs")
-async def create_handoff(request: HandoffRequest) -> dict[str, Any]:
+def create_handoff(request: HandoffRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "项目交接需要确认后才能创建工作项")
     if request.from_project not in AGENT_REGISTRY:
@@ -16212,7 +16550,7 @@ async def get_document_factory_templates() -> dict[str, Any]:
 
 
 @app.get("/api/doc-factory/sources")
-async def get_document_factory_sources() -> dict[str, Any]:
+def get_document_factory_sources() -> dict[str, Any]:
     return {
         "sources": document_factory_source_descriptors(limit=120),
         "policy": "只读取已登记且位于工作台 outputs、knowledge-base、Obsidian Vault 或热点/行情/服务器安全快照内的文件；账户和配置快照不进入文档材料，原始文件保持只读。支持可选 MarkItDown 增强 PDF、DOCX、XLSX、PPTX、HTML 提取，未安装时回退到内置解析器。",
@@ -16252,7 +16590,7 @@ def document_factory_history(artifact_id: int = 0, title: str = "") -> list[dict
 
 
 @app.get("/api/doc-factory/history")
-async def get_document_factory_history(artifact_id: int = 0, title: str = "") -> dict[str, Any]:
+def get_document_factory_history(artifact_id: int = 0, title: str = "") -> dict[str, Any]:
     if artifact_id and not get_artifact_record(artifact_id):
         raise HTTPException(404, "文档 Artifact 不存在")
     history = document_factory_history(artifact_id, title)
@@ -16260,7 +16598,7 @@ async def get_document_factory_history(artifact_id: int = 0, title: str = "") ->
 
 
 @app.post("/api/doc-factory/validate")
-async def validate_document_factory(request: DocumentFactoryRequest) -> dict[str, Any]:
+def validate_document_factory(request: DocumentFactoryRequest) -> dict[str, Any]:
     materials = collect_document_factory_materials(request)
     return {"validation": validate_document_factory_payload(request, materials)}
 
@@ -16607,7 +16945,7 @@ def get_output_content(name: str) -> dict[str, Any]:
 
 
 @app.get("/api/sub2api")
-async def get_sub2api_snapshot() -> dict[str, Any]:
+def get_sub2api_snapshot() -> dict[str, Any]:
     snapshot = load_sub2api_snapshot()
     history = list_sub2api_history(limit=30)
     return {"snapshot": snapshot, "analysis": analyze_sub2api_snapshot(snapshot), "history": history, "prediction": sub2api_prediction(history), "cost_breakdown": sub2api_cost_breakdown(snapshot), "sync_state": sub2api_sync_state()}
@@ -16620,7 +16958,7 @@ async def explain_sub2api_change_endpoint() -> dict[str, Any]:
 
 
 @app.post("/api/sub2api/snapshot")
-async def sync_sub2api_snapshot(request: Sub2APISnapshotRequest) -> dict[str, Any]:
+def sync_sub2api_snapshot(request: Sub2APISnapshotRequest) -> dict[str, Any]:
     snapshot, analysis, artifact = record_sub2api_snapshot(request.snapshot, request.source, request.snapshot.get("client_snapshot_id", ""))
     deduplicated = bool(snapshot.pop("_deduplicated", False))
     return {"ok": True, "deduplicated": deduplicated, "snapshot": snapshot, "analysis": analysis, "artifact": artifact, "history": list_sub2api_history(limit=30), "sync_state": sub2api_sync_state()}
@@ -16633,7 +16971,7 @@ class Sub2APIRawSyncRequest(BaseModel):
 
 
 @app.post("/api/sub2api/sync-raw")
-async def sync_sub2api_panel_raw(request: Sub2APIRawSyncRequest, origin: str | None = Header(default=None)) -> dict[str, Any]:
+def sync_sub2api_panel_raw(request: Sub2APIRawSyncRequest, origin: str | None = Header(default=None)) -> dict[str, Any]:
     """Accept raw panel API payloads from the browser bookmarklet.
 
     The bookmarklet runs inside the Sub2API panel page (with the user's session
@@ -16738,7 +17076,7 @@ async def sync_sub2api_panel_auto() -> dict[str, Any]:
 
 
 @app.post("/api/sub2api/alerts/evaluate")
-async def evaluate_sub2api_alerts_route() -> dict[str, Any]:
+def evaluate_sub2api_alerts_route() -> dict[str, Any]:
     return {"ok": True, **evaluate_sub2api_alerts(create_records=True)}
 
 
@@ -16812,7 +17150,7 @@ async def market_symbol_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
 
 
 @app.get("/api/market")
-async def get_market_state() -> dict[str, Any]:
+def get_market_state() -> dict[str, Any]:
     snapshot = load_market_snapshot()
     record_market_snapshot(snapshot)
     history = list_market_history(limit=30)
@@ -17700,12 +18038,12 @@ async def get_market_screen_selftest() -> dict[str, Any]:
     return report
 
 @app.get("/api/market/sampling")
-async def get_market_sampling() -> dict[str, Any]:
+def get_market_sampling() -> dict[str, Any]:
     return {"ok": True, "sampling": market_sampling_state()}
 
 
 @app.put("/api/market/sampling")
-async def update_market_sampling(request: MarketSamplingRequest) -> dict[str, Any]:
+def update_market_sampling(request: MarketSamplingRequest) -> dict[str, Any]:
     interval_seconds = int(request.interval_seconds)
     if interval_seconds not in MARKET_SAMPLING_INTERVALS:
         allowed = "、".join(str(item) for item in MARKET_SAMPLING_INTERVALS)
@@ -17849,7 +18187,7 @@ async def generate_market_report(request: MarketReportRequest) -> dict[str, Any]
 
 
 @app.put("/api/market/watchlist")
-async def update_market_watchlist(request: MarketWatchlistRequest) -> dict[str, Any]:
+def update_market_watchlist(request: MarketWatchlistRequest) -> dict[str, Any]:
     symbols = []
     for raw in request.symbols:
         normalized = normalize_market_symbol(raw)
@@ -17942,7 +18280,7 @@ async def refresh_market_quotes() -> dict[str, Any]:
 
 
 @app.post("/api/market/observations/evaluate")
-async def evaluate_market_observations_route() -> dict[str, Any]:
+def evaluate_market_observations_route() -> dict[str, Any]:
     result = evaluate_market_observations(create_records=True)
     observation_tasks = [
         item for item in list_work_items("all", "market")
@@ -18020,13 +18358,13 @@ async def generate_aihot_digest() -> dict[str, Any]:
 
 
 @app.get("/api/cid-dashboard/snapshot")
-async def get_cid_dashboard_snapshot(repo: str = "", limit: int = 12) -> dict[str, Any]:
+def get_cid_dashboard_snapshot(repo: str = "", limit: int = 12) -> dict[str, Any]:
     history = list_cid_dashboard_snapshots(repo.strip(), limit=limit)
     return {"snapshot": history[0] if history else None, "history": history, "agent": agent_detail("cid-dashboard", llm_ready=bool(llm_settings()["configured"]))}
 
 
 @app.post("/api/cid-dashboard/snapshot")
-async def save_cid_dashboard_snapshot_route(request: CIDSnapshotRequest) -> dict[str, Any]:
+def save_cid_dashboard_snapshot_route(request: CIDSnapshotRequest) -> dict[str, Any]:
     try:
         snapshot = save_cid_dashboard_snapshot(request.model_dump() if hasattr(request, "model_dump") else request.dict())
     except ValueError as exc:
@@ -18035,7 +18373,7 @@ async def save_cid_dashboard_snapshot_route(request: CIDSnapshotRequest) -> dict
 
 
 @app.get("/api/cid-dashboard/opportunities")
-async def get_cid_dashboard_opportunities(repo: str = "", project_key: str = "") -> dict[str, Any]:
+def get_cid_dashboard_opportunities(repo: str = "", project_key: str = "") -> dict[str, Any]:
     key_prefix = f"cid:{repo.strip()}:" if repo.strip() else "cid:"
     items = []
     for work_item in list_work_items("all", "cid-dashboard"):
@@ -18070,7 +18408,7 @@ class CIDPreferenceLearnRequest(BaseModel):
 
 
 @app.post("/api/cid-dashboard/preferences/learn")
-async def learn_cid_preference(payload: CIDPreferenceLearnRequest) -> dict[str, Any]:
+def learn_cid_preference(payload: CIDPreferenceLearnRequest) -> dict[str, Any]:
     """从机会点赞/点踩行为自动学习偏好：把机会赛道标签并入 preferred/avoid 列表。"""
     request = payload
     tags: list[str] = []
@@ -18118,7 +18456,7 @@ async def learn_cid_preference(payload: CIDPreferenceLearnRequest) -> dict[str, 
 
 
 @app.post("/api/cid-dashboard/opportunities")
-async def create_cid_dashboard_opportunity(request: CIDOpportunityRequest) -> dict[str, Any]:
+def create_cid_dashboard_opportunity(request: CIDOpportunityRequest) -> dict[str, Any]:
     repo = request.repo.strip()
     project_key = request.project_key.strip()
     project = request.project if isinstance(request.project, dict) else {}
@@ -18210,7 +18548,7 @@ async def create_cid_dashboard_opportunity(request: CIDOpportunityRequest) -> di
 
 
 @app.post("/api/aihot/feedback")
-async def save_aihot_feedback_route(request: AIHotFeedbackRequest) -> dict[str, Any]:
+def save_aihot_feedback_route(request: AIHotFeedbackRequest) -> dict[str, Any]:
     if request.vote not in {"useful", "not_useful"}:
         raise HTTPException(400, "热点反馈只能是 useful 或 not_useful")
     snapshot = load_aihot_snapshot()
@@ -18222,7 +18560,7 @@ async def save_aihot_feedback_route(request: AIHotFeedbackRequest) -> dict[str, 
 
 
 @app.post("/api/aihot/opportunities")
-async def create_aihot_opportunity_route(request: AIHotOpportunityRequest) -> dict[str, Any]:
+def create_aihot_opportunity_route(request: AIHotOpportunityRequest) -> dict[str, Any]:
     snapshot = load_aihot_snapshot()
     item = next((candidate for candidate in snapshot.get("items", []) if str(candidate.get("id")) == request.item_id), None)
     if not item:
@@ -18309,7 +18647,7 @@ async def create_aihot_opportunity_route(request: AIHotOpportunityRequest) -> di
 
 
 @app.get("/api/aihot/opportunity-review")
-async def aihot_opportunity_review() -> dict[str, Any]:
+def aihot_opportunity_review() -> dict[str, Any]:
     """AI 热点机会复盘：聚合所有商机线索 work_item 的状态与去向。"""
     items = list_work_items("all", "aihot")
     opportunities = [
@@ -18373,17 +18711,17 @@ async def chat_aihot(request: AIHotChatRequest) -> dict[str, Any]:
 
 
 @app.get("/api/idea-analysis/sessions")
-async def get_idea_analysis_sessions() -> dict[str, Any]:
+def get_idea_analysis_sessions() -> dict[str, Any]:
     return {"sessions": list_idea_sessions(limit=50)}
 
 
 @app.get("/api/idea-analysis/followups")
-async def get_idea_followups(days: int = 3) -> dict[str, Any]:
+def get_idea_followups(days: int = 3) -> dict[str, Any]:
     return idea_followups_payload(days)
 
 
 @app.post("/api/idea-analysis/reminders/run")
-async def run_idea_followup_reminders(days: int = 3) -> dict[str, Any]:
+def run_idea_followup_reminders(days: int = 3) -> dict[str, Any]:
     payload = idea_followups_payload(days)
     actionable = [task for task in payload["tasks"] if task.get("bucket") in {"overdue", "due_soon"}]
     notifications = []
@@ -18403,7 +18741,7 @@ async def run_idea_followup_reminders(days: int = 3) -> dict[str, Any]:
 
 
 @app.get("/api/idea-analysis/opportunities")
-async def get_idea_analysis_opportunities() -> dict[str, Any]:
+def get_idea_analysis_opportunities() -> dict[str, Any]:
     items = idea_opportunity_work_items(limit=50)
     return {"items": items, "count": len(items), "agent": agent_detail("idea-analysis", llm_ready=bool(llm_settings()["configured"]))}
 
@@ -18511,7 +18849,7 @@ async def run_idea_analysis_opportunity(item_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/idea-analysis/sessions/{session_id}")
-async def get_idea_analysis_session(session_id: str) -> dict[str, Any]:
+def get_idea_analysis_session(session_id: str) -> dict[str, Any]:
     session = get_idea_session(session_id)
     if not session:
         raise HTTPException(404, "想法会话不存在")
@@ -18519,7 +18857,7 @@ async def get_idea_analysis_session(session_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/idea-analysis/sessions/{session_id}/plan")
-async def get_idea_analysis_plan(session_id: str) -> dict[str, Any]:
+def get_idea_analysis_plan(session_id: str) -> dict[str, Any]:
     session = get_idea_session(session_id)
     if not session:
         raise HTTPException(404, "想法会话不存在")
@@ -18573,7 +18911,7 @@ async def get_server_thresholds() -> dict[str, Any]:
 
 
 @app.put("/api/server/thresholds")
-async def update_server_thresholds(request: ServerThresholdsRequest) -> dict[str, Any]:
+def update_server_thresholds(request: ServerThresholdsRequest) -> dict[str, Any]:
     thresholds = save_server_monitor_thresholds(request.thresholds)
     snapshot = load_server_monitor_snapshot()
     history = list_server_monitor_history(limit=30)
@@ -18627,7 +18965,7 @@ async def get_meta() -> dict[str, Any]:
 
 
 @app.get("/api/memories")
-async def get_memories(status: str = "active", project_id: str = "", limit: int = 200) -> dict[str, Any]:
+def get_memories(status: str = "active", project_id: str = "", limit: int = 200) -> dict[str, Any]:
     if status not in {*MEMORY_STATUSES, "all", "active"}:
         raise HTTPException(400, "不支持的记忆状态")
     ensure_legacy_cid_memories()
@@ -18639,7 +18977,7 @@ async def get_memories(status: str = "active", project_id: str = "", limit: int 
 
 
 @app.post("/api/memories")
-async def create_memory(request: MemoryCreateRequest) -> dict[str, Any]:
+def create_memory(request: MemoryCreateRequest) -> dict[str, Any]:
     try:
         item = create_memory_item(
             content=request.content,
@@ -18659,7 +18997,7 @@ async def create_memory(request: MemoryCreateRequest) -> dict[str, Any]:
 
 
 @app.patch("/api/memories/{memory_id}")
-async def update_memory(memory_id: str, request: MemoryUpdateRequest) -> dict[str, Any]:
+def update_memory(memory_id: str, request: MemoryUpdateRequest) -> dict[str, Any]:
     updates = request.model_dump(exclude_none=True) if hasattr(request, "model_dump") else request.dict(exclude_none=True)
     try:
         item = update_memory_item(memory_id, updates)
@@ -18671,7 +19009,7 @@ async def update_memory(memory_id: str, request: MemoryUpdateRequest) -> dict[st
 
 
 @app.post("/api/memories/{memory_id}/confirm")
-async def confirm_memory(memory_id: str) -> dict[str, Any]:
+def confirm_memory(memory_id: str) -> dict[str, Any]:
     item = set_memory_status(memory_id, "confirmed")
     if not item:
         raise HTTPException(404, "记忆不存在")
@@ -18679,7 +19017,7 @@ async def confirm_memory(memory_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/memories/{memory_id}/reject")
-async def reject_memory(memory_id: str) -> dict[str, Any]:
+def reject_memory(memory_id: str) -> dict[str, Any]:
     item = set_memory_status(memory_id, "rejected")
     if not item:
         raise HTTPException(404, "记忆不存在")
@@ -18687,7 +19025,7 @@ async def reject_memory(memory_id: str) -> dict[str, Any]:
 
 
 @app.delete("/api/memories/{memory_id}")
-async def delete_memory(memory_id: str) -> dict[str, Any]:
+def delete_memory(memory_id: str) -> dict[str, Any]:
     if not delete_memory_item(memory_id):
         raise HTTPException(404, "记忆不存在")
     return {"ok": True, "deleted": True, "summary": memory_summary()}
@@ -18702,7 +19040,7 @@ async def preview_workbuddy_memory_import() -> dict[str, Any]:
 
 
 @app.post("/api/memories-import/workbuddy")
-async def import_workbuddy_memory(request: MemoryImportRequest) -> dict[str, Any]:
+def import_workbuddy_memory(request: MemoryImportRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "请先确认预览内容，再导入已有偏好")
     imported = import_workbuddy_memories()
@@ -18715,7 +19053,7 @@ def require_project_agent(project_id: str) -> None:
 
 
 @app.get("/api/agent/{project_id}/sessions")
-async def get_project_agent_sessions(project_id: str, limit: int = 20) -> dict[str, Any]:
+def get_project_agent_sessions(project_id: str, limit: int = 20) -> dict[str, Any]:
     if project_id != "workbench":
         require_project_agent(project_id)
     sessions = list_agent_sessions(project_id, 100 if project_id == "workbench" else limit)
@@ -18725,7 +19063,7 @@ async def get_project_agent_sessions(project_id: str, limit: int = 20) -> dict[s
 
 
 @app.get("/api/agent/{project_id}/sessions/{session_id}")
-async def get_project_agent_session(project_id: str, session_id: str) -> dict[str, Any]:
+def get_project_agent_session(project_id: str, session_id: str) -> dict[str, Any]:
     if project_id != "workbench":
         require_project_agent(project_id)
     session = get_agent_session(session_id, project_id)
@@ -18763,7 +19101,7 @@ async def chat_project_agent(project_id: str, request: ProjectAgentChatRequest) 
 
 
 @app.get("/api/agent/{project_id}/work-items")
-async def get_project_agent_work_items(project_id: str, status: str = "open", limit: int = 20) -> dict[str, Any]:
+def get_project_agent_work_items(project_id: str, status: str = "open", limit: int = 20) -> dict[str, Any]:
     require_project_agent(project_id)
     if status not in {"all", "open", "running", "blocked", "done", "failed", "archived"}:
         raise HTTPException(400, "不支持的工作项状态")
@@ -18773,7 +19111,7 @@ async def get_project_agent_work_items(project_id: str, status: str = "open", li
 
 
 @app.post("/api/agent/{project_id}/work-items/{item_id}/takeover")
-async def takeover_project_work_item(project_id: str, item_id: int, request: WorkItemTakeoverRequest) -> dict[str, Any]:
+def takeover_project_work_item(project_id: str, item_id: int, request: WorkItemTakeoverRequest) -> dict[str, Any]:
     """Pause automation and register an explicit operator takeover object chain."""
     require_project_agent(project_id)
     item = get_work_item_record(item_id)
@@ -18995,14 +19333,14 @@ async def dispatch_agent(request: AgentDispatchRequest) -> dict[str, Any]:
 
 
 @app.get("/api/agent/{project_id}/runs")
-async def get_project_agent_runs(project_id: str, session_id: str = "", limit: int = 20) -> dict[str, Any]:
+def get_project_agent_runs(project_id: str, session_id: str = "", limit: int = 20) -> dict[str, Any]:
     if project_id != "workbench":
         require_project_agent(project_id)
     return {"runs": list_agent_runs(project_id, session_id=session_id, limit=limit), "summary": agent_run_summary(project_id)}
 
 
 @app.get("/api/agent/{project_id}/runs/{run_id}")
-async def get_project_agent_run(project_id: str, run_id: str) -> dict[str, Any]:
+def get_project_agent_run(project_id: str, run_id: str) -> dict[str, Any]:
     if project_id != "workbench":
         require_project_agent(project_id)
     run = get_agent_run(run_id)
@@ -19222,7 +19560,7 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
 
 
 @app.get("/api/agent/actions/{action_id}")
-async def get_agent_action(action_id: str) -> dict[str, Any]:
+def get_agent_action(action_id: str) -> dict[str, Any]:
     action = get_agent_action_record(action_id)
     if not action:
         raise HTTPException(404, "Agent 动作不存在")
@@ -19230,13 +19568,13 @@ async def get_agent_action(action_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/agent/actions/{action_id}/confirm")
-async def confirm_agent_action(action_id: str) -> dict[str, Any]:
+def confirm_agent_action(action_id: str) -> dict[str, Any]:
     action = execute_agent_action(action_id, force=True)
     return {"ok": action.get("status") == "executed", "action": action}
 
 
 @app.post("/api/agent/actions/{action_id}/retry")
-async def retry_agent_action(action_id: str) -> dict[str, Any]:
+def retry_agent_action(action_id: str) -> dict[str, Any]:
     action = execute_agent_action(action_id)
     return {"ok": action.get("status") == "executed", "action": action, "run": get_agent_run(action.get("run_id", "")) if action.get("run_id") else None}
 
@@ -19273,7 +19611,7 @@ async def cid_dashboard_agent_proxy(request: AgentProxyRequest) -> Any:
 
 
 @app.get("/api/agents")
-async def list_agents() -> dict[str, Any]:
+def list_agents() -> dict[str, Any]:
     configured = bool(llm_settings()["configured"])
     project_ids = [item.get("id") for item in load_projects() if item.get("id")]
     child_ids = [project_id for project_id in project_ids if project_id in AGENT_REGISTRY["workbench"].get("children", [])]
@@ -19289,7 +19627,7 @@ async def list_agents() -> dict[str, Any]:
 
 
 @app.get("/api/agents/metrics")
-async def get_agent_metrics(hours: int = 24) -> dict[str, Any]:
+def get_agent_metrics(hours: int = 24) -> dict[str, Any]:
     project_ids = list(dict.fromkeys(["workbench", *[str(item.get("id")) for item in load_projects() if item.get("id")]]))
     return {
         "llm": llm_usage_metrics_payload(hours),
@@ -19300,7 +19638,7 @@ async def get_agent_metrics(hours: int = 24) -> dict[str, Any]:
 
 
 @app.get("/api/workers")
-async def get_workers() -> dict[str, Any]:
+def get_workers() -> dict[str, Any]:
     return {"instance_id": worker_instance_id(), "workers": worker_status_payload(), "lease_seconds": WORKER_LEASE_SECONDS, "policy": "同一 Worker 通过 SQLite 短租约避免多实例重复执行；过期租约可被新实例接管。"}
 
 
@@ -19398,7 +19736,7 @@ def get_recent_trace(limit: int = 24) -> dict[str, Any]:
 
 
 @app.post("/api/workers/{worker_id}/heartbeat")
-async def heartbeat_worker(worker_id: str, request: WorkerHeartbeatRequest) -> dict[str, Any]:
+def heartbeat_worker(worker_id: str, request: WorkerHeartbeatRequest) -> dict[str, Any]:
     try:
         worker = worker_lease(worker_id, status=request.status.strip() or "ready", metadata=request.metadata)
     except ValueError as exc:
@@ -19409,7 +19747,7 @@ async def heartbeat_worker(worker_id: str, request: WorkerHeartbeatRequest) -> d
 
 
 @app.get("/api/health")
-async def health() -> dict[str, Any]:
+def health() -> dict[str, Any]:
     try:
         import crawl4ai  # noqa: F401
 
@@ -19420,7 +19758,7 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/api/settings/llm")
-async def get_llm_settings() -> dict[str, Any]:
+def get_llm_settings() -> dict[str, Any]:
     state = llm_provider_state()
     return {
         "llm": llm_settings(),
@@ -19430,7 +19768,7 @@ async def get_llm_settings() -> dict[str, Any]:
 
 
 @app.post("/api/settings/llm")
-async def save_llm_settings(request: LLMSettingsRequest) -> dict[str, Any]:
+def save_llm_settings(request: LLMSettingsRequest) -> dict[str, Any]:
     providers = request.providers
 
     saved = load_saved_llm_settings()
@@ -19620,12 +19958,12 @@ def enqueue_crawl_request(request: CrawlRequest, *, research_plan_id: str = "", 
 
 
 @app.post("/api/runs")
-async def create_run(request: CrawlRequest) -> dict[str, Any]:
+def create_run(request: CrawlRequest) -> dict[str, Any]:
     return enqueue_crawl_request(request)
 
 
 @app.get("/api/runs/{run_id}")
-async def get_run(run_id: str) -> dict[str, Any]:
+def get_run(run_id: str) -> dict[str, Any]:
     run = load_crawl_runtime(run_id)
     if not run:
         raise HTTPException(404, "任务不存在")
@@ -19951,7 +20289,7 @@ def _agent_pick_next_urls(goal: str, visited: set[str], documents: list[dict[str
 
 
 @app.post("/api/web-research/agent")
-async def run_web_research_agent(request: ResearchAgentRequest, background: BackgroundTasks) -> dict[str, Any]:
+def run_web_research_agent(request: ResearchAgentRequest, background: BackgroundTasks) -> dict[str, Any]:
     """Goal-driven research: crawl the seed page, follow the most relevant
     links it exposes, then answer from what was actually read.
 
@@ -21090,18 +21428,18 @@ class EvidenceRunRequest(BaseModel):
 
 
 @app.get("/api/agent/capability-graph")
-async def get_capability_graph() -> dict[str, Any]:
+def get_capability_graph() -> dict[str, Any]:
     return capability_graph_payload()
 
 
 @app.post("/api/projects/preferences/reset")
-async def reset_project_preferences() -> dict[str, Any]:
+def reset_project_preferences() -> dict[str, Any]:
     save_project_preferences({"order": [], "favorite_ids": [], "groups": {}, "hidden_ids": [], "updated_at": now_iso()})
     return {"ok": True, "projects": public_projects(), "preferences": load_project_preferences()}
 
 
 @app.get("/api/automations")
-async def get_automations() -> dict[str, Any]:
+def get_automations() -> dict[str, Any]:
     recovery = recover_stale_automation_runs()
     rules = automation_rules()
     runs = list_automation_runs(limit=80)
@@ -21133,18 +21471,18 @@ async def get_automations() -> dict[str, Any]:
 
 
 @app.get("/api/automations/runs")
-async def get_automation_runs(rule_id: int = 0, limit: int = 60) -> dict[str, Any]:
+def get_automation_runs(rule_id: int = 0, limit: int = 60) -> dict[str, Any]:
     recovery = recover_stale_automation_runs()
     return {"runs": list_automation_runs(rule_id, limit), "recovery": recovery}
 
 
 @app.post("/api/automations")
-async def create_automation(request: AutomationRuleRequest) -> dict[str, Any]:
+def create_automation(request: AutomationRuleRequest) -> dict[str, Any]:
     return {"rule": save_automation_rule(name=request.name.strip(), kind=request.kind.strip(), project_id=request.project_id.strip() or "workbench", schedule=request.schedule.strip(), enabled=request.enabled, config=request.config)}
 
 
 @app.patch("/api/automations/{rule_id}")
-async def update_automation(rule_id: int, request: AutomationRuleRequest) -> dict[str, Any]:
+def update_automation(rule_id: int, request: AutomationRuleRequest) -> dict[str, Any]:
     return {"rule": save_automation_rule(name=request.name.strip(), kind=request.kind.strip(), project_id=request.project_id.strip() or "workbench", schedule=request.schedule.strip(), enabled=request.enabled, config=request.config, rule_id=rule_id)}
 
 
@@ -21177,7 +21515,7 @@ def list_plans(limit: int = 30) -> dict[str, Any]:
 
 
 @app.post("/api/plans")
-async def create_plan(request: ExecutionPlanRequest) -> dict[str, Any]:
+def create_plan(request: ExecutionPlanRequest) -> dict[str, Any]:
     if not request.steps:
         raise HTTPException(400, "计划至少需要一个步骤")
     keys = [str(step.get("key") or f"step-{index}") for index, step in enumerate(request.steps, start=1)]
@@ -21190,7 +21528,7 @@ async def create_plan(request: ExecutionPlanRequest) -> dict[str, Any]:
 
 
 @app.get("/api/plans/{plan_id}")
-async def get_plan(plan_id: str) -> dict[str, Any]:
+def get_plan(plan_id: str) -> dict[str, Any]:
     plan = get_execution_plan(plan_id)
     if not plan:
         raise HTTPException(404, "执行计划不存在")
@@ -21212,7 +21550,7 @@ async def start_plan(plan_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/plans/{plan_id}/takeover")
-async def takeover_plan(plan_id: str) -> dict[str, Any]:
+def takeover_plan(plan_id: str) -> dict[str, Any]:
     plan = get_execution_plan(plan_id)
     if not plan:
         raise HTTPException(404, "执行计划不存在")
@@ -21221,7 +21559,7 @@ async def takeover_plan(plan_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/git/repositories")
-async def get_git_repositories() -> dict[str, Any]:
+def get_git_repositories() -> dict[str, Any]:
     repositories = git_inventory()
     remote = load_remote_git_inventory()
     if remote:
@@ -21231,7 +21569,7 @@ async def get_git_repositories() -> dict[str, Any]:
 
 
 @app.post("/api/git/scan")
-async def scan_git_repositories() -> dict[str, Any]:
+def scan_git_repositories() -> dict[str, Any]:
     result = {"repositories": git_inventory(), "scanned_at": now_iso(), "scanned_roots": [str(root) for root in git_repository_roots()]}
     register_artifact_safely(project_id="workbench", name="git-inventory.json", path=str(DATA_DIR / "git-inventory.json"), kind="git_inventory", metadata={"count": len(result["repositories"]), "scanned_at": result["scanned_at"]})
     save_json_atomic(DATA_DIR / "git-inventory.json", result, 0o600)
@@ -21591,7 +21929,7 @@ async def restore_backup(name: str) -> dict[str, Any]:
 
 
 @app.get("/api/system/architecture")
-async def get_system_architecture() -> dict[str, Any]:
+def get_system_architecture() -> dict[str, Any]:
     workers = worker_status_payload()
     worker_by_id = {worker["id"]: worker for worker in workers}
 
@@ -21869,7 +22207,7 @@ async def _push_to_all_subscriptions(title: str, body: str, href: str = "/", eve
 
 
 @app.get("/api/push/deliveries")
-async def get_push_deliveries(limit: int = 80) -> dict[str, Any]:
+def get_push_deliveries(limit: int = 80) -> dict[str, Any]:
     return {"deliveries": list_push_deliveries(limit), "policy": "仅保存送达状态、失败摘要和订阅状态，不保存 VAPID 私钥。"}
 
 
@@ -22003,12 +22341,12 @@ def decide_approval(approval_id: str, request: ApprovalDecisionRequest) -> dict[
 
 
 @app.get("/api/evidence/matrix")
-async def get_evidence_matrix() -> dict[str, Any]:
+def get_evidence_matrix() -> dict[str, Any]:
     return run_evidence_matrix()
 
 
 @app.post("/api/evidence/run")
-async def execute_evidence_scenario(request: EvidenceRunRequest) -> dict[str, Any]:
+def execute_evidence_scenario(request: EvidenceRunRequest) -> dict[str, Any]:
     edge = next((item for item in PROJECT_LINKS if f"{item.get('from')}->{item.get('to')}" == request.edge_key), None)
     if not edge:
         raise HTTPException(404, "联动边不存在")
@@ -23049,7 +23387,7 @@ class ObsidianConflictParagraphResolutionRequest(BaseModel):
     confirmed: bool = False
 
 
-class InboxMergeRequest(BaseModel):
+class InboxBatchMergeRequest(BaseModel):
     source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=20)
     confirmed: bool = False
 
@@ -23061,7 +23399,7 @@ async def semantic_search_obsidian(q: str = "", limit: int = 20) -> dict[str, An
 
 
 @app.get("/api/obsidian/conflicts")
-async def get_obsidian_conflicts() -> dict[str, Any]:
+def get_obsidian_conflicts() -> dict[str, Any]:
     return obsidian_conflict_report()
 
 
@@ -23071,7 +23409,7 @@ async def get_obsidian_retrieval_evaluation(sample_limit: int = 30, top_k: int =
 
 
 @app.post("/api/obsidian/conflicts/{conflict_key}/resolve")
-async def resolve_obsidian_conflict(conflict_key: str, request: ObsidianConflictResolutionRequest) -> dict[str, Any]:
+def resolve_obsidian_conflict(conflict_key: str, request: ObsidianConflictResolutionRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "记录冲突处理前需要明确确认")
     report = obsidian_conflict_report()
@@ -23092,7 +23430,7 @@ async def resolve_obsidian_conflict(conflict_key: str, request: ObsidianConflict
 
 
 @app.post("/api/obsidian/conflicts/{conflict_key}/paragraphs/{paragraph_key}/resolve")
-async def resolve_obsidian_conflict_paragraph(conflict_key: str, paragraph_key: str, request: ObsidianConflictParagraphResolutionRequest) -> dict[str, Any]:
+def resolve_obsidian_conflict_paragraph(conflict_key: str, paragraph_key: str, request: ObsidianConflictParagraphResolutionRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "记录段落冲突处理前需要明确确认")
     report = obsidian_conflict_report()
@@ -23131,12 +23469,12 @@ async def resolve_obsidian_conflict_paragraph(conflict_key: str, paragraph_key: 
 
 
 @app.get("/api/obsidian/moc/preview")
-async def preview_obsidian_moc() -> dict[str, Any]:
+def preview_obsidian_moc() -> dict[str, Any]:
     return obsidian_moc_preview()
 
 
 @app.post("/api/obsidian/moc/apply")
-async def maintain_obsidian_moc(request: ObsidianMocApplyRequest) -> dict[str, Any]:
+def maintain_obsidian_moc(request: ObsidianMocApplyRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "维护 MOC 前需要明确确认")
     try:
@@ -23148,7 +23486,7 @@ async def maintain_obsidian_moc(request: ObsidianMocApplyRequest) -> dict[str, A
 
 
 @app.post("/api/knowledge/source-draft")
-async def create_knowledge_source_draft(request: KnowledgeSourceDraftRequest) -> dict[str, Any]:
+def create_knowledge_source_draft(request: KnowledgeSourceDraftRequest) -> dict[str, Any]:
     sources = []
     for artifact_id in request.artifact_ids:
         artifact = get_artifact_record(artifact_id)
@@ -23180,7 +23518,7 @@ async def create_knowledge_source_draft(request: KnowledgeSourceDraftRequest) ->
 
 
 @app.post("/api/knowledge/selection-draft")
-async def create_knowledge_selection_draft(request: KnowledgeSelectionDraftRequest) -> dict[str, Any]:
+def create_knowledge_selection_draft(request: KnowledgeSelectionDraftRequest) -> dict[str, Any]:
     artifact = get_artifact_record(request.artifact_id)
     if not artifact:
         raise HTTPException(404, "来源 Artifact 不存在")
@@ -23241,7 +23579,7 @@ async def create_knowledge_selection_draft(request: KnowledgeSelectionDraftReque
 
 
 @app.get("/api/inbox/merge-suggestions")
-async def get_inbox_merge_suggestions(limit: int = 50) -> dict[str, Any]:
+def get_inbox_merge_suggestions(limit: int = 50) -> dict[str, Any]:
     items = list_inbox("inbox")
     suggestions = []
     for index, first in enumerate(items):
@@ -23257,7 +23595,7 @@ async def get_inbox_merge_suggestions(limit: int = 50) -> dict[str, Any]:
 
 
 @app.post("/api/inbox/{item_id}/merge-batch")
-def merge_inbox_items(item_id: int, request: InboxMergeRequest) -> dict[str, Any]:
+def merge_inbox_items(item_id: int, request: InboxBatchMergeRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "合并收件箱条目前需要明确确认")
     source = get_inbox_record(item_id)
@@ -23900,7 +24238,7 @@ def market_backtest(
 
 
 @app.post("/api/market/research")
-async def create_market_research(request: MarketResearchRequest) -> dict[str, Any]:
+def create_market_research(request: MarketResearchRequest) -> dict[str, Any]:
     symbol = normalize_market_symbol(request.symbol) if request.symbol else ""
     snapshot = load_market_snapshot()
     history = list_market_history(limit=30)
@@ -23924,7 +24262,7 @@ async def create_market_research(request: MarketResearchRequest) -> dict[str, An
 
 
 @app.get("/api/market/reports")
-async def get_market_reports(limit: int = 30) -> dict[str, Any]:
+def get_market_reports(limit: int = 30) -> dict[str, Any]:
     return {"artifacts": [item for item in list_artifacts("market") if item.get("kind") in {"market_report", "market_strategy", "market_backtest", "market_walk_forward"}][:max(1, min(limit, 100))]}
 
 
@@ -23947,14 +24285,14 @@ def create_market_report() -> dict[str, Any]:
 
 
 @app.post("/api/market/strategies")
-async def create_market_strategy(request: MarketStrategyRequest) -> dict[str, Any]:
+def create_market_strategy(request: MarketStrategyRequest) -> dict[str, Any]:
     version = 1 + sum(1 for item in list_artifacts("market") if item.get("kind") == "market_strategy" and item.get("metadata", {}).get("name") == request.name.strip())
     artifact = register_artifact_safely(project_id="market", name=f"策略-{safe_filename(request.name)}-v{version}.json", path=str(MARKET_SNAPSHOT_FILE), kind="market_strategy", metadata={"name": request.name.strip(), "version": version, "rules": request.rules, "note": request.note, "automated_trading": False})
     return {"ok": True, "artifact": artifact, "version": version, "policy": "策略只用于研究和回测，不连接券商、不自动下单。"}
 
 
 @app.get("/api/market/strategies")
-async def get_market_strategies(limit: int = 50) -> dict[str, Any]:
+def get_market_strategies(limit: int = 50) -> dict[str, Any]:
     strategies = [item for item in list_artifacts("market") if item.get("kind") == "market_strategy"]
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in strategies[: max(1, min(limit, 100))]:
@@ -23964,7 +24302,7 @@ async def get_market_strategies(limit: int = 50) -> dict[str, Any]:
 
 
 @app.post("/api/market/backtest")
-async def run_market_backtest(request: MarketBacktestRequest) -> dict[str, Any]:
+def run_market_backtest(request: MarketBacktestRequest) -> dict[str, Any]:
     strategy = normalize_market_strategy(request.strategy)
     symbol = normalize_market_symbol(request.symbol)
     if not strategy:
@@ -23979,7 +24317,7 @@ async def run_market_backtest(request: MarketBacktestRequest) -> dict[str, Any]:
 
 
 @app.post("/api/market/backtest/walk-forward")
-async def run_market_walk_forward(request: MarketWalkForwardRequest) -> dict[str, Any]:
+def run_market_walk_forward(request: MarketWalkForwardRequest) -> dict[str, Any]:
     strategy = normalize_market_strategy(request.strategy)
     symbol = normalize_market_symbol(request.symbol)
     if not strategy:
@@ -24013,7 +24351,7 @@ async def run_market_walk_forward(request: MarketWalkForwardRequest) -> dict[str
 
 
 @app.post("/api/market/strategies/compare")
-async def compare_market_strategies(request: MarketStrategyCompareRequest) -> dict[str, Any]:
+def compare_market_strategies(request: MarketStrategyCompareRequest) -> dict[str, Any]:
     strategies = list(dict.fromkeys(request.strategies))
     symbol = normalize_market_symbol(request.symbol)
     if len(strategies) < 2:
@@ -24040,7 +24378,7 @@ async def compare_market_strategies(request: MarketStrategyCompareRequest) -> di
 
 
 @app.post("/api/market/backtest/sensitivity")
-async def market_backtest_sensitivity(request: MarketSensitivityRequest) -> dict[str, Any]:
+def market_backtest_sensitivity(request: MarketSensitivityRequest) -> dict[str, Any]:
     strategy = normalize_market_strategy(request.strategy)
     symbol = normalize_market_symbol(request.symbol)
     if not strategy:
@@ -24153,7 +24491,7 @@ def aihot_insights() -> dict[str, Any]:
 
 
 @app.get("/api/aihot/insights")
-async def get_aihot_insights() -> dict[str, Any]:
+def get_aihot_insights() -> dict[str, Any]:
     return aihot_insights()
 
 
@@ -24263,7 +24601,7 @@ def idea_session_artifacts(session_id: str, kinds: set[str] | None = None) -> li
 
 
 @app.get("/api/idea-analysis/sessions/{session_id}/evidence")
-async def get_idea_evidence(session_id: str) -> dict[str, Any]:
+def get_idea_evidence(session_id: str) -> dict[str, Any]:
     if not get_idea_session(session_id):
         raise HTTPException(404, "想法会话不存在")
     return {"evidence": idea_session_artifacts(session_id, {"idea_evidence", "idea_interview", "idea_metric"}), "decisions": list_idea_decisions(session_id)}
@@ -24336,7 +24674,7 @@ def add_idea_metric(session_id: str, request: IdeaMetricRequest) -> dict[str, An
 
 
 @app.post("/api/idea-analysis/sessions/{session_id}/decision/compare")
-async def compare_idea_decision(session_id: str, request: IdeaDecisionCompareRequest) -> dict[str, Any]:
+def compare_idea_decision(session_id: str, request: IdeaDecisionCompareRequest) -> dict[str, Any]:
     if not get_idea_session(session_id):
         raise HTTPException(404, "想法会话不存在")
     evidence = idea_session_artifacts(session_id, {"idea_evidence", "idea_interview", "idea_metric"})
@@ -24476,7 +24814,7 @@ def cid_review_stats(repo: str = "") -> dict[str, Any]:
 
 
 @app.get("/api/cid-dashboard/evidence")
-async def get_cid_evidence(repo: str = "") -> dict[str, Any]:
+def get_cid_evidence(repo: str = "") -> dict[str, Any]:
     kinds = {"cid_competitor_comparison", "cid_project_opportunity", "cid_snapshot", "cid_opportunity_review"}
     artifacts = [item for item in list_artifacts("cid-dashboard") if item.get("kind") in kinds and (not repo or item.get("metadata", {}).get("repo") == repo)][:100]
     for artifact in artifacts:
@@ -24491,7 +24829,7 @@ async def get_cid_evidence(repo: str = "") -> dict[str, Any]:
 
 
 @app.post("/api/runs/{run_id}/cancel")
-async def cancel_crawl_run(run_id: str) -> dict[str, Any]:
+def cancel_crawl_run(run_id: str) -> dict[str, Any]:
     run = runs.get(run_id)
     durable = get_agent_run(run_id)
     if not run and not durable:
@@ -24509,7 +24847,7 @@ async def cancel_crawl_run(run_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/crawl/queue")
-async def get_crawl_queue() -> dict[str, Any]:
+def get_crawl_queue() -> dict[str, Any]:
     limit = 2
     all_runs = list_agent_runs("crawl4ai", limit=100)
     active_runs = [item for item in all_runs if item.get("kind") == "crawl" and item.get("status") in {"queued", "running"}]
@@ -24603,7 +24941,7 @@ def crawl_observability(days: int = 7) -> dict[str, Any]:
 
 
 @app.get("/api/crawl/observability")
-async def get_crawl_observability(days: int = 7) -> dict[str, Any]:
+def get_crawl_observability(days: int = 7) -> dict[str, Any]:
     return crawl_observability(days)
 
 
@@ -24664,7 +25002,7 @@ def list_research_plans(limit: int = 30) -> dict[str, Any]:
 
 
 @app.get("/api/crawl/plans/{plan_id}")
-async def get_research_plan_endpoint(plan_id: str) -> dict[str, Any]:
+def get_research_plan_endpoint(plan_id: str) -> dict[str, Any]:
     plan = get_research_plan(plan_id)
     if not plan:
         raise HTTPException(404, "研究计划不存在")
@@ -24847,6 +25185,7 @@ async def stop_automation_scheduler() -> None:
     if sync_task:
         sync_task.cancel()
         app.state.sub2api_auto_sync_task = None
+    await close_llm_http_clients()
     external_sync_worker = os.getenv("WORKBENCH_EXTERNAL_SYNC_WORKER", "").strip().lower() in {"1", "true", "yes"}
     external_agent_worker = os.getenv("WORKBENCH_EXTERNAL_AGENT_WORKER", "").strip().lower() in {"1", "true", "yes"}
     owned_workers = []
@@ -25024,7 +25363,7 @@ def evidence_bundle_payload(artifact_ids: list[int], question: str = "") -> dict
 
 
 @app.post("/api/evidence/compare")
-async def compare_evidence_bundle(request: EvidenceCompareRequest) -> dict[str, Any]:
+def compare_evidence_bundle(request: EvidenceCompareRequest) -> dict[str, Any]:
     bundle = evidence_bundle_payload(request.artifact_ids, request.question.strip())
     artifact = register_artifact_safely(
         project_id=request.project_id.strip() or "workbench",
@@ -25040,7 +25379,7 @@ async def compare_evidence_bundle(request: EvidenceCompareRequest) -> dict[str, 
 
 
 @app.post("/api/evidence/handoff")
-async def handoff_evidence_bundle(request: EvidenceHandoffRequest) -> dict[str, Any]:
+def handoff_evidence_bundle(request: EvidenceHandoffRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "跨项目交接证据包前需要明确确认")
     allowed = set(AGENT_REGISTRY) - {"workbench"}
@@ -25065,7 +25404,7 @@ async def handoff_evidence_bundle(request: EvidenceHandoffRequest) -> dict[str, 
 
 
 @app.get("/api/idea-analysis/sessions/{session_id}/evidence-pack")
-async def get_idea_evidence_pack(session_id: str) -> dict[str, Any]:
+def get_idea_evidence_pack(session_id: str) -> dict[str, Any]:
     session = get_idea_session(session_id)
     if not session:
         raise HTTPException(404, "想法会话不存在")
@@ -25136,7 +25475,7 @@ def opportunity_score(signal: dict[str, Any], feedback: dict[str, Any] | None = 
 
 
 @app.post("/api/aihot/opportunities/{item_id}/review")
-async def review_aihot_opportunity(item_id: str, request: OpportunityReviewRequest) -> dict[str, Any]:
+def review_aihot_opportunity(item_id: str, request: OpportunityReviewRequest) -> dict[str, Any]:
     item = aihot_opportunity_for_item(item_id)
     if not item:
         raise HTTPException(404, "这条热点还没有登记为机会")
@@ -25168,7 +25507,7 @@ async def get_cid_preferences() -> dict[str, Any]:
 
 
 @app.put("/api/cid-dashboard/preferences")
-async def save_cid_preferences(request: CIDPreferenceRequest) -> dict[str, Any]:
+def save_cid_preferences(request: CIDPreferenceRequest) -> dict[str, Any]:
     preferences = {str(key)[:80]: str(value)[:500] for key, value in request.preferences.items() if str(key).strip()}
     save_json_atomic(DATA_DIR / "cid_preferences.json", preferences, 0o600)
     sync_cid_preferences_to_memories(preferences)
@@ -25176,7 +25515,7 @@ async def save_cid_preferences(request: CIDPreferenceRequest) -> dict[str, Any]:
 
 
 @app.post("/api/cid-dashboard/opportunities/{item_id}/review")
-async def review_cid_opportunity(item_id: int, request: OpportunityReviewRequest) -> dict[str, Any]:
+def review_cid_opportunity(item_id: int, request: OpportunityReviewRequest) -> dict[str, Any]:
     item = get_work_item_record(item_id)
     if not item or item.get("source_project") != "cid-dashboard":
         raise HTTPException(404, "看板机会不存在")
@@ -25197,7 +25536,7 @@ async def review_cid_opportunity(item_id: int, request: OpportunityReviewRequest
 
 
 @app.post("/api/market/valuation")
-async def create_market_valuation(request: MarketValuationRequest) -> dict[str, Any]:
+def create_market_valuation(request: MarketValuationRequest) -> dict[str, Any]:
     symbol = normalize_market_symbol(request.symbol)
     if not symbol:
         raise HTTPException(400, "无法识别股票代码")
@@ -25261,7 +25600,7 @@ def list_workbench_decisions(limit: int = 30) -> list[dict[str, Any]]:
 
 
 @app.get("/api/workbench/decisions")
-async def get_workbench_decisions(limit: int = 30) -> dict[str, Any]:
+def get_workbench_decisions(limit: int = 30) -> dict[str, Any]:
     return {"decisions": list_workbench_decisions(limit), "policy": "决策只记录用户明确确认的结论；Agent 建议会保留为草稿，不会自动替用户改结论。"}
 
 
@@ -25324,12 +25663,12 @@ def workbench_collaboration_snapshot(limit: int = 8, include_failed: bool = True
 
 
 @app.get("/api/workbench/collaboration")
-async def get_workbench_collaboration(limit: int = 8) -> dict[str, Any]:
+def get_workbench_collaboration(limit: int = 8) -> dict[str, Any]:
     return workbench_collaboration_snapshot(limit)
 
 
 @app.post("/api/workbench/collaboration/prepare")
-async def prepare_workbench_collaboration(request: WorkbenchCollaborationRequest) -> dict[str, Any]:
+def prepare_workbench_collaboration(request: WorkbenchCollaborationRequest) -> dict[str, Any]:
     snapshot = workbench_collaboration_snapshot(request.limit, request.include_failed, request.include_blocked)
     selected = snapshot.get("items", [])[: request.limit]
     if not selected:
@@ -25347,19 +25686,19 @@ async def prepare_workbench_collaboration(request: WorkbenchCollaborationRequest
 
 
 @app.post("/api/obsidian/drafts/{artifact_id}/sync")
-async def sync_knowledge_draft(artifact_id: int, request: KnowledgeDraftApplyRequest) -> dict[str, Any]:
+def sync_knowledge_draft(artifact_id: int, request: KnowledgeDraftApplyRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "写入 Obsidian 前需要明确确认")
     return sync_knowledge_draft_to_obsidian(artifact_id, conflict_action=request.conflict_action)
 
 
 @app.get("/api/knowledge/drafts/{artifact_id}/replay")
-async def replay_knowledge_draft(artifact_id: int) -> dict[str, Any]:
+def replay_knowledge_draft(artifact_id: int) -> dict[str, Any]:
     return knowledge_draft_replay(artifact_id)
 
 
 @app.post("/api/market/research/{item_id}/conclude")
-async def conclude_market_research(item_id: int, request: MarketResearchConclusionRequest) -> dict[str, Any]:
+def conclude_market_research(item_id: int, request: MarketResearchConclusionRequest) -> dict[str, Any]:
     if not request.confirmed:
         raise HTTPException(409, "沉淀行情研究结论前需要明确确认")
     item = get_work_item_record(item_id)
@@ -25527,7 +25866,7 @@ def rollback_server_action_execution(execution_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/server/actions/request")
-async def request_server_action(request: ServerActionRequest) -> dict[str, Any]:
+def request_server_action(request: ServerActionRequest) -> dict[str, Any]:
     action = request.action.strip()
     definition = SERVER_SAFE_ACTIONS.get(action)
     if not definition:
@@ -25542,7 +25881,7 @@ async def request_server_action(request: ServerActionRequest) -> dict[str, Any]:
 
 
 @app.get("/api/server/actions/executions")
-async def get_server_action_executions(limit: int = 80) -> dict[str, Any]:
+def get_server_action_executions(limit: int = 80) -> dict[str, Any]:
     return {"executions": list_server_action_executions(limit), "policy": "只读检查可在批准后执行；日志查看和重启保留服务器侧人工边界。"}
 
 
@@ -25552,7 +25891,7 @@ async def execute_server_action(approval_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/server/actions/executions/{execution_id}/rollback")
-async def rollback_server_action(execution_id: str) -> dict[str, Any]:
+def rollback_server_action(execution_id: str) -> dict[str, Any]:
     return rollback_server_action_execution(execution_id)
 
 
@@ -26893,12 +27232,12 @@ async def get_product_cowart_status() -> dict[str, Any]:
 
 
 @app.get("/api/product-manager/prototypes")
-async def get_product_prototypes(limit: int = 200) -> dict[str, Any]:
+def get_product_prototypes(limit: int = 200) -> dict[str, Any]:
     return {"prototypes": list_product_prototypes(max(1, min(limit, 500))), "cowart": product_cowart_status()}
 
 
 @app.get("/api/product-manager/prototypes/{prototype_id}")
-async def get_product_prototype_detail(prototype_id: int) -> dict[str, Any]:
+def get_product_prototype_detail(prototype_id: int) -> dict[str, Any]:
     prototype = get_product_prototype(prototype_id)
     if not prototype:
         raise HTTPException(404, "产品原型不存在")
@@ -26906,18 +27245,18 @@ async def get_product_prototype_detail(prototype_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/product-manager/requirements/{requirement_id}/prototypes")
-async def post_product_prototype(requirement_id: int, request: ProductPrototypeRequest) -> dict[str, Any]:
+def post_product_prototype(requirement_id: int, request: ProductPrototypeRequest) -> dict[str, Any]:
     prototype = create_product_prototype(requirement_id, request)
     return {"prototype": prototype, "cowart": product_cowart_status()}
 
 
 @app.post("/api/product-manager/prototypes/{prototype_id}/publish")
-async def post_product_prototype_version(prototype_id: int, request: ProductPrototypePublishRequest) -> dict[str, Any]:
+def post_product_prototype_version(prototype_id: int, request: ProductPrototypePublishRequest) -> dict[str, Any]:
     return publish_product_prototype(prototype_id, request)
 
 
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/", response_class=HTMLResponse)
-async def product_cowart_canvas_page(prototype_id: int) -> HTMLResponse:
+def product_cowart_canvas_page(prototype_id: int) -> HTMLResponse:
     prototype = _require_product_prototype(prototype_id)
     if not product_cowart_status()["available"]:
         raise HTTPException(503, "Workbench 的 Cowart 前端资源尚未安装")
@@ -26946,7 +27285,7 @@ async def _cowart_json_body(request: Request, *, max_bytes: int = 50 * 1024 * 10
 
 
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/canvas")
-async def get_product_cowart_canvas(prototype_id: int) -> dict[str, Any]:
+def get_product_cowart_canvas(prototype_id: int) -> dict[str, Any]:
     return _cowart_canvas_response(prototype_id)
 
 
@@ -26956,7 +27295,7 @@ async def put_product_cowart_canvas(prototype_id: int, request: Request) -> dict
 
 
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/selection")
-async def get_product_cowart_selection(prototype_id: int) -> dict[str, Any]:
+def get_product_cowart_selection(prototype_id: int) -> dict[str, Any]:
     _require_product_prototype(prototype_id)
     selection = _load_product_json(
         _product_selection_file(prototype_id),
@@ -26976,7 +27315,7 @@ async def put_product_cowart_selection(prototype_id: int, request: Request) -> d
 
 
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/view-state")
-async def get_product_cowart_view_state(prototype_id: int) -> dict[str, Any]:
+def get_product_cowart_view_state(prototype_id: int) -> dict[str, Any]:
     _require_product_prototype(prototype_id)
     view_state = _load_product_json(
         _product_view_state_file(prototype_id),
@@ -27028,27 +27367,27 @@ def _cowart_asset_response(prototype_id: int, kind: str, asset_path: str) -> Fil
 
 
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/page-assets/{asset_path:path}")
-async def get_product_cowart_page_asset(prototype_id: int, asset_path: str) -> FileResponse:
+def get_product_cowart_page_asset(prototype_id: int, asset_path: str) -> FileResponse:
     return _cowart_asset_response(prototype_id, "page", asset_path)
 
 
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/assets/{asset_path:path}")
-async def get_product_cowart_global_asset(prototype_id: int, asset_path: str) -> FileResponse:
+def get_product_cowart_global_asset(prototype_id: int, asset_path: str) -> FileResponse:
     return _cowart_asset_response(prototype_id, "global", asset_path)
 
 
 @app.get("/api/product-manager/overview")
-async def get_product_manager_overview(limit: int = 200) -> dict[str, Any]:
+def get_product_manager_overview(limit: int = 200) -> dict[str, Any]:
     return product_manager_overview(limit=max(1, min(limit, 500)))
 
 
 @app.post("/api/product-manager/feedback")
-async def post_product_feedback(request: ProductFeedbackRequest) -> dict[str, Any]:
+def post_product_feedback(request: ProductFeedbackRequest) -> dict[str, Any]:
     return {"feedback": create_product_feedback(request), "summary": product_manager_overview()["summary"]}
 
 
 @app.patch("/api/product-manager/feedback/{feedback_id}")
-async def patch_product_feedback(feedback_id: int, request: ProductFeedbackUpdateRequest) -> dict[str, Any]:
+def patch_product_feedback(feedback_id: int, request: ProductFeedbackUpdateRequest) -> dict[str, Any]:
     feedback = update_product_feedback(feedback_id, request)
     if not feedback:
         raise HTTPException(404, "产品反馈不存在")
@@ -27056,12 +27395,12 @@ async def patch_product_feedback(feedback_id: int, request: ProductFeedbackUpdat
 
 
 @app.post("/api/product-manager/requirements")
-async def post_product_requirement(request: ProductRequirementRequest) -> dict[str, Any]:
+def post_product_requirement(request: ProductRequirementRequest) -> dict[str, Any]:
     return {"requirement": create_product_requirement(request), "summary": product_manager_overview()["summary"]}
 
 
 @app.patch("/api/product-manager/requirements/{requirement_id}")
-async def patch_product_requirement(requirement_id: int, request: ProductRequirementUpdateRequest) -> dict[str, Any]:
+def patch_product_requirement(requirement_id: int, request: ProductRequirementUpdateRequest) -> dict[str, Any]:
     requirement = update_product_requirement(requirement_id, request)
     if not requirement:
         raise HTTPException(404, "产品需求不存在")
@@ -27069,7 +27408,7 @@ async def patch_product_requirement(requirement_id: int, request: ProductRequire
 
 
 @app.post("/api/product-manager/decisions")
-async def post_product_decision(request: ProductDecisionRequest) -> dict[str, Any]:
+def post_product_decision(request: ProductDecisionRequest) -> dict[str, Any]:
     return {"decision": create_product_decision(request), "summary": product_manager_overview()["summary"]}
 
 
