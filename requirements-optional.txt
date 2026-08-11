@@ -1,0 +1,10 @@
+# 可选依赖：功能在 import 时按需降级，缺失不会导致启动失败。
+#
+# 这三项在 requirements.lock 里是注释掉的，所以部署脚本装完 lock 之后会再装一次
+# 这个文件；安装失败只打日志、不阻断发布（对应功能自动降级）。
+#   crawl4ai      -> /crawl4ai 网页抓取与研究
+#   pywebpush     -> 浏览器 Web Push 推送
+#   cryptography  -> Web Push VAPID 签名
+crawl4ai>=0.9.2
+pywebpush>=2.0.0
+cryptography>=42.0.0
