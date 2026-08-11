@@ -956,3 +956,79 @@ class LearningTrackTests(unittest.TestCase):
     def test_unknown_track_falls_back_instead_of_erroring(self):
         self.assertEqual(app.learning_track_id("no-such-track"), app.DEFAULT_LEARNING_TRACK)
         self.assertEqual(app.learning_track_id(""), app.DEFAULT_LEARNING_TRACK)
+
+
+class ProductProjectDimensionTests(unittest.TestCase):
+    """产品作战室原本只有一个扁平需求池：没有项目维度，也没有缺陷概念。"""
+
+    def create(self, **kwargs):
+        payload = {"title": "条目", "problem": "", "target_user": "", "outcome": "",
+                   "reach": 1, "impact": 1, "confidence": 50, "effort": 1}
+        payload.update(kwargs)
+        return app.create_product_requirement(app.ProductRequirementRequest(**payload))
+
+    def test_defect_uses_severity_instead_of_rice(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            defect = self.create(title="搜索空白", item_type="defect", severity="blocker")
+            requirement = self.create(title="自选分组", reach=50, impact=3, confidence=80, effort=2)
+        self.assertEqual(defect["item_type"], "defect")
+        self.assertEqual(defect["severity"], "blocker")
+        self.assertEqual(float(defect["score"]), 0.0, "缺陷不该被 RICE 打分")
+        self.assertGreater(float(requirement["score"]), 0)
+        self.assertEqual(requirement["severity"], "")
+
+    def test_defect_priority_comes_from_severity(self):
+        self.assertEqual(app._product_defect_priority("blocker"), "urgent")
+        self.assertEqual(app._product_defect_priority("major"), "high")
+        self.assertEqual(app._product_defect_priority("trivial"), "low")
+        self.assertEqual(app._product_defect_priority(""), "normal")
+
+    def test_unknown_project_falls_back_to_unassigned(self):
+        """项目必须真实存在，否则写进去的是一条永远筛不出来的脏数据。"""
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            item = self.create(title="伪造项目", project_id="不存在的项目")
+        self.assertEqual(item["project_id"], "")
+
+    def test_items_are_filtered_by_project_and_type(self):
+        temp_dir, database_file = temp_database()
+        known = {str(item.get("id")) for item in app.load_projects()}
+        project = "market" if "market" in known else sorted(known)[0]
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            self.create(title="该项目的需求", project_id=project)
+            self.create(title="该项目的缺陷", project_id=project, item_type="defect", severity="major")
+            self.create(title="别处的需求")
+            by_project = app.list_product_requirements(200, project)
+            defects_only = app.list_product_requirements(200, project, "defect")
+            everything = app.list_product_requirements(200)
+        self.assertEqual(len(by_project), 2)
+        self.assertEqual([item["title"] for item in defects_only], ["该项目的缺陷"])
+        self.assertEqual(len(everything), 3)
+
+    def test_overview_rolls_up_by_project_and_surfaces_blockers_first(self):
+        temp_dir, database_file = temp_database()
+        known = {str(item.get("id")) for item in app.load_projects()}
+        quiet, smoking = sorted(known)[0], sorted(known)[1]
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            self.create(title="安静项目的需求", project_id=quiet)
+            self.create(title="冒烟项目的阻塞缺陷", project_id=smoking, item_type="defect", severity="blocker")
+            overview = app.product_manager_overview()
+        rollup = overview["projects"]["rollup"]
+        self.assertEqual(rollup[0]["project_id"], smoking, "有阻塞缺陷的项目应该排最前")
+        self.assertEqual(rollup[0]["blockers"], 1)
+        self.assertEqual([item["title"] for item in overview["attention"]["open_defects"]], ["冒烟项目的阻塞缺陷"])
+        self.assertNotIn("冒烟项目的阻塞缺陷", [item["title"] for item in overview["attention"]["top_priority"]],
+                         "缺陷不该混进 RICE 优先级榜")
+
+    def test_defect_work_item_lands_on_the_real_project(self):
+        """工作项要归到实际项目，否则首页和联动矩阵里全堆在 product-manager 一个桶。"""
+        temp_dir, database_file = temp_database()
+        known = {str(item.get("id")) for item in app.load_projects()}
+        project = "knowledge" if "knowledge" in known else sorted(known)[0]
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            self.create(title="缺陷", project_id=project, item_type="defect", severity="blocker")
+            items = app.list_work_items()
+        item = next(x for x in items if x["kind"] == "product_defect")
+        self.assertEqual(item["target_project"], project)
+        self.assertEqual(item["priority"], "urgent")
