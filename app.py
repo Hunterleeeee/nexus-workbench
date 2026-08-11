@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import difflib
+import functools
 import hashlib
 import html as html_lib
 import urllib.parse
@@ -443,6 +445,13 @@ def project_activity(project_id: str) -> dict[str, Any]:
 
 
 def public_projects() -> list[dict[str, Any]]:
+    # 首页卡片是纯读聚合：15 个项目 x 若干 helper，每个 helper 原本各开一次连接。
+    # 套一层 db_scope 后全部复用同一个连接，实测 66 次 open 降到 1 次。
+    with db_scope():
+        return _public_projects_uncached()
+
+
+def _public_projects_uncached() -> list[dict[str, Any]]:
     projects = []
     pending_count = len(list_inbox("inbox"))
     note_count = len(knowledge_files())
@@ -456,7 +465,7 @@ def public_projects() -> list[dict[str, Any]]:
 
         crawl_available = True
     except Exception:
-        pass
+        log.debug("忽略异常（_public_projects_uncached）", exc_info=True)
     for project in load_projects():
         public = {key: value for key, value in project.items() if key not in {"source_path", "source_env"}}
         project_id = project.get("id")
@@ -628,7 +637,7 @@ def public_projects() -> list[dict[str, Any]]:
                     if total_val > 0:
                         remaining_weekly = f"剩余 ${total_val - used_val:.2f}"
             except Exception:
-                pass
+                log.debug("忽略异常（_public_projects_uncached）", exc_info=True)
             freshness_note = analysis["freshness"]["label"]
             if not healthy_freshness:
                 freshness_note = f"{freshness_note}，需重新同步"
@@ -2009,29 +2018,103 @@ def _initialize_database_schema() -> sqlite3.Connection:
     return connection
 
 
-def db_connection() -> sqlite3.Connection:
-    """Open a lightweight connection after one-time schema initialization."""
-    global _DB_SCHEMA_READY
-    if not _DB_SCHEMA_READY:
-        with _DB_SCHEMA_LOCK:
-            if not _DB_SCHEMA_READY:
-                connection = _initialize_database_schema()
-                _initialize_extended_schema(connection)
-                connection.close()
-                _DB_SCHEMA_READY = True
+def _open_db_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DATABASE_FILE, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 30000")
-    # WAL lets the API process and the four worker processes read while one
-    # writes.  Without it the default rollback journal locks the whole file per
-    # write, which showed up as random "database is locked" and 30s stalls.
     try:
-        connection.execute("PRAGMA journal_mode = WAL")
+        # journal_mode 是持久化在数据库文件头里的，_ensure_db_schema() 设过一次
+        # 之后所有连接都自动是 WAL，这里再设一遍纯属白跑（首页一次要开几十个
+        # 连接，实测占到连接建立开销的两成）。synchronous 才是每连接生效的。
         connection.execute("PRAGMA synchronous = NORMAL")
     except sqlite3.Error:
-        # A read-only or exotic filesystem may refuse WAL; keep the connection.
+        # A read-only or exotic filesystem may refuse the pragma; keep going.
         pass
     return connection
+
+
+def _ensure_db_schema() -> None:
+    global _DB_SCHEMA_READY
+    if _DB_SCHEMA_READY:
+        return
+    with _DB_SCHEMA_LOCK:
+        if _DB_SCHEMA_READY:
+            return
+        connection = _initialize_database_schema()
+        _initialize_extended_schema(connection)
+        # WAL lets the API process and the four worker processes read while one
+        # writes.  Without it the default rollback journal locks the whole file
+        # per write, which showed up as random "database is locked" and 30s
+        # stalls.  Setting it here once is enough -- it persists in the file.
+        try:
+            connection.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.Error:
+            log.warning("无法启用 WAL，将使用默认 journal 模式", exc_info=True)
+        connection.close()
+        _DB_SCHEMA_READY = True
+
+
+class _SharedConnection:
+    """Proxy whose ``close()`` is a no-op, so a shared connection survives it.
+
+    Every helper in this module ends with ``finally: connection.close()``.  That
+    is correct when each helper owns its connection, but it makes connection
+    reuse impossible.  Handing out this proxy inside a ``db_scope()`` lets the
+    existing code stay exactly as it is while the real connection is opened once.
+    """
+
+    __slots__ = ("_real",)
+
+    def __init__(self, real: sqlite3.Connection) -> None:
+        self._real = real
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    def close(self) -> None:  # noqa: D401 - deliberately does nothing
+        return None
+
+
+_db_scope_state = threading.local()
+
+
+@contextlib.contextmanager
+def db_scope() -> Any:
+    """Reuse one SQLite connection for everything inside the block.
+
+    Only wrap **read-only** aggregations in this.  Rendering the home page used
+    to open 66 connections (15 project cards x several helpers each); at
+    ~0.32 ms per open that was ~21 ms of pure setup before a single row was read.
+
+    Re-entrant: nested ``db_scope()`` calls share the outermost connection.
+    """
+    depth = getattr(_db_scope_state, "depth", 0)
+    if depth == 0:
+        _ensure_db_schema()
+        _db_scope_state.connection = _open_db_connection()
+    _db_scope_state.depth = depth + 1
+    try:
+        yield
+    finally:
+        _db_scope_state.depth -= 1
+        if _db_scope_state.depth == 0:
+            shared = getattr(_db_scope_state, "connection", None)
+            _db_scope_state.connection = None
+            if shared is not None:
+                try:
+                    shared.close()
+                except sqlite3.Error:
+                    log.warning("关闭共享数据库连接失败", exc_info=True)
+
+
+def db_connection() -> sqlite3.Connection:
+    """Open a lightweight connection after one-time schema initialization."""
+    _ensure_db_schema()
+    if getattr(_db_scope_state, "depth", 0) > 0:
+        shared = getattr(_db_scope_state, "connection", None)
+        if shared is not None:
+            return _SharedConnection(shared)  # type: ignore[return-value]
+    return _open_db_connection()
 
 
 def worker_instance_id() -> str:
@@ -3000,7 +3083,7 @@ def _panel_remaining_days(expires_at: Any) -> str:
             days = (parsed - datetime.now(timezone.utc)).days
             return f"{days} 天" if days >= 0 else "已到期"
     except Exception:
-        pass
+        log.debug("忽略异常（_panel_remaining_days）", exc_info=True)
     return ""
 
 
@@ -3255,7 +3338,7 @@ def update_sub2api_sync_state(status: str, *, source: str = "", error: str = "")
         save_sub2api_panel_settings(settings)
     except Exception:
         # Sync status is helpful diagnostics, never a reason to fail a valid snapshot.
-        pass
+        log.debug("忽略异常（update_sub2api_sync_state）", exc_info=True)
     return sub2api_sync_state()
 
 
@@ -3386,7 +3469,7 @@ async def auto_sync_sub2api_panel() -> dict[str, Any]:
             previous.update({"error": str(exc)[:500], "last_sync_error_at": state.get("last_attempt_at", now_iso())})
             save_sub2api_snapshot(previous)
         except Exception:
-            pass
+            log.debug("忽略异常（auto_sync_sub2api_panel）", exc_info=True)
         raise
 
 
@@ -3417,7 +3500,7 @@ async def sub2api_auto_sync_loop() -> None:
                     previous.update({"error": str(exc)[:500], "last_sync_error_at": now_iso()})
                     save_sub2api_snapshot(previous)
                 except Exception:
-                    pass
+                    log.debug("忽略异常（sub2api_auto_sync_loop）", exc_info=True)
         await asyncio.sleep(interval)
 
 
@@ -3915,7 +3998,7 @@ def refresh_cid_opportunity_status(repo: str, projects: list[dict[str, Any]], fe
                 dedupe_seconds=0,
             )
         except Exception:  # noqa: BLE001
-            pass
+            log.debug("忽略异常（refresh_cid_opportunity_status）", exc_info=True)
         updated += 1
     return updated
 
@@ -3988,7 +4071,7 @@ def save_cid_dashboard_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         refresh_cid_opportunity_status(repo, safe_projects, fetched_at)
     except Exception:  # noqa: BLE001
-        pass
+        log.debug("忽略异常（save_cid_dashboard_snapshot）", exc_info=True)
     return saved
 
 
@@ -5880,7 +5963,7 @@ def evaluate_market_observations(
                     dedupe_seconds=0,
                 )
             except Exception:
-                pass
+                log.debug("忽略异常（evaluate_market_observations）", exc_info=True)
             existing_items.append(item)
             created.append({"candidate": candidate, "work_item": item, "relation": relation, "created": True})
     return {"analysis": analysis, "candidates": candidates, "created": created}
@@ -7152,7 +7235,7 @@ async def fetch_fund_nav(symbol6: str) -> dict[str, Any] | None:
                 if match:
                     name = match.group(1).strip()
         except Exception:
-            pass
+            log.debug("忽略异常（fetch_fund_nav）", exc_info=True)
         return {
             "symbol": symbol6,
             "name": name,
@@ -9291,7 +9374,7 @@ def create_agent_action_record(
                 dedupe_seconds=0,
             )
         except Exception:
-            pass
+            log.debug("忽略异常（create_agent_action_record）", exc_info=True)
     return action
 
 
@@ -9875,7 +9958,7 @@ def create_work_item_record(
             )
         except Exception:
             # Notification delivery must never make creation of the primary work item fail.
-            pass
+            log.debug("忽略异常（create_work_item_record）", exc_info=True)
     return item
 
 
@@ -10321,8 +10404,42 @@ def safe_filename(value: str, fallback: str = "output") -> str:
     return (cleaned or fallback)[:80]
 
 
+_knowledge_files_cache: dict[str, Any] = {"signature": None, "files": []}
+
+
+def _knowledge_dir_signature() -> tuple[Any, ...]:
+    """Cheap fingerprint of the vault: every directory's mtime.
+
+    Creating, renaming or deleting a note bumps its parent directory's mtime, so
+    this catches the changes that alter the *file list*.  Editing a note's
+    contents does not change the list, which is all this cache holds.
+    """
+    try:
+        stamps = [KNOWLEDGE_DIR.stat().st_mtime_ns]
+    except OSError:
+        return ()
+    for directory in KNOWLEDGE_DIR.rglob("*"):
+        try:
+            if directory.is_dir():
+                stamps.append(directory.stat().st_mtime_ns)
+        except OSError:
+            continue
+    return tuple(stamps)
+
+
 def knowledge_files() -> list[Path]:
-    return sorted(KNOWLEDGE_DIR.rglob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+    """List vault notes, newest first, without re-walking the tree every call.
+
+    The home page calls this on every render.  A full ``rglob`` plus a ``stat``
+    per note is wasted work when nothing was added or removed since last time.
+    """
+    signature = _knowledge_dir_signature()
+    if _knowledge_files_cache["signature"] == signature:
+        return list(_knowledge_files_cache["files"])
+    files = sorted(KNOWLEDGE_DIR.rglob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+    _knowledge_files_cache["signature"] = signature
+    _knowledge_files_cache["files"] = files
+    return list(files)
 
 
 def knowledge_search(query: str = "") -> list[dict[str, Any]]:
@@ -10854,7 +10971,7 @@ def sync_inbox_to_obsidian(item_id: int, *, content: str = "", title_override: s
             dedupe_seconds=0,
         )
     except Exception:
-        pass
+        log.debug("忽略异常（sync_inbox_to_obsidian）", exc_info=True)
     return {"synced": True, "already_exists": False, "path": str(path), "vault_relative_path": str(path.relative_to(OBSIDIAN_VAULT_DIR)), "artifact": artifact, "relation": relation, "message": "已写入 Obsidian Inbox，原收件箱内容仍保留。"}
 
 
@@ -11626,16 +11743,53 @@ def react_tool_schemas() -> list[dict[str, Any]]:
     return [{"type": entry.get("type", "function"), "function": entry["function"]} for entry in REACT_TOOLS.values()]
 
 
-def execute_react_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """同步执行一个 ReAct 工具，返回真实结果。"""
+# 一次调度内可以安全复用结果的只读工具。
+#
+# 用显式白名单而不是"排除写工具"的黑名单：将来新增工具时，忘记登记只会让它
+# 少一次缓存（无害），而不是把一个有副作用的工具悄悄缓存掉。
+READ_ONLY_REACT_TOOLS = frozenset({
+    "server_status", "sub2api_status", "knowledge_search", "inbox_read",
+    "work_items_read", "aihot_read", "market_read", "doc_validate",
+    "doc_template", "crawl_fetch", "idea_read", "cid_read",
+})
+
+
+def _react_tool_cache_key(name: str, arguments: dict[str, Any]) -> str | None:
+    if name not in READ_ONLY_REACT_TOOLS:
+        return None
+    try:
+        return f"{name}|{json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False, default=str)}"
+    except (TypeError, ValueError):
+        return None
+
+
+def execute_react_tool(name: str, arguments: dict[str, Any], *, cache: dict[str, Any] | None = None) -> dict[str, Any]:
+    """同步执行一个 ReAct 工具，返回真实结果。
+
+    ``cache`` 传入时，同一次调度内相同工具 + 相同参数的只读调用只真正执行一次。
+    这解决的是一个结构性重复：总调度先用 react_gather_evidence 跑一轮工具收集
+    证据，随后每个子 Agent 又各自跑一遍自己的 ReAct 循环，于是 server_status、
+    market_read、crawl_fetch 这类调用会被重复执行 N+1 次。缓存之后不仅省时间和
+    额度，同一次调度里所有 Agent 看到的也是同一份快照，结论不会互相打架。
+    """
     entry = REACT_TOOLS.get(name) or SUBAGENT_EXTRA_TOOLS.get(name)
     if not entry:
         return {"ok": False, "error": f"未知工具：{name}"}
+    key = _react_tool_cache_key(name, arguments) if cache is not None else None
+    if key is not None and key in cache:
+        cached = dict(cache[key])
+        cached["_from_dispatch_cache"] = True
+        return cached
     try:
         result = entry["handler"](arguments or {})
-        return result if isinstance(result, dict) else {"ok": True, "result": result}
+        result = result if isinstance(result, dict) else {"ok": True, "result": result}
     except Exception as exc:
+        log.warning("ReAct 工具 %s 执行失败：%s", name, exc, exc_info=True)
         return {"ok": False, "error": f"{name} 执行失败：{clip(str(exc), 300)}"}
+    # 只缓存成功结果：失败可能是瞬时的，值得让下一个 Agent 重试。
+    if key is not None and result.get("ok"):
+        cache[key] = result
+    return result
 
 
 # ---------- 子 Agent 专属工具（真 function calling） ----------
@@ -11712,9 +11866,27 @@ def _react_crawl_fetch(args: dict[str, Any]) -> dict[str, Any]:
     if not valid_research_url(url):
         return {"ok": False, "error": "只支持不含凭据且不指向本机/私网的 http/https 地址"}
     try:
-        with httpx.Client(timeout=15, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (Workbench Research Agent)"}) as client:
-            response = client.get(url)
+        # 每一跳都重新校验，而不是 follow_redirects=True 一路跟到底。
+        # 入口 URL 通过 valid_research_url 只能保证"起点"是公网地址；一个公网页面
+        # 完全可以 302 到 http://169.254.169.254/ 或 http://127.0.0.1:18765/api/...，
+        # 而这个工具是 LLM 可以直接驱动的，等于把 SSRF 的方向盘交出去了。
+        current = url
+        with httpx.Client(timeout=15, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0 (Workbench Research Agent)"}) as client:
+            for _hop in range(5):
+                response = client.get(current)
+                if response.status_code not in {301, 302, 303, 307, 308}:
+                    break
+                location = str(response.headers.get("location") or "").strip()
+                if not location:
+                    break
+                current = urllib.parse.urljoin(current, location)
+                if not valid_research_url(current):
+                    log.warning("crawl_fetch 拒绝跳转到非公网地址：%s", current)
+                    return {"ok": False, "error": f"跳转目标不是允许的公网地址，已中止：{clip(current, 120)}"}
+            else:
+                return {"ok": False, "error": "重定向次数过多（超过 5 跳），已中止"}
             response.raise_for_status()
+        url = current
         content_type = str(response.headers.get("content-type") or "")
         html = response.text or ""
         title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
@@ -12036,7 +12208,7 @@ async def call_llm(
                     purpose=purpose,
                 )
             except Exception:
-                pass
+                log.debug("忽略异常（call_once）", exc_info=True)
         if isinstance(content, list):
             content = "\n".join(str(item.get("text", item)) for item in content)
         result = str(content).strip() or str(reasoning).strip()
@@ -12759,7 +12931,7 @@ def execute_agent_action(action_id: str, *, force: bool = False, parent_run_id: 
                     dedupe_seconds=0,
                 )
             except Exception:
-                pass
+                log.debug("忽略异常（execute_agent_action）", exc_info=True)
         return updated
     except Exception as exc:
         error = str(exc)
@@ -12780,7 +12952,7 @@ def execute_agent_action(action_id: str, *, force: bool = False, parent_run_id: 
                     dedupe_seconds=0,
                 )
             except Exception:
-                pass
+                log.debug("忽略异常（execute_agent_action）", exc_info=True)
         return updated
 
 
@@ -13031,7 +13203,7 @@ async def run_inbox_handoff_work_item(project_id: str, item: dict[str, Any]) -> 
                 dedupe_seconds=0,
             )
         except Exception:
-            pass
+            log.debug("忽略异常（run_inbox_handoff_work_item）", exc_info=True)
         raise
     except Exception as exc:
         error = str(exc)
@@ -13049,7 +13221,7 @@ async def run_inbox_handoff_work_item(project_id: str, item: dict[str, Any]) -> 
             )
             create_notification_record(title=f"{agent_display_name(project_id)}收件箱交接失败", body=f"{item.get('title', '交接工作项')} · {error}", project_id=project_id, kind="agent_result", level="error", href=project_href(project_id), event_key=f"work-item-run:{item_id}:{run['id']}", dedupe_seconds=0)
         except Exception:
-            pass
+            log.debug("忽略异常（run_inbox_handoff_work_item）", exc_info=True)
         raise HTTPException(502, f"{agent_display_name(project_id)}处理交接失败：{error}") from exc
 
 
@@ -13472,7 +13644,7 @@ async def run_cid_agent_turn(*, run: dict[str, Any], messages: list[dict[str, st
         raise HTTPException(502, f"Agent 调用失败：{error}") from exc
 
 
-async def react_gather_evidence(message: str, parent_run_id: str = "", max_rounds: int = 4) -> str:
+async def react_gather_evidence(message: str, parent_run_id: str = "", max_rounds: int = 4, *, tool_cache: dict[str, Any] | None = None) -> str:
     """ReAct 预执行：让总调度 LLM 带工具跑循环，收集真实工具结果作为证据。
 
     - LLM 输出 tool_calls → 执行工具（to_thread，避免阻塞事件循环）→ 结果回传。
@@ -13523,7 +13695,7 @@ async def react_gather_evidence(message: str, parent_run_id: str = "", max_round
             except (TypeError, ValueError):
                 arguments = {}
             add_agent_run_event(parent_run_id, "react_tool", f"调用工具 {name}", metadata={"arguments": arguments})
-            result = await asyncio.to_thread(execute_react_tool, name, arguments)
+            result = await asyncio.to_thread(functools.partial(execute_react_tool, name, arguments, cache=tool_cache))
             messages.append(
                 {
                     "role": "tool",
@@ -13688,6 +13860,9 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
         metadata={"orchestrator": "workbench", "children": targets, "route": route, "intent": intent, "tool_ids": tool_ids, "session_id": session["id"], "context": request.context},
     )
     child_results: list[dict[str, Any]] = []
+    # 本次调度共用的只读工具结果缓存：总调度的 ReAct 预执行和随后每个子 Agent 的
+    # 工具循环都读写它，相同工具 + 相同参数只会真正执行一次。
+    dispatch_tool_cache: dict[str, Any] = {}
     try:
         context_text = json.dumps(request.context, ensure_ascii=False) if request.context else "无额外上下文"
         summary_memory_text = summary_memory_context["text"]
@@ -13753,7 +13928,7 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
                         async with tool_semaphore:
                             try:
                                 result = await asyncio.wait_for(
-                                    asyncio.to_thread(execute_react_tool, tool_name, tool_arguments),
+                                    asyncio.to_thread(functools.partial(execute_react_tool, tool_name, tool_arguments, cache=dispatch_tool_cache)),
                                     timeout=AGENT_TOOL_TIMEOUT_SECONDS,
                                 )
                             except asyncio.TimeoutError:
@@ -13820,7 +13995,7 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
         # 并发调用所有子 Agent；单个失败由 call_child 内部隔离，不影响整体结果
         add_agent_run_event(run["id"], "dispatch_parallel", f"并发调度 {len(targets)} 个子 Agent。", metadata={"children": targets})
         # ReAct 预执行：先让总调度用工具收集真实数据证据，子 Agent 基于真实数据回答
-        react_evidence = await react_gather_evidence(request.message, parent_run_id=run["id"])
+        react_evidence = await react_gather_evidence(request.message, parent_run_id=run["id"], tool_cache=dispatch_tool_cache)
         if react_evidence and "无工具数据可探查" not in react_evidence:
             add_agent_run_event(run["id"], "react_evidence", f"ReAct 收集到工具证据（{len(react_evidence)} 字符）。", level="success")
         # 子 Agent 并发上限：多个子 Agent 同时跑 ReAct 工具循环会放大 LLM 调用
@@ -13960,7 +14135,7 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
             )
         except Exception:
             # Notification delivery must never make a completed dispatch fail.
-            pass
+            log.debug("忽略异常（dispatch_agent_task）", exc_info=True)
         return {
             "ok": True,
             "run": updated_run,
@@ -13994,7 +14169,7 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
                 dedupe_seconds=0,
             )
         except Exception:
-            pass
+            log.debug("忽略异常（dispatch_agent_task）", exc_info=True)
         raise HTTPException(502, error) from exc
     except Exception as exc:
         error = str(exc)
@@ -14013,7 +14188,7 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
                 dedupe_seconds=0,
             )
         except Exception:
-            pass
+            log.debug("忽略异常（dispatch_agent_task）", exc_info=True)
         raise HTTPException(502, f"总调度 Agent 调用失败：{exc}") from exc
 
 
@@ -15015,11 +15190,11 @@ def save_ai_learning_note(lesson_id: int) -> dict[str, Any]:
 
 @app.get("/api/ai-learning/dashboard")
 async def get_ai_learning_dashboard() -> dict[str, Any]:
-    profile = get_ai_learning_profile()
-    automation = sync_ai_learning_automation(profile)
+    profile = await asyncio.to_thread(get_ai_learning_profile)
+    automation = await asyncio.to_thread(sync_ai_learning_automation, profile)
     today = await generate_ai_learning_lesson(use_llm=False)
-    history = list_ai_learning_lessons(30)
-    push = get_push_subscriptions()
+    history = await asyncio.to_thread(list_ai_learning_lessons, 30)
+    push = await asyncio.to_thread(get_push_subscriptions)
     return {
         "profile": profile,
         "today": today,
@@ -15423,7 +15598,7 @@ def accept_inbox_route(item_id: int, candidate_id: int) -> dict[str, Any]:
             dedupe_seconds=0,
         )
     except Exception:
-        pass
+        log.debug("忽略异常（accept_inbox_route）", exc_info=True)
     return {"item": get_inbox_record(item_id), "candidate": get_inbox_route_candidate(candidate_id, item_id), "work_item": work_item, "relation": relation, "message": f"已交给 {candidate['target_name']}，目标 Agent 可在待办中接收。"}
 
 
@@ -15451,7 +15626,7 @@ def reject_inbox_route(item_id: int, candidate_id: int) -> dict[str, Any]:
 async def accept_and_run_inbox_route(item_id: int, candidate_id: int) -> dict[str, Any]:
     """Confirm once, then immediately run the target Agent and return its evidence."""
     accepted = await asyncio.to_thread(accept_inbox_route, item_id, candidate_id)
-    candidate = get_inbox_route_candidate(candidate_id, item_id)
+    candidate = await asyncio.to_thread(get_inbox_route_candidate, candidate_id, item_id)
     work_item_id = int((candidate or {}).get("work_item_id") or (accepted.get("work_item") or {}).get("id") or 0)
     target_project = str((candidate or {}).get("target_project") or "")
     if not work_item_id or not target_project:
@@ -15588,7 +15763,7 @@ async def get_obsidian(q: str = "", limit: int = 40, scope: str = "all") -> dict
         notes = [item for item in await asyncio.to_thread(obsidian_semantic_results, q, max(1, min(limit * 2, 100))) if not since or float(item.get("mtime") or 0) >= since][: max(1, min(limit, 100))]
         mode = "local-hybrid-bm25+hash-vector"
     else:
-        notes = obsidian_search(q, limit=limit, since_timestamp=since)
+        notes = await asyncio.to_thread(obsidian_search, q, limit=limit, since_timestamp=since)
         mode = "local-index"
     return {"status": obsidian_status(), "scope": scope, "notes": notes, "mode": mode}
 
@@ -16092,7 +16267,7 @@ async def execute_approved_cloud_dev(approval_id: str) -> dict[str, Any]:
     result = await execute_cloud_dev_request(parsed, source="workbench")
     run_id = str((result.get("run") or {}).get("id") or "")
     if run_id:
-        create_relation_record(from_type="approval", from_id=approval_id, to_type="agent_run", to_id=run_id, relation_type="approval_to_cloud_dev_run", metadata={"action": "build"})
+        await asyncio.to_thread(create_relation_record, from_type="approval", from_id=approval_id, to_type="agent_run", to_id=run_id, relation_type="approval_to_cloud_dev_run", metadata={"action": "build"})
     create_notification_record(title="云开发构建已执行", body=f"{parsed['project']} · 结果：{(result.get('result') or {}).get('status')}", project_id="cloud-dev", kind="cloud_dev", level="success" if (result.get("result") or {}).get("status") == "ok" else "error", href="/projects/cloud-dev", event_key=f"cloud-dev-executed:{approval_id}", dedupe_seconds=0)
     return {"ok": (result.get("result") or {}).get("status") == "ok", "approval_id": approval_id, **result}
 
@@ -16116,7 +16291,7 @@ async def handle_feishu_card_action(event: dict[str, Any]) -> dict[str, Any]:
             try:
                 await feishu_bot.send_message(chat_id, clip(text, 1800))
             except Exception:
-                pass
+                log.debug("忽略异常（reply）", exc_info=True)
 
     action_name = str(value.get("action") or "")
     if action_name == "open":
@@ -16132,7 +16307,7 @@ async def handle_feishu_card_action(event: dict[str, Any]) -> dict[str, Any]:
             try:
                 mark_notification_read(notification_id)
             except Exception:
-                pass
+                log.debug("忽略异常（handle_feishu_card_action）", exc_info=True)
         await reply("✅ 已标记为已读。")
     elif action_name == "retry_automation":
         try:
@@ -16189,7 +16364,7 @@ async def feishu_quick_command(text: str, chat_id: str) -> bool:
     try:
         await feishu_bot.send_message(chat_id, clip(reply_text, 1800))
     except Exception:
-        pass
+        log.debug("忽略异常（feishu_quick_command）", exc_info=True)
     return True
 
 
@@ -16354,7 +16529,7 @@ async def feishu_event(request: Request) -> dict[str, Any]:
             with open(DATA_DIR / "feishu_last_event.json", "w", encoding="utf-8") as debug_file:
                 json.dump(debug_payload, debug_file, ensure_ascii=False, indent=2)
         except Exception:
-            pass
+            log.debug("忽略异常（feishu_event）", exc_info=True)
     timestamp = str(request.headers.get("x-lark-request-timestamp", ""))
     nonce = str(request.headers.get("x-lark-request-nonce", ""))
     signature = str(request.headers.get("x-lark-signature", ""))
@@ -16399,7 +16574,7 @@ async def feishu_event(request: Request) -> dict[str, Any]:
     if not text or not chat_id:
         return {"code": 0, "msg": "empty text"}
     sender_open_id = feishu_bot.event_sender_open_id(inner)
-    bind_feishu_chat(chat_id, sender_open_id, sender_open_id[:40])
+    await asyncio.to_thread(bind_feishu_chat, chat_id, sender_open_id, sender_open_id[:40])
 
     # 快捷命令（I）：/help /今天 /服务器 /额度 /新机会 直接回摘要，不走总调度。
     quick_reply = await feishu_quick_command(text, chat_id)
@@ -16425,14 +16600,14 @@ async def feishu_event(request: Request) -> dict[str, Any]:
             finally:
                 connection.close()
         except Exception:
-            pass
+            log.debug("忽略异常（feishu_event）", exc_info=True)
 
     async def run_dispatch() -> None:
         reply = "收到，正在处理：\n" + clip(text, 200)
         try:
             await feishu_bot.send_message(chat_id, reply)
         except Exception:
-            pass
+            log.debug("忽略异常（run_dispatch）", exc_info=True)
         try:
             # 飞书入口无法让用户选目标 Agent，route_confirmed=True 让低置信度路由也能继续；
             # 总调度直接读写这条持久 Session，网页端与飞书使用同一套上下文逻辑。
@@ -16465,7 +16640,7 @@ async def feishu_event(request: Request) -> dict[str, Any]:
                 await feishu_bot.send_message(chat_id, f"⚠️ 处理失败：{clip(str(exc), 400)}")
             except Exception as inner_exc:
                 try:
-                    create_notification_record(
+                    await asyncio.to_thread(create_notification_record, 
                         title="飞书回发失败",
                         body=f"dispatch 异常：{clip(str(exc), 300)}；回发失败：{clip(str(inner_exc), 200)}",
                         project_id="workbench",
@@ -16476,7 +16651,7 @@ async def feishu_event(request: Request) -> dict[str, Any]:
                         dedupe_seconds=60,
                     )
                 except Exception:
-                    pass
+                    log.debug("忽略异常（run_dispatch）", exc_info=True)
 
     try:
         loop = asyncio.get_running_loop()
@@ -16607,8 +16782,8 @@ def validate_document_factory(request: DocumentFactoryRequest) -> dict[str, Any]
 async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any]:
     if not llm_settings()["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
-    materials = collect_document_factory_materials(request)
-    validation = validate_document_factory_payload(request, materials)
+    materials = await asyncio.to_thread(collect_document_factory_materials, request)
+    validation = await asyncio.to_thread(validate_document_factory_payload, request, materials)
     if not validation["valid"]:
         raise HTTPException(400, "；".join(validation["errors"]))
     template = DOC_FACTORY_TEMPLATES[request.template]
@@ -16660,7 +16835,7 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
     output_path = OUTPUTS_DIR / output_name
     output_path.write_text(answer.rstrip() + "\n", encoding="utf-8")
     citation_coverage = document_factory_citation_coverage(answer, materials)
-    artifact = register_artifact_safely(
+    artifact = await asyncio.to_thread(register_artifact_safely, 
         project_id="doc-factory",
         name=output_name,
         path=str(output_path),
@@ -16684,7 +16859,7 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
     )
     relation = None
     if previous_artifact and artifact:
-        relation = create_relation_record(
+        relation = await asyncio.to_thread(create_relation_record, 
             from_type="artifact",
             from_id=str(previous_artifact["id"]),
             to_type="artifact",
@@ -16698,7 +16873,7 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
             source_artifact_id = source.get("artifact_id")
             if not source_artifact_id:
                 continue
-            source_relation = create_relation_record(
+            source_relation = await asyncio.to_thread(create_relation_record, 
                 from_type="artifact",
                 from_id=str(source_artifact_id),
                 to_type="artifact",
@@ -16714,7 +16889,7 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
             source_relations.append(source_relation)
         if source_relations:
             try:
-                create_notification_record(
+                await asyncio.to_thread(create_notification_record, 
                     title="文档已生成并保留来源链",
                     body=f"《{request.title.strip()}》引用了 {len(source_relations)} 份工作区 Artifact，可从文档工厂回溯来源。",
                     project_id="doc-factory",
@@ -16725,7 +16900,7 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
                     dedupe_seconds=0,
                 )
             except Exception:
-                pass
+                log.debug("忽略异常（run_document_factory）", exc_info=True)
     return {
         "answer": answer,
         "filename": output_name,
@@ -16741,7 +16916,7 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
 @app.post("/api/doc-factory/regenerate")
 async def regenerate_document_factory(request: DocumentFactoryRegenerateRequest) -> dict[str, Any]:
     """Create a new document version from the previous version's sources and review note."""
-    artifact = get_artifact_record(request.artifact_id)
+    artifact = await asyncio.to_thread(get_artifact_record, request.artifact_id)
     if not artifact or artifact.get("project_id") != "doc-factory":
         raise HTTPException(404, "待修改的文档产物不存在")
     metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
@@ -16795,7 +16970,7 @@ async def regenerate_document_factory(request: DocumentFactoryRegenerateRequest)
 async def review_document_factory_output(request: DocumentFactoryReviewRequest) -> dict[str, Any]:
     if not llm_settings()["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
-    artifact = get_artifact_record(request.artifact_id)
+    artifact = await asyncio.to_thread(get_artifact_record, request.artifact_id)
     if not artifact or artifact.get("project_id") != "doc-factory":
         raise HTTPException(404, "文档产物 Artifact 不存在")
     document_text, read_error = read_artifact_source(artifact)
@@ -16803,9 +16978,9 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
         raise HTTPException(409, f"无法读取待校验文档：{read_error}")
     metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
     source_ids = [int(value) for value in metadata.get("source_artifact_ids", []) if str(value).isdigit()]
-    source_materials = collect_document_factory_materials(DocumentFactoryRequest(artifact_ids=source_ids))
+    source_materials = await asyncio.to_thread(collect_document_factory_materials, DocumentFactoryRequest(artifact_ids=source_ids))
     checks = document_factory_review_checks(document_text, metadata, source_materials)
-    run = create_agent_run_record(
+    run = await asyncio.to_thread(create_agent_run_record, 
         project_id="doc-factory",
         kind="document_review",
         title=f"校验文档：{metadata.get('title') or artifact.get('name', '未命名产物')}",
@@ -16832,13 +17007,13 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
     except httpx.HTTPStatusError as exc:
         detail = clip(exc.response.text, 500)
         error = f"文档校验失败：上游返回 {exc.response.status_code}：{detail}"
-        update_agent_run_record(run["id"], status="failed", error=error)
-        add_agent_run_event(run["id"], "review_failed", error, level="error")
+        await asyncio.to_thread(update_agent_run_record, run["id"], status="failed", error=error)
+        await asyncio.to_thread(add_agent_run_event, run["id"], "review_failed", error, level="error")
         raise HTTPException(502, error) from exc
     except Exception as exc:
         error = f"文档校验失败：{exc}"
-        update_agent_run_record(run["id"], status="failed", error=error)
-        add_agent_run_event(run["id"], "review_failed", error, level="error")
+        await asyncio.to_thread(update_agent_run_record, run["id"], status="failed", error=error)
+        await asyncio.to_thread(add_agent_run_event, run["id"], "review_failed", error, level="error")
         raise HTTPException(502, error) from exc
     review_title = metadata.get("title") or artifact.get("name", "未命名产物")
     review_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-校验-{safe_filename(review_title, '文档产物')}.md"
@@ -16857,7 +17032,7 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
         f"{agent_answer.strip()}\n"
     )
     review_path.write_text(review_body.rstrip() + "\n", encoding="utf-8")
-    review_artifact = register_artifact_safely(
+    review_artifact = await asyncio.to_thread(register_artifact_safely, 
         project_id="doc-factory",
         name=review_name,
         path=str(review_path),
@@ -16903,10 +17078,10 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
         "run_id": run["id"],
         "relations": relations,
     }
-    update_agent_run_record(run["id"], status="succeeded", result={"review_artifact_id": review_artifact.get("id") if review_artifact else None, "checks": checks})
+    await asyncio.to_thread(update_agent_run_record, run["id"], status="succeeded", result={"review_artifact_id": review_artifact.get("id") if review_artifact else None, "checks": checks})
     add_agent_run_event(run["id"], "review_succeeded", "文档校验报告已保存。", metadata={"review_artifact_id": review_artifact.get("id") if review_artifact else None})
     try:
-        create_notification_record(
+        await asyncio.to_thread(create_notification_record, 
             title="文档校验完成",
             body=f"《{review_title}》的事实/引用校验报告已生成，可查看自动检查和 Agent 二次审查。",
             project_id="doc-factory",
@@ -16917,7 +17092,7 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
             dedupe_seconds=0,
         )
     except Exception:
-        pass
+        log.debug("忽略异常（review_document_factory_output）", exc_info=True)
     return result
 
 
@@ -16953,7 +17128,7 @@ def get_sub2api_snapshot() -> dict[str, Any]:
 
 @app.post("/api/sub2api/explain-change")
 async def explain_sub2api_change_endpoint() -> dict[str, Any]:
-    history = list_sub2api_history(limit=30)
+    history = await asyncio.to_thread(list_sub2api_history, limit=30)
     return await explain_sub2api_change(history)
 
 
@@ -17121,7 +17296,7 @@ async def market_symbol_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
             if len(items) >= min(max(int(limit), 1), 12):
                 return {"items": items}
     except Exception:
-        pass
+        log.debug("忽略异常（market_symbol_suggest）", exc_info=True)
 
     # 新浪 suggest 兜底：A 股名称搜索最准。
     if len(items) < min(max(int(limit), 1), 12):
@@ -17145,7 +17320,7 @@ async def market_symbol_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
                 if len(items) >= min(max(int(limit), 1), 12):
                     break
         except Exception:
-            pass
+            log.debug("忽略异常（market_symbol_suggest）", exc_info=True)
     return {"items": items}
 
 
@@ -18093,8 +18268,8 @@ async def generate_market_report(request: MarketReportRequest) -> dict[str, Any]
     if not llm_settings()["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
     snapshot = load_market_snapshot()
-    history = list_market_history(limit=30)
-    analysis = analyze_market_snapshot(snapshot, history)
+    history = await asyncio.to_thread(list_market_history, limit=30)
+    analysis = await asyncio.to_thread(analyze_market_snapshot, snapshot, history)
     watchlist = snapshot.get("watchlist", [])
     if not watchlist:
         raise HTTPException(400, "自选股为空，先添加股票并刷新行情")
@@ -18159,7 +18334,7 @@ async def generate_market_report(request: MarketReportRequest) -> dict[str, Any]
     output_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-量化{period_label}.md"
     output_path = OUTPUTS_DIR / output_name
     output_path.write_text(f"# 量化{period_label}\n\n> 数据时间：{checked_at} · 数据新鲜度：{freshness_label} · 来源：Workbench 量化研究 Agent\n\n{answer.rstrip()}\n", encoding="utf-8")
-    artifact = register_artifact_safely(
+    artifact = await asyncio.to_thread(register_artifact_safely, 
         project_id="market",
         name=output_name,
         path=str(output_path),
@@ -18173,7 +18348,7 @@ async def generate_market_report(request: MarketReportRequest) -> dict[str, Any]
             "research_confidence": confidence,
         },
     )
-    create_notification_record(
+    await asyncio.to_thread(create_notification_record, 
         title=f"量化{period_label}已生成",
         body=f"{period_label}基于 {checked_at[:16].replace('T', ' ')} 快照生成，保存到 outputs/。",
         project_id="market",
@@ -18260,9 +18435,9 @@ async def refresh_market_quotes() -> dict[str, Any]:
         "missing_symbols": missing_symbols,
     }
     save_market_snapshot(snapshot)
-    record_market_snapshot(snapshot)
-    history = list_market_history(limit=30)
-    artifact = register_artifact_safely(
+    await asyncio.to_thread(record_market_snapshot, snapshot)
+    history = await asyncio.to_thread(list_market_history, limit=30)
+    artifact = await asyncio.to_thread(register_artifact_safely, 
         project_id="market",
         name="market_snapshot.json",
         path=str(MARKET_SNAPSHOT_FILE),
@@ -18309,7 +18484,7 @@ async def generate_aihot_digest() -> dict[str, Any]:
     if not llm_settings()["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
     snapshot = await fetch_aihot_snapshot(force=False)
-    items = select_aihot_items(snapshot, "useful", "", 30)
+    items = await asyncio.to_thread(select_aihot_items, snapshot, "useful", "", 30)
     if not items:
         raise HTTPException(400, "还没有可用的热点资讯，先同步一次")
     item_lines = "\n".join(
@@ -18337,7 +18512,7 @@ async def generate_aihot_digest() -> dict[str, Any]:
     output_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-AI热点摘要.md"
     output_path = OUTPUTS_DIR / output_name
     output_path.write_text(f"# AI 热点摘要\n\n> 生成时间：{now_iso()} · 基于 {len(items)} 条有用资讯\n\n{answer.rstrip()}\n", encoding="utf-8")
-    artifact = register_artifact_safely(
+    artifact = await asyncio.to_thread(register_artifact_safely, 
         project_id="aihot",
         name=output_name,
         path=str(output_path),
@@ -18353,7 +18528,7 @@ async def generate_aihot_digest() -> dict[str, Any]:
             event_key=f"aihot-digest:{now_iso()}",
         )
     except Exception:
-        pass
+        log.debug("忽略异常（generate_aihot_digest）", exc_info=True)
     return {"ok": True, "answer": answer, "filename": output_name, "path": str(output_path), "artifact": artifact, "item_count": len(items)}
 
 
@@ -18692,14 +18867,14 @@ async def chat_aihot(request: AIHotChatRequest) -> dict[str, Any]:
     all_items = snapshot.get("items") or []
     chosen = [item for item in all_items if str(item.get("id")) in {str(value) for value in request.item_ids}]
     if not chosen:
-        chosen = select_aihot_items(snapshot, request.mode, limit=18)
+        chosen = await asyncio.to_thread(select_aihot_items, snapshot, request.mode, limit=18)
     session = get_agent_session(request.session_id, "aihot") if request.session_id else None
     if request.session_id and not session:
         raise HTTPException(404, "AI 热点 Agent 会话不存在")
     if not session:
-        session = create_agent_session("aihot", request.message)
-    add_agent_message(session["id"], "user", request.message, {"source": "aihot", "item_ids": [item.get("id") for item in chosen], "mode": request.mode})
-    run = create_agent_run_record(
+        session = await asyncio.to_thread(create_agent_session, "aihot", request.message)
+    await asyncio.to_thread(add_agent_message, session["id"], "user", request.message, {"source": "aihot", "item_ids": [item.get("id") for item in chosen], "mode": request.mode})
+    run = await asyncio.to_thread(create_agent_run_record, 
         project_id="aihot",
         session_id=session["id"],
         kind="chat",
@@ -18750,7 +18925,7 @@ def get_idea_analysis_opportunities() -> dict[str, Any]:
 async def run_idea_analysis_opportunity(item_id: int) -> dict[str, Any]:
     if not llm_settings()["configured"]:
         raise HTTPException(503, "请先在工作台配置全局 LLM，想法分析 Agent 才能执行机会验证")
-    item = get_work_item_record(item_id)
+    item = await asyncio.to_thread(get_work_item_record, item_id)
     opportunity_ids = {candidate.get("id") for candidate in idea_opportunity_work_items(limit=100)}
     if not item or item.get("id") not in opportunity_ids:
         raise HTTPException(404, "想法分析没有找到这条机会交接")
@@ -18783,17 +18958,17 @@ async def run_idea_analysis_opportunity(item_id: int) -> dict[str, Any]:
         "source_title": signal.get("title") or item.get("title", ""),
     }
     session = update_idea_session_summary(session["id"], source_summary) or session
-    create_relation_record(
+    await asyncio.to_thread(create_relation_record, 
         from_type="work_item", from_id=str(item_id), to_type="idea_session", to_id=session["id"],
         relation_type="opportunity_to_session", metadata={"source_project": item.get("source_project", ""), "source_artifact_id": source_artifact_id or ""},
     )
     if source_artifact_id:
-        create_relation_record(
+        await asyncio.to_thread(create_relation_record, 
             from_type="artifact", from_id=str(source_artifact_id), to_type="idea_session", to_id=session["id"],
             relation_type="opportunity_evidence", metadata={"source_project": item.get("source_project", ""), "work_item_id": item_id},
         )
-    add_idea_message(session["id"], "user", handoff)
-    run = create_agent_run_record(
+    await asyncio.to_thread(add_idea_message, session["id"], "user", handoff)
+    run = await asyncio.to_thread(create_agent_run_record, 
         project_id="idea-analysis",
         session_id=session["id"],
         kind="opportunity_validation",
@@ -18801,10 +18976,10 @@ async def run_idea_analysis_opportunity(item_id: int) -> dict[str, Any]:
         request={"work_item_id": item_id, "session_id": session["id"], "source_project": item.get("source_project", ""), "message": handoff},
         max_attempts=2,
     )
-    update_work_item_record(item_id, {"status": "running", "claimed_at": now_iso(), "claimed_run_id": run["id"], "last_error": ""})
+    await asyncio.to_thread(update_work_item_record, item_id, {"status": "running", "claimed_at": now_iso(), "claimed_run_id": run["id"], "last_error": ""})
     try:
         result = await run_idea_agent_turn(run=run, session=session, message=handoff)
-        relation = create_relation_record(
+        relation = await asyncio.to_thread(create_relation_record, 
             from_type="work_item",
             from_id=str(item_id),
             to_type="idea_session",
@@ -18812,7 +18987,7 @@ async def run_idea_analysis_opportunity(item_id: int) -> dict[str, Any]:
             relation_type="opportunity_to_validation",
             metadata={"source_project": item.get("source_project", ""), "agent_run_id": run["id"]},
         )
-        run_relation = create_relation_record(
+        run_relation = await asyncio.to_thread(create_relation_record, 
             from_type="work_item",
             from_id=str(item_id),
             to_type="agent_run",
@@ -18829,7 +19004,7 @@ async def run_idea_analysis_opportunity(item_id: int) -> dict[str, Any]:
                 "last_error": "",
             },
         ) or item
-        notification = create_notification_record(
+        notification = await asyncio.to_thread(create_notification_record, 
             title="想法分析已完成机会初判",
             body=f"{clip(item.get('title', '热点机会'), 180)} · 点击想法分析项目查看验证计划",
             project_id="idea-analysis",
@@ -18841,10 +19016,10 @@ async def run_idea_analysis_opportunity(item_id: int) -> dict[str, Any]:
         )
         return {**result, "ok": True, "work_item": updated_item, "relation": relation, "run_relation": run_relation, "notification": notification}
     except HTTPException as exc:
-        update_work_item_record(item_id, {"status": "failed", "completed_at": now_iso(), "last_error": str(exc.detail)})
+        await asyncio.to_thread(update_work_item_record, item_id, {"status": "failed", "completed_at": now_iso(), "last_error": str(exc.detail)})
         raise
     except Exception as exc:
-        update_work_item_record(item_id, {"status": "failed", "completed_at": now_iso(), "last_error": str(exc)})
+        await asyncio.to_thread(update_work_item_record, item_id, {"status": "failed", "completed_at": now_iso(), "last_error": str(exc)})
         raise HTTPException(502, f"机会验证执行失败：{exc}") from exc
 
 
@@ -18877,9 +19052,9 @@ async def chat_idea_analysis(request: IdeaAnalysisChatRequest) -> dict[str, Any]
     if request.session_id and not session:
         raise HTTPException(404, "想法会话不存在")
     if not session:
-        session = create_idea_session(request.message)
-    add_idea_message(session["id"], "user", request.message)
-    run = create_agent_run_record(
+        session = await asyncio.to_thread(create_idea_session, request.message)
+    await asyncio.to_thread(add_idea_message, session["id"], "user", request.message)
+    run = await asyncio.to_thread(create_agent_run_record, 
         project_id="idea-analysis",
         session_id=session["id"],
         kind="idea_chat",
@@ -18894,7 +19069,7 @@ async def chat_idea_analysis(request: IdeaAnalysisChatRequest) -> dict[str, Any]
 async def get_server_monitor() -> dict[str, Any]:
     snapshot = load_server_monitor_snapshot()
     safe_config = server_monitor_config()
-    history = list_server_monitor_history(limit=30)
+    history = await asyncio.to_thread(list_server_monitor_history, limit=30)
     return {
         "server": snapshot,
         "analysis": analyze_server_snapshot(snapshot, history),
@@ -18928,26 +19103,26 @@ async def refresh_server_monitor(request: ServerMonitorRequest) -> dict[str, Any
         previous = load_server_monitor_snapshot()
         previous.update({"status": "error", "error": str(exc), "checked_at": now_iso()})
         save_server_monitor_snapshot(previous)
-        record_server_monitor_snapshot(previous)
-        artifact = register_artifact_safely(
+        await asyncio.to_thread(record_server_monitor_snapshot, previous)
+        artifact = await asyncio.to_thread(register_artifact_safely, 
             project_id="server",
             name="server_monitor_snapshot.json",
             path=str(SERVER_MONITOR_SNAPSHOT_FILE),
             kind="server_snapshot",
             metadata={"status": "error", "error": str(exc)},
         )
-        evaluation = evaluate_server_monitor(previous, create_records=True)
+        evaluation = await asyncio.to_thread(evaluate_server_monitor, previous, create_records=True)
         raise HTTPException(502, f"服务器检查失败：{exc}") from exc
     save_server_monitor_snapshot(snapshot)
-    record_server_monitor_snapshot(snapshot)
-    artifact = register_artifact_safely(
+    await asyncio.to_thread(record_server_monitor_snapshot, snapshot)
+    artifact = await asyncio.to_thread(register_artifact_safely, 
         project_id="server",
         name="server_monitor_snapshot.json",
         path=str(SERVER_MONITOR_SNAPSHOT_FILE),
         kind="server_snapshot",
         metadata={"status": snapshot.get("status"), "checked_at": snapshot.get("checked_at")},
     )
-    evaluation = evaluate_server_monitor(snapshot, create_records=True)
+    evaluation = await asyncio.to_thread(evaluate_server_monitor, snapshot, create_records=True)
     return {
         "server": snapshot,
         "analysis": evaluation["analysis"],
@@ -19081,9 +19256,9 @@ async def chat_project_agent(project_id: str, request: ProjectAgentChatRequest) 
     if request.session_id and not session:
         raise HTTPException(404, "项目 Agent 会话不存在")
     if not session:
-        session = create_agent_session(project_id, request.message)
-    add_agent_message(session["id"], "user", request.message, {"source": "project_agent", "context": redact_agent_context(request.context)})
-    run = create_agent_run_record(
+        session = await asyncio.to_thread(create_agent_session, project_id, request.message)
+    await asyncio.to_thread(add_agent_message, session["id"], "user", request.message, {"source": "project_agent", "context": redact_agent_context(request.context)})
+    run = await asyncio.to_thread(create_agent_run_record, 
         project_id=project_id,
         session_id=session["id"],
         kind="chat",
@@ -19206,7 +19381,7 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
     require_project_agent(project_id)
     if not llm_settings()["configured"]:
         raise HTTPException(503, "请先在工作台配置全局 LLM，目标 Agent 才能执行交接任务")
-    item = get_work_item_record(item_id)
+    item = await asyncio.to_thread(get_work_item_record, item_id)
     target_projects = {part.strip() for part in str(item.get("target_project", "")).split(",") if part.strip()} if item else set()
     if not item or project_id not in target_projects:
         raise HTTPException(404, "这个项目没有对应的交接工作项")
@@ -19224,8 +19399,8 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
         f"任务内容：\n{item.get('description', '')}\n\n"
         "请基于本项目自己的上下文回答：已知事实、执行/分析结果、证据或数据时间、风险、下一步。"
     )
-    add_agent_message(session["id"], "user", handoff_message, {"source": "work_item", "work_item_id": item_id, "source_project": item.get("source_project", "")})
-    run = create_agent_run_record(
+    await asyncio.to_thread(add_agent_message, session["id"], "user", handoff_message, {"source": "work_item", "work_item_id": item_id, "source_project": item.get("source_project", "")})
+    run = await asyncio.to_thread(create_agent_run_record, 
         project_id=project_id,
         session_id=session["id"],
         parent_run_id=str(item.get("claimed_run_id") or ""),
@@ -19236,7 +19411,7 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
         attempt=2 if item.get("claimed_run_id") else 1,
     )
     claimed_at = now_iso()
-    update_work_item_record(item_id, {"status": "running", "claimed_at": claimed_at, "claimed_run_id": run["id"], "last_error": ""})
+    await asyncio.to_thread(update_work_item_record, item_id, {"status": "running", "claimed_at": claimed_at, "claimed_run_id": run["id"], "last_error": ""})
     try:
         result = await run_project_agent(project_id=project_id, session=session, run=run, message=handoff_message, context={"source": "work_item", "work_item_id": item_id})
         actions = result.get("actions") or []
@@ -19253,7 +19428,7 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
                 "last_error": error,
             },
         ) or item
-        relation = create_relation_record(
+        relation = await asyncio.to_thread(create_relation_record, 
             from_type="work_item",
             from_id=str(item_id),
             to_type="agent_run",
@@ -19262,7 +19437,7 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
             metadata={"project_id": project_id, "status": item_status},
         )
         try:
-            create_notification_record(
+            await asyncio.to_thread(create_notification_record, 
                 title=f"{agent_display_name(project_id)}已处理交接",
                 body=f"{item.get('title', '交接工作项')} · {('等待人工确认' if item_status == 'blocked' else '已完成' if item_status == 'done' else '执行失败')}",
                 project_id=project_id,
@@ -19273,13 +19448,13 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
                 dedupe_seconds=0,
             )
         except Exception:
-            pass
+            log.debug("忽略异常（run_project_work_item）", exc_info=True)
         return {**result, "work_item": updated_item, "relation": relation}
     except HTTPException as exc:
         error = str(exc.detail)
-        update_work_item_record(item_id, {"status": "failed", "completed_at": now_iso(), "last_error": error})
+        await asyncio.to_thread(update_work_item_record, item_id, {"status": "failed", "completed_at": now_iso(), "last_error": error})
         try:
-            create_relation_record(
+            await asyncio.to_thread(create_relation_record, 
                 from_type="work_item",
                 from_id=str(item_id),
                 to_type="agent_run",
@@ -19287,7 +19462,7 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
                 relation_type="processed_by",
                 metadata={"project_id": project_id, "status": "failed", "error": error},
             )
-            create_notification_record(
+            await asyncio.to_thread(create_notification_record, 
                 title=f"{agent_display_name(project_id)}处理交接失败",
                 body=f"{item.get('title', '交接工作项')} · {error}",
                 project_id=project_id,
@@ -19298,13 +19473,13 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
                 dedupe_seconds=0,
             )
         except Exception:
-            pass
+            log.debug("忽略异常（run_project_work_item）", exc_info=True)
         raise
     except Exception as exc:
         error = str(exc)
-        update_work_item_record(item_id, {"status": "failed", "completed_at": now_iso(), "last_error": error})
+        await asyncio.to_thread(update_work_item_record, item_id, {"status": "failed", "completed_at": now_iso(), "last_error": error})
         try:
-            create_relation_record(
+            await asyncio.to_thread(create_relation_record, 
                 from_type="work_item",
                 from_id=str(item_id),
                 to_type="agent_run",
@@ -19312,7 +19487,7 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
                 relation_type="processed_by",
                 metadata={"project_id": project_id, "status": "failed", "error": error},
             )
-            create_notification_record(
+            await asyncio.to_thread(create_notification_record, 
                 title=f"{agent_display_name(project_id)}处理交接失败",
                 body=f"{item.get('title', '交接工作项')} · {error}",
                 project_id=project_id,
@@ -19323,7 +19498,7 @@ async def run_project_work_item(project_id: str, item_id: int) -> dict[str, Any]
                 dedupe_seconds=0,
             )
         except Exception:
-            pass
+            log.debug("忽略异常（run_project_work_item）", exc_info=True)
         raise HTTPException(502, f"交接工作项执行失败：{exc}") from exc
 
 
@@ -19354,7 +19529,7 @@ def get_project_agent_run(project_id: str, run_id: str) -> dict[str, Any]:
 async def retry_project_agent_run(project_id: str, run_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
     if project_id != "workbench":
         require_project_agent(project_id)
-    run = get_agent_run(run_id)
+    run = await asyncio.to_thread(get_agent_run, run_id)
     if not run or run.get("project_id") != project_id:
         raise HTTPException(404, "Agent 运行记录不存在")
     if run.get("status") != "failed":
@@ -19367,7 +19542,7 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
             crawl_request = CrawlRequest(**request_data)
         except Exception as exc:
             raise HTTPException(409, f"原始 Crawl4AI 请求已不可用：{exc}") from exc
-        durable = create_agent_run_record(
+        durable = await asyncio.to_thread(create_agent_run_record, 
             project_id="crawl4ai",
             parent_run_id=run["id"],
             kind="crawl",
@@ -19376,7 +19551,7 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
             max_attempts=run.get("max_attempts", 2),
             attempt=run.get("attempt", 1) + 1,
         )
-        work_item = create_work_item_record(
+        work_item = await asyncio.to_thread(create_work_item_record, 
             title=f"重试网页研究：{clip(crawl_request.task or (crawl_request.urls[0] if crawl_request.urls else '网页研究'), 100)}",
             description=crawl_request.task.strip() or "重试抓取并整理网页证据",
             kind="research",
@@ -19385,10 +19560,10 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
             target_project="crawl4ai",
             metadata={"run_id": durable["id"], "parent_run_id": run["id"]},
         )
-        create_relation_record(from_type="agent_run", from_id=durable["id"], to_type="work_item", to_id=work_item["id"], relation_type="tracks", metadata={"project_id": "crawl4ai", "parent_run_id": run["id"]})
+        await asyncio.to_thread(create_relation_record, from_type="agent_run", from_id=durable["id"], to_type="work_item", to_id=work_item["id"], relation_type="tracks", metadata={"project_id": "crawl4ai", "parent_run_id": run["id"]})
         # 持久化 work_item_id 到 request_json，独立 Crawl Worker 领取时据此回写工作项状态
         durable["request"]["work_item_id"] = work_item["id"]
-        update_agent_run_record(durable["id"], request=durable["request"])
+        await asyncio.to_thread(update_agent_run_record, durable["id"], request=durable["request"])
         runtime = {
             "id": durable["id"], "status": "queued", "task": crawl_request.task.strip(), "urls": crawl_request.urls,
             "source_title": crawl_request.source_title.strip(), "source_context": crawl_request.source_context.strip(),
@@ -19412,14 +19587,14 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
         )
     if project_id == "aihot" and run.get("kind") == "chat":
         request_data = run.get("request") or {}
-        session = get_agent_session(run.get("session_id", ""), "aihot")
+        session = await asyncio.to_thread(get_agent_session, run.get("session_id", ""), "aihot")
         if not session or not request_data.get("message"):
             raise HTTPException(409, "原始 AI 热点会话或用户消息已不可用，无法重试")
         chosen = list(request_data.get("selected_items") or [])
         if not chosen:
             snapshot = await fetch_aihot_snapshot()
-            chosen = select_aihot_items(snapshot, request_data.get("mode", "useful"), limit=18)
-        next_run = create_agent_run_record(
+            chosen = await asyncio.to_thread(select_aihot_items, snapshot, request_data.get("mode", "useful"), limit=18)
+        next_run = await asyncio.to_thread(create_agent_run_record, 
             project_id="aihot",
             session_id=session["id"],
             parent_run_id=run["id"],
@@ -19433,10 +19608,10 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
     if project_id == "crawl4ai" and run.get("kind") == "chat":
         request_data = run.get("request") or {}
         crawl_id = str(request_data.get("crawl_run_id") or run.get("parent_run_id") or "")
-        crawl_run = load_crawl_runtime(crawl_id)
+        crawl_run = await asyncio.to_thread(load_crawl_runtime, crawl_id)
         if not crawl_run or crawl_run.get("status") != "completed" or not request_data.get("message"):
             raise HTTPException(409, "原始 Crawl4AI 研究结果不可用，无法重试问答")
-        next_run = create_agent_run_record(
+        next_run = await asyncio.to_thread(create_agent_run_record, 
             project_id="crawl4ai",
             parent_run_id=run["id"],
             kind="chat",
@@ -19451,7 +19626,7 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
         messages = request_data.get("messages") or []
         if not messages:
             raise HTTPException(409, "原始看板 Agent 消息已不可用，无法重试")
-        next_run = create_agent_run_record(
+        next_run = await asyncio.to_thread(create_agent_run_record, 
             project_id="cid-dashboard",
             parent_run_id=run["id"],
             kind="chat",
@@ -19465,7 +19640,7 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
     if project_id == "idea-analysis" and run.get("kind") == "idea_plan":
         request_data = run.get("request") or {}
         session_id = str(run.get("session_id") or request_data.get("session_id") or "")
-        session = get_idea_session(session_id)
+        session = await asyncio.to_thread(get_idea_session, session_id)
         if not session:
             raise HTTPException(409, "原始想法会话已不可用，无法重试验证工作台")
         if not list_idea_messages(session_id, limit=1):
@@ -19479,11 +19654,11 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
         )
     if project_id == "idea-analysis" and run.get("kind") == "opportunity_validation":
         request_data = run.get("request") or {}
-        session = get_idea_session(run.get("session_id", ""))
-        item = get_work_item_record(int(request_data.get("work_item_id") or 0))
+        session = await asyncio.to_thread(get_idea_session, run.get("session_id", ""))
+        item = await asyncio.to_thread(get_work_item_record, int(request_data.get("work_item_id") or 0))
         if not session or not item or not request_data.get("message"):
             raise HTTPException(409, "原始机会交接或想法会话已不可用，无法重试")
-        next_run = create_agent_run_record(
+        next_run = await asyncio.to_thread(create_agent_run_record, 
             project_id="idea-analysis",
             session_id=session["id"],
             parent_run_id=run["id"],
@@ -19493,10 +19668,10 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
             max_attempts=run.get("max_attempts", 2),
             attempt=run.get("attempt", 1) + 1,
         )
-        update_work_item_record(item["id"], {"status": "running", "claimed_at": now_iso(), "claimed_run_id": next_run["id"], "last_error": ""})
+        await asyncio.to_thread(update_work_item_record, item["id"], {"status": "running", "claimed_at": now_iso(), "claimed_run_id": next_run["id"], "last_error": ""})
         try:
             result = await run_idea_agent_turn(run=next_run, session=session, message=str(request_data["message"]))
-            relation = create_relation_record(
+            relation = await asyncio.to_thread(create_relation_record, 
                 from_type="work_item", from_id=str(item["id"]), to_type="agent_run", to_id=next_run["id"],
                 relation_type="processed_by", metadata={"project_id": "idea-analysis", "kind": "opportunity_validation"},
             )
@@ -19508,7 +19683,7 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
                     "completed_at": now_iso(), "last_error": "",
                 },
             ) or item
-            notification = create_notification_record(
+            notification = await asyncio.to_thread(create_notification_record, 
                 title="想法分析重试完成",
                 body=f"{clip(item.get('title', '热点机会'), 180)} · 已生成验证计划",
                 project_id="idea-analysis", kind="opportunity_result", level="success",
@@ -19516,14 +19691,14 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
             )
             return {**result, "ok": True, "work_item": updated_item, "relation": relation, "notification": notification}
         except HTTPException as exc:
-            update_work_item_record(item["id"], {"status": "failed", "completed_at": now_iso(), "last_error": str(exc.detail)})
+            await asyncio.to_thread(update_work_item_record, item["id"], {"status": "failed", "completed_at": now_iso(), "last_error": str(exc.detail)})
             raise
     if project_id == "idea-analysis" and run.get("kind") == "idea_chat":
         request_data = run.get("request") or {}
-        session = get_idea_session(run.get("session_id", ""))
+        session = await asyncio.to_thread(get_idea_session, run.get("session_id", ""))
         if not session or not request_data.get("message"):
             raise HTTPException(409, "原始想法会话或用户消息已不可用，无法重试")
-        next_run = create_agent_run_record(
+        next_run = await asyncio.to_thread(create_agent_run_record, 
             project_id="idea-analysis",
             session_id=session["id"],
             parent_run_id=run["id"],
@@ -19536,11 +19711,11 @@ async def retry_project_agent_run(project_id: str, run_id: str, background_tasks
         return await run_idea_agent_turn(run=next_run, session=session, message=str(request_data["message"]))
     if run.get("kind") != "chat":
         raise HTTPException(409, "该运行类型不支持从当前入口重试")
-    session = get_agent_session(run.get("session_id", ""), project_id)
+    session = await asyncio.to_thread(get_agent_session, run.get("session_id", ""), project_id)
     request_data = run.get("request") or {}
     if not session or not request_data.get("message"):
         raise HTTPException(409, "原始会话或用户消息已不可用，无法重试")
-    next_run = create_agent_run_record(
+    next_run = await asyncio.to_thread(create_agent_run_record, 
         project_id=project_id,
         session_id=session["id"],
         parent_run_id=run["id"],
@@ -19590,7 +19765,7 @@ async def cid_dashboard_agent_proxy(request: AgentProxyRequest) -> Any:
     ]
     if not messages:
         raise HTTPException(400, "Agent 消息不能为空")
-    run = create_agent_run_record(
+    run = await asyncio.to_thread(create_agent_run_record, 
         project_id="cid-dashboard",
         kind="chat",
         title=clip(str(messages[-1].get("content", "看板分析")), 120),
@@ -20421,14 +20596,14 @@ def get_web_research_agent(run_id: str) -> dict[str, Any]:
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest) -> dict[str, Any]:
-    run = load_crawl_runtime(request.run_id)
+    run = await asyncio.to_thread(load_crawl_runtime, request.run_id)
     if not run:
         raise HTTPException(404, "任务不存在")
     if run["status"] != "completed":
         raise HTTPException(409, "请等爬取完成后再分析")
     if not llm_settings()["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
-    durable = create_agent_run_record(
+    durable = await asyncio.to_thread(create_agent_run_record, 
         project_id="crawl4ai",
         parent_run_id=request.run_id,
         kind="chat",
@@ -21099,14 +21274,14 @@ async def execute_automation_rule(rule_id: int, trigger: str = "manual") -> dict
                 try:
                     await execute_automation_rule(rule_id, trigger=f"auto-retry-{len(attempts)}")
                 except Exception:
-                    pass
+                    log.debug("忽略异常（retry_later）", exc_info=True)
             asyncio.get_event_loop().create_task(retry_later())
             create_notification_record(title=f"自动化失败将重试：{rule.get('name')}", body=f"{clip(error, 200)}；将在 {delay} 秒后自动重试（第 {len(attempts)}/2 次）。", project_id=rule.get("project_id") or "workbench", kind="automation", level="warning", href="/automation", event_key=f"automation-retry:{rule_id}:{run['id']}", dedupe_seconds=0)
         else:
             try:
                 create_notification_record(title=f"自动化失败：{rule.get('name')}", body=error, project_id=rule.get("project_id") or "workbench", kind="automation", level="error", href="/automation", event_key=f"automation-failed:{rule_id}:{run['id']}", dedupe_seconds=0)
             except Exception:
-                pass
+                log.debug("忽略异常（execute_automation_rule）", exc_info=True)
         raise HTTPException(502, f"自动化执行失败：{error}") from exc
 
 
@@ -21537,13 +21712,13 @@ def get_plan(plan_id: str) -> dict[str, Any]:
 
 @app.post("/api/plans/{plan_id}/run")
 async def start_plan(plan_id: str) -> dict[str, Any]:
-    plan = get_execution_plan(plan_id)
+    plan = await asyncio.to_thread(get_execution_plan, plan_id)
     if not plan:
         raise HTTPException(404, "执行计划不存在")
     if os.getenv("WORKBENCH_EXTERNAL_AGENT_WORKER", "").strip().lower() in {"1", "true", "yes"}:
         if plan.get("status") in {"queued", "running"}:
             raise HTTPException(409, "这个计划已经在队列或运行中")
-        update_plan_status(plan_id, "queued", result={"queued_at": now_iso(), "execution_boundary": "agent-worker"}, error="")
+        await asyncio.to_thread(update_plan_status, plan_id, "queued", result={"queued_at": now_iso(), "execution_boundary": "agent-worker"}, error="")
         create_notification_record(title="执行计划已进入 Agent Worker 队列", body=f"{plan.get('title')} · 等待独立 Worker 执行。", project_id=plan.get("source_project") or "workbench", kind="plan", level="info", href="/automation", event_key=f"plan:{plan_id}:queued", dedupe_seconds=0)
         return {"queued": True, "plan": get_execution_plan(plan_id), "execution_boundary": "agent-worker"}
     return {"plan": await run_execution_plan(plan_id)}
@@ -22505,7 +22680,7 @@ async def import_integration_items(integration_id: str, request: IntegrationImpo
             f"链接：{remote_item.get('url')}" if remote_item.get("url") else "",
             "请在目标 Agent 中继续处理，并保留来源和下一步。",
         ]))
-        item = create_work_item_record(
+        item = await asyncio.to_thread(create_work_item_record, 
             title=f"{INTEGRATION_DEFINITIONS[integration_id]['name']}：{str(remote_item.get('title') or '未命名条目')[:220]}",
             description=description,
             kind="efficiency_observation" if integration_id == "activitywatch" else "integration_item",
@@ -22523,7 +22698,7 @@ async def import_integration_items(integration_id: str, request: IntegrationImpo
                 "target_project": target_project,
             },
         )
-        relation = create_relation_record(
+        relation = await asyncio.to_thread(create_relation_record, 
             from_type="integration_item",
             from_id=remote_id,
             to_type="work_item",
@@ -24497,7 +24672,7 @@ def get_aihot_insights() -> dict[str, Any]:
 
 @app.post("/api/aihot/summary")
 async def create_aihot_summary() -> dict[str, Any]:
-    insights = aihot_insights()
+    insights = await asyncio.to_thread(aihot_insights)
     lines = [f"# AI 热点摘要 · {datetime.now().astimezone().strftime('%Y-%m-%d')}", "", insights.get("summary", ""), "", f"> 数据时间：{insights.get('fetched_at') or '未知'}", "", "## 主题簇", ""]
     for cluster in insights.get("clusters", []):
         lines.append(f"- **{cluster['label']}**：{cluster['count']} 条；" + "；".join(str(item.get("title") or "") for item in cluster.get("items", [])[:3]))
@@ -24505,7 +24680,7 @@ async def create_aihot_summary() -> dict[str, Any]:
     lines.extend(f"- {item['source']}：{item['quality_score']}（样本 {item['count']}，有用 {item['useful']}）" for item in insights.get("source_scores", [])[:12])
     path = OUTPUTS_DIR / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-AI热点摘要.md"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    artifact = register_artifact_safely(project_id="aihot", name=path.name, path=str(path), kind="aihot_summary", metadata={"fetched_at": insights.get("fetched_at"), "cluster_count": len(insights.get("clusters", []))})
+    artifact = await asyncio.to_thread(register_artifact_safely, project_id="aihot", name=path.name, path=str(path), kind="aihot_summary", metadata={"fetched_at": insights.get("fetched_at"), "cluster_count": len(insights.get("clusters", []))})
     create_notification_record(title="AI 热点摘要已生成", body=insights.get("summary", ""), project_id="aihot", kind="summary", level="info", href="/projects/aihot", event_key=f"aihot-summary:{path.name}", dedupe_seconds=0)
     # 每日摘要自动化也推远程 Web Push
     try:
@@ -24516,7 +24691,7 @@ async def create_aihot_summary() -> dict[str, Any]:
             event_key=f"aihot-summary:{path.name}",
         )
     except Exception:
-        pass
+        log.debug("忽略异常（create_aihot_summary）", exc_info=True)
     return {"ok": True, "artifact": artifact, "insights": insights, "path": str(path)}
 
 
@@ -24725,7 +24900,7 @@ class CIDCompareRequest(BaseModel):
 
 @app.post("/api/cid-dashboard/compare")
 async def compare_cid_projects(request: CIDCompareRequest) -> dict[str, Any]:
-    snapshots = list_cid_dashboard_snapshots(request.repo.strip(), limit=1)
+    snapshots = await asyncio.to_thread(list_cid_dashboard_snapshots, request.repo.strip(), limit=1)
     snapshot = snapshots[0] if snapshots else None
     projects = (snapshot or {}).get("projects") or (snapshot or {}).get("items") or []
     chosen = [item for item in projects if str(item.get("key") or item.get("id") or item.get("slug") or "") in set(request.project_keys)]
@@ -25083,7 +25258,7 @@ def sub2api_forecast(points: list[dict[str, Any]], key: str, *, horizon_days: in
 
 @app.get("/api/sub2api/trend")
 async def get_sub2api_trend(limit: int = 30) -> dict[str, Any]:
-    history = list_sub2api_history(max(2, min(100, limit)))
+    history = await asyncio.to_thread(list_sub2api_history, max(2, min(100, limit)))
     points = []
     for item in reversed(history):
         weekly = _sub2api_quota(item.get("weekly_usage"))
@@ -25166,9 +25341,9 @@ async def start_automation_scheduler() -> None:
     external_sync_worker = os.getenv("WORKBENCH_EXTERNAL_SYNC_WORKER", "").strip().lower() in {"1", "true", "yes"}
     external_agent_worker = os.getenv("WORKBENCH_EXTERNAL_AGENT_WORKER", "").strip().lower() in {"1", "true", "yes"}
     if not external_sync_worker:
-        worker_lease("sync-worker", status="ready", metadata={"startup": True})
+        await asyncio.to_thread(worker_lease, "sync-worker", status="ready", metadata={"startup": True})
     if not external_agent_worker:
-        worker_lease("agent-worker", status="ready", metadata={"startup": True})
+        await asyncio.to_thread(worker_lease, "agent-worker", status="ready", metadata={"startup": True})
     if not external_sync_worker and getattr(app.state, "automation_scheduler", None) is None:
         app.state.automation_scheduler = asyncio.create_task(automation_scheduler_loop())
     if not external_sync_worker and getattr(app.state, "sub2api_auto_sync_task", None) is None:
@@ -25195,9 +25370,9 @@ async def stop_automation_scheduler() -> None:
         owned_workers.append("agent-worker")
     for worker_id in owned_workers:
         try:
-            release_worker_lease(worker_id)
+            await asyncio.to_thread(release_worker_lease, worker_id)
         except Exception:
-            pass
+            log.debug("忽略异常（stop_automation_scheduler）", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -25985,7 +26160,7 @@ async def _tencent_convertible_quotes(codes: list[str]) -> dict[str, dict[str, A
                 "premium": premium,
             }
     except Exception:
-        pass
+        log.debug("忽略异常（_tencent_convertible_quotes）", exc_info=True)
     return result
 
 
@@ -26260,7 +26435,7 @@ def _render_page_shot_sync(url: str, *, width: int = 1280, height: int = 900) ->
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except Exception:  # noqa: BLE001
-                pass
+                log.debug("忽略异常（_render_page_shot_sync）", exc_info=True)
             return b"", "渲染超时（目标页面可能卡死，已强制终止）"
         if proc.returncode != 0:
             message = (proc.stderr or "").strip() or "渲染失败"
@@ -27291,7 +27466,7 @@ def get_product_cowart_canvas(prototype_id: int) -> dict[str, Any]:
 
 @app.put("/projects/product-manager/prototypes/{prototype_id}/cowart/canvas")
 async def put_product_cowart_canvas(prototype_id: int, request: Request) -> dict[str, Any]:
-    return _save_cowart_canvas(prototype_id, await _cowart_json_body(request))
+    return await asyncio.to_thread(_save_cowart_canvas, prototype_id, await _cowart_json_body(request))
 
 
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/selection")
@@ -27306,7 +27481,7 @@ def get_product_cowart_selection(prototype_id: int) -> dict[str, Any]:
 
 @app.put("/projects/product-manager/prototypes/{prototype_id}/cowart/selection")
 async def put_product_cowart_selection(prototype_id: int, request: Request) -> dict[str, Any]:
-    _require_product_prototype(prototype_id)
+    await asyncio.to_thread(_require_product_prototype, prototype_id)
     selection = await _cowart_json_body(request, max_bytes=2 * 1024 * 1024)
     if not isinstance(selection, dict) or not isinstance(selection.get("selectedShapes"), list):
         raise HTTPException(400, "需要有效的 Cowart 选区状态")
@@ -27326,7 +27501,7 @@ def get_product_cowart_view_state(prototype_id: int) -> dict[str, Any]:
 
 @app.put("/projects/product-manager/prototypes/{prototype_id}/cowart/view-state")
 async def put_product_cowart_view_state(prototype_id: int, request: Request) -> dict[str, Any]:
-    _require_product_prototype(prototype_id)
+    await asyncio.to_thread(_require_product_prototype, prototype_id)
     view_state = await _cowart_json_body(request, max_bytes=2 * 1024 * 1024)
     camera = view_state.get("camera") if isinstance(view_state, dict) else None
     coordinates = [camera.get(key) for key in ("x", "y", "z")] if isinstance(camera, dict) else []
@@ -27347,7 +27522,7 @@ async def put_product_cowart_html_draft(prototype_id: int, request: Request) -> 
     body = await _cowart_json_body(request, max_bytes=6 * 1024 * 1024)
     if not isinstance(body, dict):
         raise HTTPException(400, "需要有效的 Cowart HTML 草稿")
-    return _update_cowart_html_draft(
+    return await asyncio.to_thread(_update_cowart_html_draft, 
         prototype_id,
         str(body.get("draftShapeId") or ""),
         str(body.get("htmlContent") or ""),
@@ -27414,7 +27589,7 @@ def post_product_decision(request: ProductDecisionRequest) -> dict[str, Any]:
 
 @app.post("/api/product-manager/requirements/{requirement_id}/prd")
 async def generate_product_requirement_prd(requirement_id: int) -> dict[str, Any]:
-    requirement = get_product_requirement(requirement_id)
+    requirement = await asyncio.to_thread(get_product_requirement, requirement_id)
     if not requirement:
         raise HTTPException(404, "产品需求不存在")
     feedback = [item for item in list_product_feedback() if int(item.get("linked_requirement_id") or 0) == requirement_id]
@@ -27442,7 +27617,7 @@ async def generate_product_requirement_prd(requirement_id: int) -> dict[str, Any
     ))
     artifact = result.get("artifact") or {}
     if artifact and requirement.get("work_item_id"):
-        result["product_relation"] = create_relation_record(
+        result["product_relation"] = await asyncio.to_thread(create_relation_record, 
             from_type="work_item", from_id=str(requirement["work_item_id"]), to_type="artifact", to_id=str(artifact["id"]),
             relation_type="requirement_to_prd", metadata={"source_project": "product-manager", "target_project": "doc-factory", "requirement_id": requirement_id},
         )
