@@ -1032,3 +1032,107 @@ class ProductProjectDimensionTests(unittest.TestCase):
         item = next(x for x in items if x["kind"] == "product_defect")
         self.assertEqual(item["target_project"], project)
         self.assertEqual(item["priority"], "urgent")
+
+
+class MemoryHygieneTests(unittest.TestCase):
+    """记忆表只增不减：expires_at 字段一直在，但没有任何代码给它赋值。
+
+    每轮只有 MAX_MEMORY_CONTEXT_ITEMS 条能进上下文，池子越大真正相关的越容易
+    被挤掉——这时候「记得多」反而让 Agent 更笨。
+    """
+
+    def seed(self, connection, memory_id, content, *, use_count=0, last_used="", created=None, pinned=0, status="confirmed"):
+        stamp = created or app.now_iso()
+        connection.execute(
+            """INSERT INTO memory_items(id,owner_id,scope,project_id,kind,memory_key,content,value_json,status,
+               confidence,sensitivity,pinned,source_type,source_id,use_count,last_used_at,expires_at,created_at,updated_at)
+               VALUES(?,'default','global','','preference','',?,'{}',?,0.8,'normal',?,'','',?,?,'',?,?)""",
+            (memory_id, content, status, pinned, use_count, last_used, stamp, stamp),
+        )
+
+    def build(self):
+        temp_dir, database_file = temp_database()
+        stale = (datetime.now(timezone.utc) - timedelta(days=app.MEMORY_STALE_DAYS * 3)).isoformat()
+        return temp_dir, database_file, stale
+
+    def test_flags_never_used_and_idle_but_not_fresh_or_pinned(self):
+        temp_dir, database_file, stale = self.build()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.seed(connection, "never", "确认过却从没命中", created=stale)
+                self.seed(connection, "idle", "用过但很久没用", use_count=3, last_used=stale, created=stale)
+                self.seed(connection, "fresh", "刚建的记忆")
+                self.seed(connection, "pinned", "置顶的老记忆", created=stale, pinned=1)
+                connection.commit()
+            finally:
+                connection.close()
+            report = app.memory_hygiene()
+        self.assertEqual([item["id"] for item in report["never_used"]], ["never"])
+        self.assertEqual([item["id"] for item in report["idle"]], ["idle"])
+        flagged = {item["id"] for item in report["never_used"] + report["idle"]}
+        self.assertNotIn("fresh", flagged, "刚建的记忆不该被建议归档")
+        self.assertNotIn("pinned", flagged, "置顶记忆永远不该出现在建议里")
+
+    def test_archiving_removes_it_from_agent_retrieval_but_keeps_the_row(self):
+        temp_dir, database_file, stale = self.build()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.seed(connection, "target", "回答默认用中文", created=stale)
+                connection.commit()
+            finally:
+                connection.close()
+            before = app.retrieve_memories("中文", project_id="market")
+            result = app.archive_memory_items(["target"])
+            after = app.retrieve_memories("中文", project_id="market")
+            connection = app.db_connection()
+            try:
+                status = connection.execute("SELECT status FROM memory_items WHERE id='target'").fetchone()[0]
+            finally:
+                connection.close()
+        self.assertEqual(result["archived"], 1)
+        self.assertTrue(any(item["id"] == "target" for item in before))
+        self.assertFalse(any(item["id"] == "target" for item in after), "归档后仍进入 Agent 上下文")
+        self.assertEqual(status, "superseded", "记录应保留以便追溯和恢复，而不是删除")
+
+    def test_pinned_memories_survive_a_bulk_archive(self):
+        """置顶是用户明确要一直生效的，批量归档不能顺手带走。"""
+        temp_dir, database_file, stale = self.build()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.seed(connection, "plain", "普通记忆", created=stale)
+                self.seed(connection, "pinned", "置顶记忆", created=stale, pinned=1)
+                connection.commit()
+            finally:
+                connection.close()
+            result = app.archive_memory_items(["plain", "pinned"])
+            connection = app.db_connection()
+            try:
+                statuses = dict(connection.execute("SELECT id, status FROM memory_items").fetchall())
+            finally:
+                connection.close()
+        self.assertEqual(result["archived"], 1)
+        self.assertEqual(statuses["plain"], "superseded")
+        self.assertEqual(statuses["pinned"], "confirmed")
+
+    def test_archive_ignores_empty_input(self):
+        temp_dir, database_file, _ = self.build()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            self.assertEqual(app.archive_memory_items([])["archived"], 0)
+            self.assertEqual(app.archive_memory_items(["  ", ""])["archived"], 0)
+
+    def test_hygiene_reports_no_duplicate_suggestions(self):
+        """字面相似度分不清"换个说法"和"差一个关键词"，所以不做重复建议。
+
+        实测：「关注 A 股行情」vs「关注美股行情」重叠 0.75 但是两条不同记忆；
+        「每天早上 8 点推送课程」vs「每日 8:00 推送今天的课程」确实重复却只有 0.22。
+        与其给出会诱导用户删错记忆的建议，不如只保留基于硬事实的信号。
+        """
+        temp_dir, database_file, _ = self.build()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            report = app.memory_hygiene()
+        self.assertNotIn("duplicates", report)
+        self.assertIn("never_used", report)
+        self.assertIn("idle", report)
