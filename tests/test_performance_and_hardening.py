@@ -655,3 +655,73 @@ class OrphanedCrawlRunTests(unittest.TestCase):
                 connection.close()
         self.assertEqual(flagged, 0)
         self.assertEqual(status, "queued", "Worker 还活着时排队是正常的")
+
+
+class VapidKeyGenerationTests(unittest.TestCase):
+    """「推送订阅」从上线起就是"存了不发"：VAPID 密钥从没配过，也没有工具能生成。"""
+
+    def generate(self, key_file):
+        import subprocess, sys
+        script = Path(__file__).resolve().parents[1] / "deploy" / "generate-vapid-keys.py"
+        return subprocess.run([sys.executable, str(script), "--key-file", str(key_file)],
+                              capture_output=True, text=True)
+
+    def test_generated_key_is_a_p256_key_the_app_accepts(self):
+        from cryptography.hazmat.primitives import serialization
+        with tempfile.TemporaryDirectory() as tmp:
+            key_file = Path(tmp) / "vapid_private.pem"
+            result = self.generate(key_file)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(key_file.exists())
+            key = serialization.load_pem_private_key(key_file.read_bytes(), password=None)
+            self.assertEqual(key.curve.name, "secp256r1", "Web Push (RFC 8292) 要求 P-256")
+            self.assertEqual(oct(key_file.stat().st_mode)[-3:], "600", "私钥权限必须是 600")
+            with patch.dict("os.environ", {"WORKBENCH_VAPID_PRIVATE_KEY_FILE": str(key_file)}):
+                self.assertTrue(app.vapid_private_key_configured())
+                self.assertEqual(app.vapid_private_key_source(), "file")
+
+    def test_public_key_is_unpadded_urlsafe_base64_of_65_bytes(self):
+        import base64
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.generate(Path(tmp) / "vapid_private.pem")
+            line = next(l for l in result.stdout.splitlines() if l.startswith("WORKBENCH_VAPID_PUBLIC_KEY="))
+            public_key = line.split("=", 1)[1]
+        self.assertNotIn("=", public_key, "VAPID 公钥不能带 base64 padding")
+        self.assertNotIn("+", public_key)
+        self.assertNotIn("/", public_key)
+        raw = base64.urlsafe_b64decode(public_key + "=" * (-len(public_key) % 4))
+        self.assertEqual(len(raw), 65, "未压缩 EC 点应为 65 字节")
+        self.assertEqual(raw[0], 0x04, "未压缩点必须以 0x04 开头")
+
+    def test_existing_key_is_not_silently_overwritten(self):
+        """换密钥会让所有已有订阅失效，绝不能因为手滑再跑一次就发生。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            key_file = Path(tmp) / "vapid_private.pem"
+            self.assertEqual(self.generate(key_file).returncode, 0)
+            original = key_file.read_bytes()
+            second = self.generate(key_file)
+            self.assertNotEqual(second.returncode, 0, "重复生成应当失败并提示 --force")
+            self.assertEqual(key_file.read_bytes(), original, "私钥被静默覆盖了")
+
+
+class StaticAssetCompressionTests(unittest.TestCase):
+    """Cowart 画布 bundle 有 5.9MB，线上没有压缩——慢网络下表现就是「画布打不开」。"""
+
+    def test_deploy_precompresses_large_static_assets(self):
+        script = (Path(__file__).resolve().parents[1] / "deploy" / "deploy-workbench.sh").read_text(encoding="utf-8")
+        self.assertIn("precompress_static_assets", script)
+        self.assertIn("gzip -9 -c", script)
+
+    def test_nginx_prefers_the_precompressed_file(self):
+        conf = (Path(__file__).resolve().parents[1] / "deploy" / "workbench-nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("gzip_static on;", conf)
+        self.assertIn("gzip on;", conf)
+
+    def test_the_canvas_bundle_is_actually_worth_compressing(self):
+        import gzip as gzip_mod
+        bundle = Path(__file__).resolve().parents[1] / "static" / "vendor" / "cowart" / app.COWART_SCRIPT_NAME
+        if not bundle.is_file():
+            self.skipTest("Cowart 资源未安装")
+        raw = bundle.read_bytes()
+        self.assertGreater(len(raw), 32 * 1024, "小于 32KB 的文件不会被预压缩规则命中")
+        self.assertLess(len(gzip_mod.compress(raw, 9)), len(raw) * 0.6)
