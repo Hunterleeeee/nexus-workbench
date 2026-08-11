@@ -101,7 +101,7 @@
             <button class="primary-button" type="submit">保存为反馈证据</button>
             <p class="form-note">保存后会登记 Artifact；转成需求时自动建立证据关系。</p>
           </form>
-          <section class="card product-list-card">
+          <section class="card product-list-card" id="requirement-list-card">
             <div class="card-heading"><div><span class="card-kicker">EVIDENCE INBOX</span><h2>反馈池</h2></div><div class="compact-filter"><button class="active" type="button" data-feedback-filter="active">待处理</button><button type="button" data-feedback-filter="all">全部</button></div></div>
             <div id="feedback-list" class="feedback-list loading-list"><div class="product-skeleton"></div><div class="product-skeleton"></div></div>
           </section>
@@ -110,17 +110,23 @@
 
       <section id="panel-requirements" class="product-panel" role="tabpanel" data-product-panel="requirements" hidden>
         <div class="product-workspace-grid requirements-grid">
+          <div id="project-rollup" class="project-rollup card"></div>
           <form id="requirement-form" class="card product-form">
             <div class="card-heading"><div><span class="card-kicker">REQUIREMENT</span><h2 id="requirement-form-title">新建产品需求</h2></div><button id="clear-feedback-link" class="text-button" type="button" hidden>取消关联</button></div>
             <input id="requirement-feedback-id" type="hidden" />
             <div id="linked-feedback-preview" class="linked-feedback-preview" hidden></div>
-            <label>需求名称<input id="requirement-title" maxlength="240" placeholder="一句话描述要解决的问题" required /></label>
+            <div class="form-row">
+              <label>类型<select id="requirement-type"><option value="requirement" selected>需求</option><option value="defect">缺陷</option></select></label>
+              <label>所属项目<select id="requirement-project"><option value="">未归属</option></select></label>
+            </div>
+            <label id="requirement-severity-field" hidden>严重级别<select id="requirement-severity"><option value="blocker">阻塞 · 完全无法使用</option><option value="major" selected>严重 · 影响主要流程</option><option value="minor">一般 · 有替代方式</option><option value="trivial">轻微 · 体验问题</option></select></label>
+            <label id="requirement-title-field">需求名称<input id="requirement-title" maxlength="240" placeholder="一句话描述要解决的问题" required /></label>
             <label>用户问题<textarea id="requirement-problem" rows="4" maxlength="20000" placeholder="谁在什么场景遇到了什么问题？现有替代方案为什么不够？"></textarea></label>
             <div class="form-row">
               <label>目标用户<input id="requirement-user" maxlength="500" placeholder="核心用户或角色" /></label>
               <label>预期结果<input id="requirement-outcome" maxlength="2000" placeholder="希望用户或业务发生什么变化" /></label>
             </div>
-            <details class="score-details">
+            <details class="score-details" id="rice-details">
               <summary>设置 RICE 优先级</summary>
               <div class="score-grid">
                 <label>Reach<input id="requirement-reach" type="number" min="0" step="1" value="1" /></label>

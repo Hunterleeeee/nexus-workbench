@@ -2,7 +2,7 @@
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const request = window.requestJson;
-  const state = { feedback: [], requirements: [], decisions: [], prototypes: [], cowart: {}, summary: {}, attention: {}, feedbackFilter: "active", requirementFilter: "active", activePrototypeId: 0 };
+  const state = { feedback: [], requirements: [], decisions: [], prototypes: [], cowart: {}, summary: {}, attention: {}, projectFilter: "", projects: {}, feedbackFilter: "active", requirementFilter: "active", activePrototypeId: 0 };
 
   const feedbackStatusLabels = { new: "新反馈", reviewing: "归纳中", linked: "已关联需求", archived: "已归档" };
   const importanceLabels = { low: "低", normal: "一般", high: "重要", urgent: "紧急" };
@@ -155,7 +155,11 @@
 
   async function loadOverview(showSuccess = false) {
     try {
-      const body = await request("/api/product-manager/overview");
+      const query = state.projectFilter ? `?project_id=${encodeURIComponent(state.projectFilter)}` : "";
+      const body = await request(`/api/product-manager/overview${query}`);
+      state.projects = body.projects || {};
+      renderProjectOptions(state.projects);
+      renderProjectRollup(state.projects);
       state.feedback = body.feedback || [];
       state.requirements = body.requirements || [];
       state.decisions = body.decisions || [];
@@ -300,16 +304,66 @@
     finally { setBusy(button, false); }
   });
 
+function syncRequirementTypeFields() {
+  const isDefect = ($("#requirement-type")?.value || "requirement") === "defect";
+  // 缺陷不做 RICE：拿"触达 x 影响 / 成本"给 bug 排序没有意义，优先级来自严重级别。
+  const rice = $("#rice-details");
+  if (rice) { rice.hidden = isDefect; if (isDefect) rice.open = false; }
+  const severity = $("#requirement-severity-field");
+  if (severity) severity.hidden = !isDefect;
+  const titleField = $("#requirement-title-field");
+  if (titleField) titleField.childNodes[0].nodeValue = isDefect ? "缺陷标题" : "需求名称";
+  const title = $("#requirement-title");
+  if (title) title.placeholder = isDefect ? "一句话说明什么坏了" : "一句话描述要解决的问题";
+  const problem = $("#requirement-problem");
+  if (problem) problem.placeholder = isDefect ? "复现步骤、期望结果、实际结果、影响范围" : "谁在什么场景遇到了什么问题？现有替代方案为什么不够？";
+  const heading = $("#requirement-form-title");
+  if (heading && !Number($("#requirement-feedback-id")?.value || 0)) heading.textContent = isDefect ? "登记缺陷" : "新建产品需求";
+}
+
+function renderProjectOptions(projects = {}) {
+  const select = $("#requirement-project");
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">未归属</option>' + (projects.options || []).map((item) => `<option value="${escape(item.id)}">${escape(item.title)}</option>`).join("");
+  if (current) select.value = current;
+}
+
+function renderProjectRollup(projects = {}) {
+  const host = $("#project-rollup");
+  if (!host) return;
+  const rows = projects.rollup || [];
+  if (!rows.length) { host.innerHTML = ""; return; }
+  // 阻塞缺陷排最前：同时维护多个项目时，最该先知道"哪个项目在冒烟"。
+  host.innerHTML = `<div class="project-rollup-head"><strong>按项目</strong><small>点一行只看该项目</small></div>` + rows.map((row) => `
+    <button type="button" class="project-rollup-row ${projects.selected === row.project_id ? "active" : ""} ${row.blockers ? "smoking" : ""}" data-project-filter="${escape(row.project_id)}">
+      <span class="project-rollup-name">${escape(row.project_title)}</span>
+      <span class="project-rollup-counts">${row.requirements ? `<em>${row.requirements}</em> 需求` : ""}${row.defects ? ` · <em>${row.defects}</em> 缺陷` : ""}${row.blockers ? ` · <b>${row.blockers}</b> 阻塞` : ""}${row.needs_evidence ? ` · ${row.needs_evidence} 缺证据` : ""}</span>
+    </button>`).join("");
+}
+
+  $("#requirement-type")?.addEventListener("change", syncRequirementTypeFields);
+  syncRequirementTypeFields();   // 初始渲染也要对齐，别只依赖 HTML 里的 hidden
+  $("#project-rollup")?.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-project-filter]");
+    if (!row) return;
+    const next = row.dataset.projectFilter;
+    // 再点一次同一行取消筛选，避免用户被困在某个项目里出不来。
+    state.projectFilter = state.projectFilter === next ? "" : next;
+    loadOverview();
+  });
   $("#requirement-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = event.submitter || $("#requirement-form button[type=submit]");
     setBusy(button, true, "创建中…");
     const feedbackId = Number($("#requirement-feedback-id").value || 0);
     try {
-      await request("/api/product-manager/requirements", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: $("#requirement-title").value.trim(), problem: $("#requirement-problem").value.trim(), target_user: $("#requirement-user").value.trim(), outcome: $("#requirement-outcome").value.trim(), reach: Number($("#requirement-reach").value || 0), impact: Number($("#requirement-impact").value || 0), confidence: Number($("#requirement-confidence").value || 0), effort: Number($("#requirement-effort").value || 1), feedback_ids: feedbackId ? [feedbackId] : [] }) });
+      const itemType = $("#requirement-type")?.value || "requirement";
+      await request("/api/product-manager/requirements", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: $("#requirement-title").value.trim(), project_id: $("#requirement-project")?.value || "", item_type: itemType, severity: itemType === "defect" ? ($("#requirement-severity")?.value || "major") : "", problem: $("#requirement-problem").value.trim(), target_user: $("#requirement-user").value.trim(), outcome: $("#requirement-outcome").value.trim(), reach: Number($("#requirement-reach").value || 0), impact: Number($("#requirement-impact").value || 0), confidence: Number($("#requirement-confidence").value || 0), effort: Number($("#requirement-effort").value || 1), feedback_ids: feedbackId ? [feedbackId] : [] }) });
       event.currentTarget.reset();
       $("#requirement-reach").value = "1"; $("#requirement-impact").value = "1"; $("#requirement-confidence").value = "50"; $("#requirement-effort").value = "1";
-      clearFeedbackLink(); ricePreview(); setStatus("需求已加入需求池，并同步为工作项。", "success");
+      clearFeedbackLink(); ricePreview(); syncRequirementTypeFields();
+      setStatus(itemType === "defect" ? "缺陷已登记，并按严重级别同步为待办。" : "需求已加入需求池，并同步为工作项。", "success");
       await loadOverview();
     } catch (error) { setStatus(`创建失败：${error.message}`, "error"); }
     finally { setBusy(button, false); }

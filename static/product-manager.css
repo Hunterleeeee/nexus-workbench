@@ -166,3 +166,21 @@ html[data-theme="dark"] .product-metrics, html[data-theme="dark"] .product-tabs 
 @media (max-width: 760px) { .product-shell { width: min(100% - 28px, 720px); } .product-heading { align-items: flex-start; min-width: 0; } .product-heading > div:first-child, .product-heading .lede { min-width: 0; max-width: 100%; overflow-wrap: anywhere; } .product-health { width: 100%; } .product-metrics { grid-template-columns: 1fr 1fr; } .product-metrics article:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); } .product-metrics article:nth-child(4) { border-top: 1px solid var(--line); } .product-tabs { overflow-x: auto; } .product-tab { flex: 1 0 auto; min-width: 78px; } .workflow-steps { grid-template-columns: 1fr 1fr; } .prototype-overview-card, .prototype-canvas-toolbar { align-items: flex-start; flex-direction: column; } .cowart-integration-state { width: 100%; min-width: 0; } .prototype-canvas-actions { width: 100%; flex-wrap: wrap; } #prototype-canvas-frame { min-height: 520px; } }
 @media (max-width: 520px) { .product-shell { width: calc(100% - 20px); } .product-shell .page-topbar { min-width: 0; } .product-shell .page-brand { flex: 0 0 auto; } .product-shell .page-actions { min-width: 0; margin-left: auto; } .product-shell .page-actions .back-link, .product-shell .page-actions .global-button, .product-shell .page-actions .theme-toggle { display: none; } .product-shell .project-agent-launcher-top { max-width: 150px; min-width: 0; padding-inline: 8px; } .product-shell .project-agent-launcher-top > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .product-shell .project-agent-launcher-top small { display: none; } .product-metrics article { padding: 12px; } .product-tab { min-width: 68px; padding: 0 5px; } .product-tab svg { display: none; } .product-tab em { min-width: 16px; padding-inline: 4px; } .form-row, .score-grid, .requirement-meta { grid-template-columns: 1fr 1fr; } .card-heading { align-items: flex-start; } .item-footer, .prototype-item { align-items: flex-start; flex-direction: column; } .prototype-item-actions { width: 100%; } .prototype-item-actions > * { flex: 1; } #prototype-canvas-frame { min-height: 460px; } }
 @media (prefers-reduced-motion: reduce) { .product-skeleton { animation: none; } }
+
+/* 按项目维度：一个人同时维护十几个项目时，先看哪个项目在冒烟。 */
+.project-rollup { display: grid; gap: 2px; padding: 12px 14px; }
+.project-rollup:empty { display: none; }
+.project-rollup-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.project-rollup-head small { color: var(--muted, #748196); font-size: 11px; }
+.project-rollup-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 7px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.project-rollup-row:hover { background: var(--surface, #f4f7fb); border-color: var(--line, #dfe5ee); }
+.project-rollup-row.active { background: var(--accent-soft, #edf4ff); border-color: var(--accent-line, #c5d8ff); font-weight: 600; }
+.project-rollup-row.smoking { border-left: 3px solid #dc2626; }
+.project-rollup-name { white-space: nowrap; }
+.project-rollup-counts { color: var(--muted, #748196); font-size: 11px; text-align: right; }
+.project-rollup-counts em { font-style: normal; font-weight: 700; color: var(--ink, #182230); }
+.project-rollup-counts b { color: #dc2626; }
+
+/* .product-form label 有自己的 display 规则，会盖掉 [hidden] 的 UA 样式，
+   于是 hidden 属性看着设了却不生效。显式补一条。 */
+.product-form label[hidden], .product-form [hidden], #rice-details[hidden] { display: none !important; }

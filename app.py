@@ -2694,6 +2694,24 @@ def _initialize_extended_schema(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )"""
     )
+
+    # 产品作战室原本只有一个扁平的需求池：没有项目维度，也没有缺陷这个概念。
+    # 一个人同时维护十几个项目时，所有需求混在一张列表里等于没有优先级。
+    requirement_columns = {row[1] for row in connection.execute("PRAGMA table_info(product_requirements)").fetchall()}
+    for column, declaration in (
+        ("project_id", "TEXT NOT NULL DEFAULT ''"),
+        ("item_type", "TEXT NOT NULL DEFAULT 'requirement'"),
+        ("severity", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if column not in requirement_columns:
+            connection.execute(f"ALTER TABLE product_requirements ADD COLUMN {column} {declaration}")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_product_requirements_project ON product_requirements(project_id, item_type, updated_at DESC)")
+
+    feedback_columns = {row[1] for row in connection.execute("PRAGMA table_info(product_feedback)").fetchall()}
+    if "project_id" not in feedback_columns:
+        connection.execute("ALTER TABLE product_feedback ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_product_feedback_project ON product_feedback(project_id, updated_at DESC)")
+
     connection.execute("CREATE INDEX IF NOT EXISTS idx_product_decisions_requirement ON product_decisions(requirement_id, updated_at DESC)")
     connection.execute(
         """CREATE TABLE IF NOT EXISTS product_prototypes (
@@ -27137,6 +27155,7 @@ PRODUCT_DECISION_STATUSES = {"proposed", "decided", "revisiting", "superseded"}
 
 class ProductFeedbackRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
+    project_id: str = Field(default="", max_length=80)
     source: str = Field(default="", max_length=500)
     persona: str = Field(default="", max_length=240)
     importance: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
@@ -27149,8 +27168,18 @@ class ProductFeedbackUpdateRequest(BaseModel):
     linked_requirement_id: int | None = Field(default=None, ge=0)
 
 
+PRODUCT_ITEM_TYPES = ("requirement", "defect")
+PRODUCT_SEVERITIES = ("blocker", "major", "minor", "trivial")
+
+
 class ProductRequirementRequest(BaseModel):
     title: str = Field(min_length=1, max_length=240)
+    # 项目维度：为空表示"未归属"，保持旧数据可用而不是强制迁移。
+    project_id: str = Field(default="", max_length=80)
+    # 缺陷与需求走同一张表：状态机、证据关联、工作项联动完全一样，
+    # 区别只在 RICE 打分（需求）和严重级别 + 复现步骤（缺陷）。
+    item_type: str = Field(default="requirement", pattern="^(requirement|defect)$")
+    severity: str = Field(default="", max_length=20)
     problem: str = Field(default="", max_length=20_000)
     target_user: str = Field(default="", max_length=500)
     outcome: str = Field(default="", max_length=2_000)
@@ -27197,6 +27226,11 @@ class ProductPrototypeRequest(BaseModel):
 class ProductPrototypePublishRequest(BaseModel):
     summary: str = Field(default="发布 Cowart 画布版本", min_length=1, max_length=2_000)
     confirmed: bool = False
+
+
+def _product_defect_priority(severity: str) -> str:
+    """缺陷的优先级来自严重级别，而不是 RICE 分数。"""
+    return {"blocker": "urgent", "major": "high", "minor": "normal", "trivial": "low"}.get(str(severity or ""), "normal")
 
 
 def product_rice_score(reach: float, impact: float, confidence: float, effort: float) -> float:
@@ -27346,16 +27380,32 @@ def get_product_feedback(feedback_id: int) -> dict[str, Any] | None:
         connection.close()
 
 
-def list_product_requirements(limit: int = 200) -> list[dict[str, Any]]:
+def list_product_requirements(limit: int = 200, project_id: str = "", item_type: str = "") -> list[dict[str, Any]]:
+    """需求与缺陷共用一张表；project_id / item_type 为空表示不过滤。
+
+    缺陷不参与 RICE 排序（它们的 score 恒为 0），所以先按严重级别再按更新时间排，
+    否则所有缺陷会被需求压到列表最底下。
+    """
+    clauses: list[str] = []
+    values: list[Any] = []
+    if project_id:
+        clauses.append("product_requirements.project_id = ?")
+        values.append(project_id)
+    if item_type in PRODUCT_ITEM_TYPES:
+        clauses.append("product_requirements.item_type = ?")
+        values.append(item_type)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    values.append(max(1, min(int(limit), 500)))
     connection = db_connection()
     try:
         rows = connection.execute(
-            """SELECT product_requirements.*,
+            f"""SELECT product_requirements.*,
                 (SELECT COUNT(*) FROM product_feedback WHERE linked_requirement_id = product_requirements.id) AS evidence_count
-            FROM product_requirements
+            FROM product_requirements {where}
             ORDER BY CASE status WHEN 'review' THEN 0 WHEN 'planned' THEN 1 WHEN 'building' THEN 2 WHEN 'discovering' THEN 3 ELSE 4 END,
+                CASE severity WHEN 'blocker' THEN 0 WHEN 'major' THEN 1 WHEN 'minor' THEN 2 WHEN 'trivial' THEN 3 ELSE 4 END,
                 score DESC, updated_at DESC, id DESC LIMIT ?""",
-            (max(1, min(int(limit), 500)),),
+            values,
         ).fetchall()
         return [_product_requirement_row(row) for row in rows]
     finally:
@@ -27425,15 +27475,40 @@ def product_manager_summary() -> dict[str, int]:
     }
 
 
-def product_manager_overview(limit: int = 200) -> dict[str, Any]:
+def product_manager_overview(limit: int = 200, project_id: str = "") -> dict[str, Any]:
+    """project_id 为空时看全部；给定时只看该项目，用于按项目维度经营。"""
+    project_filter = valid_product_project_id(project_id) if project_id else ""
     feedback = list_product_feedback(limit)
-    requirements = list_product_requirements(limit)
+    if project_filter:
+        feedback = [item for item in feedback if str(item.get("project_id") or "") == project_filter]
+    requirements = list_product_requirements(limit, project_filter)
     decisions = list_product_decisions(limit)
     prototypes = list_product_prototypes(limit)
     active = [item for item in requirements if item.get("status") not in {"shipped", "paused"}]
     needs_evidence = [item for item in active if int(item.get("evidence_count") or 0) == 0]
     review_items = [item for item in requirements if item.get("status") == "review"]
+    open_defects = [item for item in active if item.get("item_type") == "defect"]
     summary = product_manager_summary()
+
+    # 按项目汇总：一个人同时维护十几个项目时，最需要先看"哪个项目在冒烟"。
+    by_project: dict[str, dict[str, Any]] = {}
+    project_titles = {str(item.get("id") or ""): str(item.get("title") or item.get("id") or "") for item in load_projects()}
+    for item in list_product_requirements(limit):
+        key = str(item.get("project_id") or "")
+        bucket = by_project.setdefault(key, {
+            "project_id": key,
+            "project_title": project_titles.get(key, "未归属"),
+            "requirements": 0, "defects": 0, "blockers": 0, "needs_evidence": 0,
+        })
+        if item.get("item_type") == "defect":
+            bucket["defects"] += 1
+            if item.get("severity") == "blocker" and item.get("status") not in {"shipped", "paused"}:
+                bucket["blockers"] += 1
+        else:
+            bucket["requirements"] += 1
+        if int(item.get("evidence_count") or 0) == 0 and item.get("status") not in {"shipped", "paused"}:
+            bucket["needs_evidence"] += 1
+
     return {
         "summary": summary,
         "feedback": feedback,
@@ -27441,11 +27516,25 @@ def product_manager_overview(limit: int = 200) -> dict[str, Any]:
         "decisions": decisions,
         "prototypes": prototypes,
         "cowart": product_cowart_status(),
+        "projects": {
+            "selected": project_filter,
+            "options": [{"id": pid, "title": title} for pid, title in sorted(project_titles.items(), key=lambda kv: kv[1])],
+            "rollup": sorted(by_project.values(), key=lambda item: (-item["blockers"], -item["defects"], -item["requirements"])),
+        },
+        "item_types": [
+            {"id": "requirement", "label": "需求", "scoring": "RICE"},
+            {"id": "defect", "label": "缺陷", "scoring": "severity"},
+        ],
+        "severities": [
+            {"id": "blocker", "label": "阻塞"}, {"id": "major", "label": "严重"},
+            {"id": "minor", "label": "一般"}, {"id": "trivial", "label": "轻微"},
+        ],
         "attention": {
             "new_feedback": [item for item in feedback if item.get("status") == "new"][:6],
             "needs_evidence": needs_evidence[:6],
             "review": review_items[:6],
-            "top_priority": sorted(active, key=lambda item: float(item.get("score") or 0), reverse=True)[:6],
+            "open_defects": sorted(open_defects, key=lambda item: PRODUCT_SEVERITIES.index(item.get("severity") or "minor") if (item.get("severity") in PRODUCT_SEVERITIES) else 9)[:6],
+            "top_priority": sorted([item for item in active if item.get("item_type") != "defect"], key=lambda item: float(item.get("score") or 0), reverse=True)[:6],
         },
         "scoring": {
             "name": "RICE",
@@ -27461,10 +27550,11 @@ def create_product_feedback(request: ProductFeedbackRequest) -> dict[str, Any]:
     try:
         cursor = connection.execute(
             """INSERT INTO product_feedback
-            (content, source, persona, importance, status, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'new', ?, ?, ?)""",
+            (content, project_id, source, persona, importance, status, metadata_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?)""",
             (
                 request.content.strip(),
+                valid_product_project_id(request.project_id),
                 request.source.strip(),
                 request.persona.strip(),
                 request.importance,
@@ -27516,17 +27606,40 @@ def _product_work_item_status(status: str) -> str:
     return "open"
 
 
+def valid_product_project_id(value: str) -> str:
+    """项目必须是工作台里真实存在的项目；未知一律落到未归属，不静默写脏数据。"""
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    known = {str(item.get("id") or "") for item in load_projects()}
+    if candidate in known:
+        return candidate
+    log.warning("忽略未知的产品项目归属：%s", candidate)
+    return ""
+
+
 def create_product_requirement(request: ProductRequirementRequest) -> dict[str, Any]:
     timestamp = now_iso()
-    score = product_rice_score(request.reach, request.impact, request.confidence, request.effort)
+    project_id = valid_product_project_id(request.project_id)
+    item_type = request.item_type if request.item_type in PRODUCT_ITEM_TYPES else "requirement"
+    if item_type == "defect":
+        # 缺陷不做 RICE：拿"触达 x 影响 / 成本"给 bug 排序没有意义，
+        # 它的优先级来自严重级别。score 留 0，排序时走 severity 分支。
+        severity = request.severity if request.severity in PRODUCT_SEVERITIES else "major"
+        score = 0.0
+    else:
+        severity = ""
+        score = product_rice_score(request.reach, request.impact, request.confidence, request.effort)
     connection = db_connection()
     try:
         cursor = connection.execute(
             """INSERT INTO product_requirements
-            (title, problem, target_user, outcome, scope, status, reach, impact, confidence, effort, score, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (title, project_id, item_type, severity, problem, target_user, outcome, scope, status,
+             reach, impact, confidence, effort, score, metadata_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                request.title.strip(), request.problem.strip(), request.target_user.strip(), request.outcome.strip(), request.scope.strip(),
+                request.title.strip(), project_id, item_type, severity,
+                request.problem.strip(), request.target_user.strip(), request.outcome.strip(), request.scope.strip(),
                 request.status, request.reach, request.impact, request.confidence, request.effort, score,
                 json.dumps(request.metadata, ensure_ascii=False), timestamp, timestamp,
             ),
@@ -27535,15 +27648,21 @@ def create_product_requirement(request: ProductRequirementRequest) -> dict[str, 
         connection.commit()
     finally:
         connection.close()
+    # 工作项归到实际项目上，这样首页卡片和联动矩阵能按项目看到它，
+    # 而不是所有需求缺陷都堆在 product-manager 一个桶里。
     item = create_work_item_record(
         title=request.title.strip(),
         description="\n\n".join(part for part in [request.problem.strip(), f"预期结果：{request.outcome.strip()}" if request.outcome.strip() else ""] if part),
-        kind="product_requirement",
+        kind="product_defect" if item_type == "defect" else "product_requirement",
         status=_product_work_item_status(request.status),
-        priority=_product_requirement_priority(score),
+        priority=_product_defect_priority(severity) if item_type == "defect" else _product_requirement_priority(score),
         source_project="product-manager",
-        target_project="product-manager",
-        metadata={"product_requirement_id": requirement_id, "product_status": request.status, "rice_score": score},
+        target_project=project_id or "product-manager",
+        metadata={
+            "product_requirement_id": requirement_id, "product_status": request.status,
+            "item_type": item_type, "project_id": project_id,
+            **({"severity": severity} if item_type == "defect" else {"rice_score": score}),
+        },
     )
     connection = db_connection()
     try:
@@ -28198,8 +28317,8 @@ def get_product_cowart_global_asset(prototype_id: int, asset_path: str) -> FileR
 
 
 @app.get("/api/product-manager/overview")
-def get_product_manager_overview(limit: int = 200) -> dict[str, Any]:
-    return product_manager_overview(limit=max(1, min(limit, 500)))
+def get_product_manager_overview(limit: int = 200, project_id: str = "") -> dict[str, Any]:
+    return product_manager_overview(limit=max(1, min(limit, 500)), project_id=project_id)
 
 
 @app.post("/api/product-manager/feedback")
