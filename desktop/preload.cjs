@@ -20,6 +20,42 @@ contextBridge.exposeInMainWorld("desktopShell", {
     if (typeof callback !== "function") return;
     ipcRenderer.on("tabs-changed", (_event, tabs) => callback(tabs));
   },
+  /** AI 浏览器中间的真实网页画布。外部页面在独立、持久化的安全会话里运行。 */
+  browserDock: {
+    open: (tabId, url, bounds) => ipcRenderer.invoke("browser-dock-open", String(tabId || ""), String(url || ""), bounds || {}),
+    activate: (tabId, bounds) => ipcRenderer.invoke("browser-dock-activate", String(tabId || ""), bounds || {}),
+    setBounds: (tabId, bounds) => ipcRenderer.invoke("browser-dock-bounds", String(tabId || ""), bounds || {}),
+    setVisible: (tabId, visible) => ipcRenderer.invoke("browser-dock-visible", String(tabId || ""), Boolean(visible)),
+    navigate: (tabId, command, url = "") => ipcRenderer.invoke("browser-dock-navigate", String(tabId || ""), String(command || ""), String(url || "")),
+    snapshot: (tabId) => ipcRenderer.invoke("browser-dock-snapshot", String(tabId || "")),
+    perform: (tabId, action) => ipcRenderer.invoke("browser-dock-perform", String(tabId || ""), action && typeof action === "object" ? action : {}),
+    close: (tabId) => ipcRenderer.send("browser-dock-close", String(tabId || "")),
+    destroy: () => ipcRenderer.send("browser-dock-destroy"),
+    bookmarks: {
+      list: () => ipcRenderer.invoke("browser-bookmarks-list"),
+      save: (bookmark) => ipcRenderer.invoke("browser-bookmarks-save", bookmark && typeof bookmark === "object" ? bookmark : {}),
+      remove: (id) => ipcRenderer.invoke("browser-bookmarks-remove", String(id || "")),
+    },
+    credentials: {
+      list: (tabId) => ipcRenderer.invoke("browser-credentials-list", String(tabId || "")),
+      save: (tabId, credential) => ipcRenderer.invoke("browser-credentials-save", String(tabId || ""), credential && typeof credential === "object" ? credential : {}),
+      capture: (tabId) => ipcRenderer.invoke("browser-credentials-capture", String(tabId || "")),
+      fill: (tabId, credentialId) => ipcRenderer.invoke("browser-credentials-fill", String(tabId || ""), String(credentialId || "")),
+      remove: (tabId, credentialId) => ipcRenderer.invoke("browser-credentials-remove", String(tabId || ""), String(credentialId || "")),
+    },
+    onState: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, browserState) => callback(browserState || {});
+      ipcRenderer.on("browser-dock-state", listener);
+      return () => ipcRenderer.removeListener("browser-dock-state", listener);
+    },
+    onOpenTabRequest: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, request) => callback(request || {});
+      ipcRenderer.on("browser-dock-open-tab-request", listener);
+      return () => ipcRenderer.removeListener("browser-dock-open-tab-request", listener);
+    },
+  },
 });
 
 contextBridge.exposeInMainWorld("auth", {

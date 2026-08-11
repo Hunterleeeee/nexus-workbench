@@ -304,7 +304,7 @@ class CloudDevTests(unittest.TestCase):
         self.assertEqual(record["source"], "")
         self.assertIsNotNone(receipt_table)
         self.assertEqual(version, app.DB_SCHEMA_VERSION)
-        self.assertEqual([row[0] for row in migrations], [1, 2, 3, 4, 5])
+        self.assertEqual([row[0] for row in migrations], list(range(1, app.DB_SCHEMA_VERSION + 1)))
 
     def test_feishu_callback_does_not_repeat_quick_command_on_retry(self):
         async def exercise():

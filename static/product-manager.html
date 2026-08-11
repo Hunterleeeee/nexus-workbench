@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <script src="/static/theme.js?v=0.3.153"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>产品作战室 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.153" />
+  <link rel="stylesheet" href="/static/product-manager.css?v=0.3.153" />
+</head>
+<body data-project-id="product-manager">
+  <div class="page-shell product-shell">
+    <header class="page-topbar">
+      <a class="page-brand" href="/" aria-label="返回工作台">
+        <span class="brand-mark-small" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+        <span><strong>Workbench</strong><small>PRODUCT ROOM</small></span>
+      </a>
+      <div class="page-actions">
+        <a class="back-link" href="/"><span>←</span><span>返回工作台</span></a>
+        <button id="global-settings-button" class="global-button unconfigured" type="button"><i class="dot"></i><span class="global-label">配置全局 LLM</span></button>
+      </div>
+    </header>
+
+    <main class="page-main">
+      <section class="page-heading product-heading">
+        <div>
+          <div class="eyebrow">PRODUCT DECISION SYSTEM</div>
+          <h1>产品作战室</h1>
+          <p class="lede">从真实反馈出发，把需求、优先级、决策和 PRD 连成一条可回溯的工作流。</p>
+        </div>
+        <div class="product-health" aria-live="polite">
+          <span class="health-dot"></span>
+          <div><strong id="product-health-label">正在读取产品现场</strong><small id="product-health-detail">同步反馈、需求和决策记录</small></div>
+        </div>
+      </section>
+
+      <section class="product-metrics" aria-label="产品工作概览">
+        <article><span>新反馈</span><strong id="metric-feedback">—</strong><small>等待归纳</small></article>
+        <article><span>进行中需求</span><strong id="metric-active">—</strong><small>不含已上线/暂停</small></article>
+        <article><span>待评审</span><strong id="metric-review">—</strong><small>需要产品判断</small></article>
+        <article class="metric-warning"><span>缺少证据</span><strong id="metric-evidence">—</strong><small>先补事实，再排优先级</small></article>
+      </section>
+
+      <nav class="product-tabs" role="tablist" aria-label="产品作战室分区">
+        <button class="product-tab active" type="button" role="tab" aria-selected="true" aria-controls="panel-today" data-product-tab="today">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M8 3v4M16 3v4M4 10h16M8 14h3M8 17h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>今日</span>
+        </button>
+        <button class="product-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-feedback" data-product-tab="feedback">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5h14v11H9l-4 4V5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>反馈</span><em id="tab-feedback-count">0</em>
+        </button>
+        <button class="product-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-requirements" data-product-tab="requirements">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>需求</span><em id="tab-requirement-count">0</em>
+        </button>
+        <button class="product-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-prototypes" data-product-tab="prototypes">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5.5h16v11H4zM8 20h8M12 16.5V20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="m9 9 2 2 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>原型</span><em id="tab-prototype-count">0</em>
+        </button>
+        <button class="product-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-decisions" data-product-tab="decisions">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.4"/></svg><span>决策</span><em id="tab-decision-count">0</em>
+        </button>
+      </nav>
+
+      <div id="product-status" class="product-status" role="status" aria-live="polite"></div>
+
+      <section id="panel-today" class="product-panel" role="tabpanel" data-product-panel="today">
+        <div class="today-grid">
+          <section class="card product-card focus-card">
+            <div class="card-heading"><div><span class="card-kicker">FOCUS</span><h2>现在要处理</h2></div><button class="quiet-action" type="button" data-open-agent>让 Agent 帮我判断</button></div>
+            <div id="today-focus-list" class="focus-list loading-list"><div class="product-skeleton"></div><div class="product-skeleton"></div></div>
+          </section>
+          <section class="card product-card priority-card">
+            <div class="card-heading"><div><span class="card-kicker">RICE</span><h2>优先级靠前</h2></div><small>分数只作排序建议</small></div>
+            <div id="today-priority-list" class="priority-list loading-list"><div class="product-skeleton"></div><div class="product-skeleton"></div></div>
+          </section>
+          <section class="card product-card decision-card">
+            <div class="card-heading"><div><span class="card-kicker">DECISION LOG</span><h2>最近决策</h2></div><button class="quiet-action" type="button" data-switch-tab="decisions">记一条</button></div>
+            <div id="today-decision-list" class="decision-preview loading-list"><div class="product-skeleton"></div></div>
+          </section>
+          <section class="card product-card workflow-card">
+            <span class="card-kicker">WORKFLOW</span><h2>把线索变成产品动作</h2>
+            <ol class="workflow-steps">
+              <li><span>01</span><div><strong>记反馈</strong><small>保留用户原话与来源</small></div></li>
+              <li><span>02</span><div><strong>建需求</strong><small>绑定问题、结果和证据</small></div></li>
+              <li><span>03</span><div><strong>做原型</strong><small>用 Cowart 无限画布验证交互</small></div></li>
+              <li><span>04</span><div><strong>做决策</strong><small>记录取舍与重评条件</small></div></li>
+              <li><span>05</span><div><strong>出 PRD</strong><small>交给文档工厂生成版本</small></div></li>
+            </ol>
+          </section>
+        </div>
+      </section>
+
+      <section id="panel-feedback" class="product-panel" role="tabpanel" data-product-panel="feedback" hidden>
+        <div class="product-workspace-grid">
+          <form id="feedback-form" class="card product-form">
+            <div class="card-heading"><div><span class="card-kicker">CAPTURE</span><h2>记录真实反馈</h2></div><small>不会覆盖原话</small></div>
+            <label>用户原话 / 反馈内容<textarea id="feedback-content" rows="6" maxlength="20000" placeholder="例如：每次评审前都要到三个群里翻反馈，容易漏掉关键问题。" required></textarea></label>
+            <div class="form-row">
+              <label>来源<input id="feedback-source" maxlength="500" placeholder="用户访谈、群聊、客服…" /></label>
+              <label>用户/角色<input id="feedback-persona" maxlength="240" placeholder="运营、采购、新用户…" /></label>
+            </div>
+            <label>重要程度<select id="feedback-importance"><option value="normal">一般</option><option value="high">重要</option><option value="urgent">紧急</option><option value="low">低</option></select></label>
+            <button class="primary-button" type="submit">保存为反馈证据</button>
+            <p class="form-note">保存后会登记 Artifact；转成需求时自动建立证据关系。</p>
+          </form>
+          <section class="card product-list-card">
+            <div class="card-heading"><div><span class="card-kicker">EVIDENCE INBOX</span><h2>反馈池</h2></div><div class="compact-filter"><button class="active" type="button" data-feedback-filter="active">待处理</button><button type="button" data-feedback-filter="all">全部</button></div></div>
+            <div id="feedback-list" class="feedback-list loading-list"><div class="product-skeleton"></div><div class="product-skeleton"></div></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="panel-requirements" class="product-panel" role="tabpanel" data-product-panel="requirements" hidden>
+        <div class="product-workspace-grid requirements-grid">
+          <form id="requirement-form" class="card product-form">
+            <div class="card-heading"><div><span class="card-kicker">REQUIREMENT</span><h2 id="requirement-form-title">新建产品需求</h2></div><button id="clear-feedback-link" class="text-button" type="button" hidden>取消关联</button></div>
+            <input id="requirement-feedback-id" type="hidden" />
+            <div id="linked-feedback-preview" class="linked-feedback-preview" hidden></div>
+            <label>需求名称<input id="requirement-title" maxlength="240" placeholder="一句话描述要解决的问题" required /></label>
+            <label>用户问题<textarea id="requirement-problem" rows="4" maxlength="20000" placeholder="谁在什么场景遇到了什么问题？现有替代方案为什么不够？"></textarea></label>
+            <div class="form-row">
+              <label>目标用户<input id="requirement-user" maxlength="500" placeholder="核心用户或角色" /></label>
+              <label>预期结果<input id="requirement-outcome" maxlength="2000" placeholder="希望用户或业务发生什么变化" /></label>
+            </div>
+            <details class="score-details">
+              <summary>设置 RICE 优先级</summary>
+              <div class="score-grid">
+                <label>Reach<input id="requirement-reach" type="number" min="0" step="1" value="1" /></label>
+                <label>Impact<select id="requirement-impact"><option value="0.5">0.5 轻微</option><option value="1" selected>1 中等</option><option value="2">2 较大</option><option value="3">3 巨大</option></select></label>
+                <label>Confidence<input id="requirement-confidence" type="number" min="0" max="100" step="5" value="50" /></label>
+                <label>Effort<input id="requirement-effort" type="number" min="0.1" step="0.5" value="1" /></label>
+              </div>
+              <p>预计分数 <strong id="rice-preview">0.50</strong> · Reach × Impact × Confidence / Effort</p>
+            </details>
+            <button class="primary-button" type="submit">加入需求池</button>
+          </form>
+          <section class="card product-list-card">
+            <div class="card-heading"><div><span class="card-kicker">BACKLOG</span><h2>需求池</h2></div><select id="requirement-filter" aria-label="筛选需求状态"><option value="active">进行中</option><option value="review">待评审</option><option value="planned">已规划</option><option value="building">开发中</option><option value="all">全部</option></select></div>
+            <div id="requirement-list" class="requirement-list loading-list"><div class="product-skeleton"></div><div class="product-skeleton"></div></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="panel-prototypes" class="product-panel" role="tabpanel" data-product-panel="prototypes" hidden>
+        <section class="card prototype-overview-card">
+          <div class="prototype-overview-copy">
+            <span class="card-kicker">COWART CANVAS</span>
+            <h2>从需求直接进入无限画布</h2>
+            <p>先在需求卡片上创建原型；画布改动自动保存在 Workbench，只有“发布版本”才会登记为不可变 Artifact。</p>
+          </div>
+          <div class="cowart-integration-state" id="cowart-integration-state" aria-live="polite">
+            <span class="integration-dot"></span>
+            <div><strong>正在检查 Cowart</strong><small>统计上报已关闭 · 本地隔离存储</small></div>
+          </div>
+        </section>
+
+        <div id="prototype-browser" class="prototype-browser-grid">
+          <section class="card product-list-card prototype-list-card">
+            <div class="card-heading"><div><span class="card-kicker">PROTOTYPES</span><h2>原型列表</h2></div><small id="prototype-list-summary">读取中…</small></div>
+            <div id="prototype-list" class="prototype-list loading-list"><div class="product-skeleton"></div><div class="product-skeleton"></div></div>
+          </section>
+          <aside class="card prototype-guide-card">
+            <span class="card-kicker">VERSION LOOP</span>
+            <h2>什么时候发布版本？</h2>
+            <ol>
+              <li><span>1</span><p><strong>画布自动保存</strong><small>探索过程不会制造大量正式版本。</small></p></li>
+              <li><span>2</span><p><strong>评审前发布</strong><small>冻结当前快照和 HTML 草稿。</small></p></li>
+              <li><span>3</span><p><strong>关系可追溯</strong><small>版本会关联需求 WorkItem 与 Artifact。</small></p></li>
+            </ol>
+            <p class="prototype-license-note">许可提醒：Cowart 为 MIT；生产使用 tldraw 前需确认适用授权。</p>
+          </aside>
+        </div>
+
+        <section id="prototype-canvas-workspace" class="card prototype-canvas-workspace" hidden>
+          <header class="prototype-canvas-toolbar">
+            <div><span class="card-kicker">LIVE CANVAS</span><h2 id="prototype-canvas-title">Cowart 原型</h2><small id="prototype-canvas-status" role="status" aria-live="polite">画布会自动保存</small></div>
+            <div class="prototype-canvas-actions">
+              <a id="prototype-fullscreen-link" class="secondary-button" href="#" target="_blank" rel="noopener">全屏打开</a>
+              <button id="prototype-publish-button" class="primary-button" type="button">发布版本</button>
+              <button id="prototype-close-button" class="secondary-button" type="button">返回列表</button>
+            </div>
+          </header>
+          <iframe id="prototype-canvas-frame" title="Cowart 无限画布" sandbox="allow-scripts allow-same-origin allow-downloads allow-forms allow-modals" loading="lazy"></iframe>
+        </section>
+      </section>
+
+      <section id="panel-decisions" class="product-panel" role="tabpanel" data-product-panel="decisions" hidden>
+        <div class="product-workspace-grid decisions-grid">
+          <form id="decision-form" class="card product-form">
+            <div class="card-heading"><div><span class="card-kicker">DECISION</span><h2>记录一次产品决策</h2></div><small>保留取舍理由</small></div>
+            <label>关联需求<select id="decision-requirement"><option value="0">不关联具体需求</option></select></label>
+            <label>决策标题<input id="decision-title" maxlength="240" placeholder="例如：首版只支持手动导入反馈" required /></label>
+            <label>最终决定<textarea id="decision-content" rows="4" maxlength="20000" placeholder="明确做什么，以及不做什么。" required></textarea></label>
+            <label>为什么这样决定<textarea id="decision-rationale" rows="3" maxlength="20000" placeholder="证据、约束和主要取舍"></textarea></label>
+            <label>其他方案<input id="decision-alternatives" maxlength="10000" placeholder="考虑过但未选择的方案" /></label>
+            <label>重新评估条件<input id="decision-trigger" maxlength="2000" placeholder="出现什么事实时需要重看这个决定" /></label>
+            <button class="primary-button" type="submit">保存决策记录</button>
+          </form>
+          <section class="card product-list-card">
+            <div class="card-heading"><div><span class="card-kicker">DECISION LOG</span><h2>决策时间线</h2></div><small>最新在前</small></div>
+            <div id="decision-list" class="decision-list loading-list"><div class="product-skeleton"></div><div class="product-skeleton"></div></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/request.js?v=0.3.153"></script>
+  <script src="/static/llm-settings.js?v=0.3.153"></script>
+  <script src="/static/project.js?v=0.3.153"></script>
+  <script src="/static/product-manager.js?v=0.3.153"></script>
+</body>
+</html>

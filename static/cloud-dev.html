@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
+  <script src="/static/theme.js?v=0.3.153"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>云开发入口 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.153" />
   <style>
     .cloud-layout { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(280px,.9fr); gap:18px; max-width:1120px; margin:0 auto; }
     .cloud-card { padding:22px; }
@@ -27,6 +28,18 @@
     .cloud-check.warn { border-color:#f0d39c; background:#fffaf0; }
     .cloud-policy { margin:0; padding-left:18px; color:#64748b; font-size:12px; line-height:1.8; }
     @media (max-width:760px) { .cloud-layout { grid-template-columns:1fr; } }
+
+  html[data-theme="dark"] .cloud-layout { color: var(--ink, #eff5f5); }
+  html[data-theme="dark"] .cloud-muted { color: var(--faint, #71808d); }
+  html[data-theme="dark"] .cloud-form input { color: var(--ink, #eff5f5); background: var(--surface, #111820); border-color: var(--line, #273442); }
+  html[data-theme="dark"] .cloud-output { background: var(--panel-soft, #151e28); color: var(--ink, #eff5f5); }
+  html[data-theme="dark"] .cloud-workspace-item { background: var(--surface, #111820); border-color: var(--line, #273442); color: var(--ink, #eff5f5); }
+  html[data-theme="dark"] .cloud-workspace-item small { color: var(--faint, #71808d); }
+  html[data-theme="dark"] .cloud-check { background: var(--panel-soft, #151e28); border-color: var(--line, #273442); color: var(--ink, #eff5f5); }
+  html[data-theme="dark"] .cloud-check small { color: var(--faint, #71808d); }
+  html[data-theme="dark"] .cloud-check.ok { border-color: #2e4a40; }
+  html[data-theme="dark"] .cloud-check.warn { border-color: #4a3d24; background: #33291a; }
+  html[data-theme="dark"] .cloud-card { color: var(--ink, #eff5f5); }
   </style>
 </head>
 <body>
@@ -40,7 +53,8 @@
       </div>
     </main>
   </div>
-  <script src="/static/request.js?v=0.3.140"></script>
+  <script src="/static/request.js?v=0.3.153"></script>
+  <script src="/static/project.js?v=0.3.153"></script>
   <script>
     const $ = (selector) => document.querySelector(selector);
     const escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");

@@ -1,17 +1,18 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
+  <script src="/static/theme.js?v=0.3.153"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>自动化中心 · Workbench</title>
-  <link rel="stylesheet" href="/static/platform.css?v=0.3.140" />
+  <link rel="stylesheet" href="/static/platform.css?v=0.3.153" />
 </head>
 <body data-page="automation">
   <div class="platform-shell">
-    <header class="platform-topbar"><a class="platform-brand" href="/"><span class="platform-brand-mark">↗</span><span><strong>Workbench</strong><small>平台工具</small></span></a><nav class="platform-nav" aria-label="平台导航"><a class="active" href="/automation">自动化中心</a><a href="/git">Git 项目中心</a><a href="/github-tools">GitHub 工具目录</a><a href="/approvals">审批与交付</a></nav><span class="platform-version">v0.3.140</span></header>
+    <header class="platform-topbar"><a class="platform-brand" href="/"><span class="platform-brand-mark">↗</span><span><strong>Workbench</strong><small>平台工具</small></span></a><nav class="platform-nav" aria-label="平台导航"><a class="active" href="/automation">自动化中心</a><a href="/git">Git 项目中心</a><a href="/github-tools">GitHub 工具目录</a><a href="/approvals">审批与交付</a></nav><span class="platform-version">v0.3.153</span></header>
     <main class="platform-main">
-      <section class="platform-hero"><div><span class="platform-eyebrow">自动化中心</span><h1>让任务按计划发生</h1><p>统一管理同步、抓取、行情刷新、服务器巡检、知识索引和联动证据。每次运行都保留状态、错误和下一步，不把定时器当成完成证明。</p></div><div class="platform-hero-actions"><span id="page-status" class="platform-status" role="status">正在读取平台状态…</span><button id="refresh-automation" class="platform-button-secondary" type="button" onclick="location.reload()">刷新</button></div></section>
+      <section class="platform-hero"><div><span class="platform-eyebrow">自动化中心</span><h1>让任务按计划发生</h1><p>统一管理同步、抓取、行情刷新、服务器巡检、知识索引和联动证据。每次运行都保留状态、错误和下一步，不把定时器当成完成证明。</p></div><div class="platform-hero-actions"><span id="page-status" class="platform-status" role="status">正在读取平台状态…</span><button id="refresh-automation" class="platform-button-secondary" type="button" onclick="loadAutomations()">刷新状态</button></div></section>
       <section class="platform-kpi-row"><div class="platform-kpi"><strong id="rule-count">—</strong><span>自动化规则</span></div><div class="platform-kpi"><strong id="plan-count">—</strong><span>执行计划</span></div><div class="platform-kpi"><strong id="recovery-count">—</strong><span>失败运行记录</span></div></section>
       <section class="platform-grid two">
         <section class="platform-card elevated"><div class="platform-card-head"><div><h2 id="automation-form-title">创建自动化规则</h2><p>周期格式使用 <code>every:秒数</code>；留空表示仅手动运行。点击规则列表中的「编辑」可修改已有规则。</p></div></div><form id="automation-form" class="platform-form"><label>规则名称<input id="automation-name" required maxlength="160" placeholder="例如：每天刷新行情并生成观察" /></label><div class="platform-form-grid"><label>动作<select id="automation-kind" required></select></label><label>负责项目<select id="automation-project" required></select></label></div><div class="platform-form-grid"><label>运行周期<select id="automation-schedule"><option value="">仅手动</option><option value="every:300">每 5 分钟</option><option value="every:1800">每 30 分钟</option><option value="every:3600">每小时</option><option value="every:86400">每天</option></select></label><label class="platform-checkbox"><input id="automation-enabled" type="checkbox" checked />创建后启用</label></div><label>提醒标题<input id="automation-notice-title" maxlength="160" placeholder="可选：仅通知动作使用" /></label><label>提醒内容<textarea id="automation-notice-body" maxlength="1000" placeholder="可选：仅通知动作使用"></textarea></label><label>入口地址<input id="automation-notice-href" maxlength="500" placeholder="/ 或 /projects/market" /></label><div class="platform-form-actions"><button id="automation-cancel-edit" class="platform-button-secondary hidden" type="button">取消编辑</button><button class="platform-button orange" type="submit">保存规则</button></div></form></section>
@@ -23,6 +24,6 @@
       <footer class="platform-footer"><span>Workbench · local-first · 所有运行记录写入本地 SQLite</span><span>平台动作不自动执行高风险外部变更</span></footer>
     </main>
   </div>
-  <script src="/static/request.js?v=0.3.140"></script><script src="/static/platform.js?v=0.3.140"></script>
+  <script src="/static/request.js?v=0.3.153"></script><script src="/static/platform.js?v=0.3.153"></script>
 </body>
 </html>

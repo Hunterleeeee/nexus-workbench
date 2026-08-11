@@ -21,16 +21,19 @@ const api = async (url, options = {}) => {
 };
 const jsonOptions = (body, method = "POST") => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.140"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.153"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
   const topbar = qs(".platform-topbar");
   if (!topbar || topbar.querySelector("[data-theme-toggle]")) return;
-  const saved = localStorage.getItem("workbench-theme") || "light";
-  document.documentElement.dataset.theme = saved;
+  const theme = window.WorkbenchTheme;
+  if (!theme) document.documentElement.dataset.theme = localStorage.getItem("workbench-theme") === "dark" ? "dark" : "light";
   const button = document.createElement("button");
-  button.type = "button"; button.className = "theme-toggle"; button.dataset.themeToggle = "true"; button.title = "切换浅色/深色主题";
-  const render = () => { const dark = document.documentElement.dataset.theme === "dark"; button.textContent = dark ? "浅色" : "深色"; button.setAttribute("aria-label", dark ? "切换浅色主题" : "切换深色主题"); };
-  button.addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("workbench-theme", next); render(); });
-  topbar.append(button); render();
+  button.type = "button"; button.className = "theme-toggle";
+  topbar.append(button);
+  if (theme) theme.bindToggle(button, { text: true });
+  else {
+    const render = () => { const dark = document.documentElement.dataset.theme === "dark"; button.textContent = dark ? "浅色" : "深色"; button.setAttribute("aria-label", dark ? "切换到浅色模式" : "切换到深色模式"); button.setAttribute("aria-pressed", String(dark)); };
+    button.addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("workbench-theme", next); render(); }); render();
+  }
 }
 function status(id, message, tone = "") {
   const node = qs(`#${id}`);

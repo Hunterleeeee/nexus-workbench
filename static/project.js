@@ -10,24 +10,21 @@ function formatDate(value) {
 }
 
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.140"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
-  const actions = document.querySelector(".page-actions, .actions");
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.153"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  const theme = window.WorkbenchTheme;
+  if (!theme) document.documentElement.dataset.theme = localStorage.getItem("workbench-theme") === "dark" ? "dark" : "light";
+  const actions = document.querySelector(".page-actions, .actions, .bar-right, .topbar-right");
   if (!actions || actions.querySelector("[data-theme-toggle]")) return;
-  // 页面已显式声明 data-theme（如深色设计页）时尊重页面，不覆盖；
-  // 否则沿用用户偏好（默认浅色）。
-  if (!document.documentElement.hasAttribute("data-theme")) {
-    const saved = localStorage.getItem("workbench-theme") || "dark";
-    document.documentElement.dataset.theme = saved;
-  }
   const button = document.createElement("button");
   button.type = "button";
   button.className = "theme-toggle";
-  button.dataset.themeToggle = "true";
-  button.title = "切换浅色/深色主题";
-  const render = () => { const dark = document.documentElement.dataset.theme === "dark"; button.textContent = dark ? "浅色" : "深色"; button.setAttribute("aria-label", dark ? "切换浅色主题" : "切换深色主题"); };
-  button.addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("workbench-theme", next); render(); });
   actions.append(button);
-  render();
+  if (theme) theme.bindToggle(button, { text: true });
+  else {
+    const render = () => { const dark = document.documentElement.dataset.theme === "dark"; button.textContent = dark ? "浅色" : "深色"; button.setAttribute("aria-label", dark ? "切换到浅色模式" : "切换到深色模式"); button.setAttribute("aria-pressed", String(dark)); };
+    button.addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("workbench-theme", next); render(); });
+    render();
+  }
 }
 
 const PROJECT_AGENT_QUICK_ACTIONS = {
@@ -40,7 +37,9 @@ const PROJECT_AGENT_QUICK_ACTIONS = {
   crawl4ai: ["总结最近一次研究的结论", "标出证据最薄弱的地方", "把结果整理成笔记提纲"],
   aihot: ["筛出今天最值得继续研究的热点", "解释这条热点为什么值得关注", "把机会线索交给想法分析"],
   "idea-analysis": ["梳理当前想法的关键假设", "生成 7 天最小验证计划", "根据已有证据比较继续、暂停还是转向"],
+  "product-manager": ["总结今天最需要处理的产品事项", "找出证据最薄弱的需求", "比较需求优先级并给出评审问题", "把高优需求整理成 PRD 提纲"],
   "cid-dashboard": ["比较最近看板中的项目机会", "找出最值得继续研究的项目", "把当前机会整理成验证任务"],
+  "ai-learning": ["带我完成今天的课程", "用我的工作场景再举一个例子", "检查我的练习并给反馈", "根据最近进度调整学习计划"],
 };
 
 // requestJson 统一由 /static/request.js 暴露为 window.requestJson，
@@ -75,7 +74,10 @@ function wbShowRetry(host, message, retryLabel = "重新加载") {
   host.innerHTML = wbRetryMarkup(message, retryLabel);
 }
 
-window.WorkbenchUX = { requestJson, wbSetBusy, wbRetryMarkup, wbShowRetry };
+// Merge instead of replace: request.js loads first and registers
+// WorkbenchRequestError / friendlyErrorMessage / DEFAULT_TIMEOUT_MS on the
+// same object.  A plain assignment here silently dropped them.
+window.WorkbenchUX = Object.assign(window.WorkbenchUX || {}, { requestJson, wbSetBusy, wbRetryMarkup, wbShowRetry });
 
 function ensureGlobalSettingsEntry() {
   if (document.querySelector("#global-settings-button, [data-global-settings-link], .global-button")) return;
@@ -137,7 +139,11 @@ function agentResultContractMarkup(contract = {}) {
   const coverageText = coverage.total ? `引用覆盖：${coverage.with_locator || 0}/${coverage.total} 可定位 · ${coverage.with_data_time || 0}/${coverage.total} 有数据时间` : "";
   const plan = contract.execution_plan || {};
   const planTrace = agentExecutionPlanTrace(plan);
-  const trace = [contract.data_as_of ? `数据时间：${escapeHtml(contract.data_as_of)}` : "", refs ? `来源：${refs}` : "", coverageText, planTrace, contract.artifact_ids?.length ? `Artifact ${contract.artifact_ids.length} 份` : "", contract.work_item_ids?.length ? `WorkItem ${contract.work_item_ids.length} 条` : "", contract.relation_ids?.length ? `Relation ${contract.relation_ids.length} 条` : "", review, contract.replay?.href ? `<a href="${escapeHtml(contract.replay.href)}" target="_blank" rel="noopener noreferrer">查看 Run 回放</a>` : ""].filter(Boolean).join(" · ");
+  const memoryTrace = contract.memory_refs?.length ? `使用了 ${contract.memory_refs.length} 条已确认记忆` : "";
+  const memoryUpdateTrace = contract.memory_updates?.length ? `本轮发现 ${contract.memory_updates.length} 条记忆` : "";
+  const memoryContext = contract.memory_context || {};
+  const memoryBudgetTrace = memoryContext.chars ? `记忆上下文 ${Number(memoryContext.chars)} 字${Number(memoryContext.calls) > 1 ? ` / ${Number(memoryContext.calls)} 次调用` : ""}` : "";
+  const trace = [contract.data_as_of ? `数据时间：${escapeHtml(contract.data_as_of)}` : "", refs ? `来源：${refs}` : "", coverageText, memoryTrace, memoryBudgetTrace, memoryUpdateTrace, planTrace, contract.artifact_ids?.length ? `Artifact ${contract.artifact_ids.length} 份` : "", contract.work_item_ids?.length ? `WorkItem ${contract.work_item_ids.length} 条` : "", contract.relation_ids?.length ? `Relation ${contract.relation_ids.length} 条` : "", review, contract.replay?.href ? `<a href="${escapeHtml(contract.replay.href)}" target="_blank" rel="noopener noreferrer">查看 Run 回放</a>` : ""].filter(Boolean).join(" · ");
   return `<details class="project-agent-result-contract"><summary>结构化结果 · ${escapeHtml(contract.summary || "查看结论与证据")}</summary>${body || `<p>${escapeHtml(contract.summary || "暂无结构化摘要")}</p>`}${citations ? `<div class="project-agent-citations"><strong>可回溯来源</strong><p>${citations}</p></div>` : ""}${trace ? `<div class="project-agent-citations"><strong>审计链</strong><p>${trace}</p></div>` : ""}</details>`;
 }
 
@@ -293,7 +299,10 @@ function setupProjectAgent() {
   let lastAnswer = "";
   let handoffConfirmationPending = false;
   status?.setAttribute("role", "status"); status?.setAttribute("aria-live", "polite");
-  if (status && window.MutationObserver) new MutationObserver(() => { const isError = /失败|错误|无法|不可|请求失败/.test(status.textContent || ""); status.setAttribute("role", isError ? "alert" : "status"); status.setAttribute("aria-live", isError ? "assertive" : "polite"); }).observe(status, { childList: true, characterData: true, subtree: true });
+  if (status instanceof Node && window.MutationObserver) {
+    const statusObserver = new MutationObserver(() => { const isError = /失败|错误|无法|不可|请求失败/.test(status.textContent || ""); status.setAttribute("role", isError ? "alert" : "status"); status.setAttribute("aria-live", isError ? "assertive" : "polite"); });
+    statusObserver.observe(status, { childList: true, characterData: true, subtree: true });
+  }
 
   function setOpen(open) {
     panel.classList.toggle("hidden", !open);

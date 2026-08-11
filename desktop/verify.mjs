@@ -41,6 +41,9 @@ for (const forbidden of ["require(\"fs\")", "require(\"node:fs\")", "process.env
   if (preload.includes(forbidden)) fail(`preload.cjs 出现不允许的内容：${forbidden}`);
 }
 if (!preload.includes("ipcRenderer.on(\"tabs-changed\"")) fail("preload.cjs 缺少标签变化订阅");
+for (const required of ["browserDock", "browser-dock-open", "browser-dock-activate", "browser-dock-snapshot", "browser-dock-perform", "browser-dock-state", "browser-bookmarks-list", "browser-credentials-fill"]) {
+  if (!preload.includes(required)) fail(`preload.cjs 缺少真实网页桥：${required}`);
+}
 if (!main.includes("WebContentsView")) fail("main.cjs 缺少 WebContentsView 标签系统");
 if (!main.includes("open-tab") || !main.includes("tab-switch") || !main.includes("tab-close") || !main.includes("tab-new")) {
   fail("main.cjs 缺少标签 IPC（open-tab/tab-switch/tab-close/tab-new）");
@@ -49,6 +52,9 @@ if (!readDesktop("shell.html").includes('id="tabbar"')) fail("shell.html 缺少�
 if (!main.includes("open-web-window")) fail("main.cjs 缺少 open-web-window 能力注册");
 if (!main.includes("parseSafeWebUrl(url)") && !main.includes("parseSafeWebUrl(")) fail("main.cjs 打开外链前必须校验 URL");
 if (!main.includes('webContents.on("login"')) fail("main.cjs 缺少 Basic Auth 登录处理");
+for (const required of ["BROWSER_DOCK_PARTITION", "parseBrowserDockUrl", "setPermissionRequestHandler", "BROWSER_DOCK_SNAPSHOT_SCRIPT", "requiresConfirmation", "measureBrowserDockFit", "naturalContentWidth", "safeStorage.encryptString", "safeStorage.decryptString", "workspace.docks.set(browserTabId, dock)"]) {
+  if (!main.includes(required)) fail(`main.cjs 缺少 AI 浏览器安全能力：${required}`);
+}
 
 const manifest = JSON.parse(read("static/manifest.webmanifest"));
 if (manifest.start_url !== "/" || manifest.scope !== "/" || manifest.display !== "standalone") {

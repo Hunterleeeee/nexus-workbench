@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 浏览器状态测试页</title>
+  <style>
+    body { margin: 0; padding: 40px; color: #18202a; background: #f6f7f9; font: 16px/1.6 system-ui, sans-serif; }
+    main { max-width: 720px; margin: auto; padding: 28px; background: white; border: 1px solid #dfe3e8; border-radius: 16px; }
+    label { display: grid; gap: 5px; margin: 16px 0; }
+    input, textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #cdd4dc; border-radius: 8px; font: inherit; }
+    .spacer { height: 900px; margin-top: 24px; padding-top: 24px; border-top: 1px solid #e8ebef; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="page-title">状态测试页</h1>
+    <p>用于验证不同标签页的输入内容、滚动位置和登录框不会在切换时重载。</p>
+    <label>普通输入<input id="state-input" autocomplete="off" placeholder="输入标签专属内容" /></label>
+    <p id="state-output">当前输入：空</p>
+    <label>账号<input id="username" name="username" autocomplete="username" /></label>
+    <label>密码<input id="password" name="password" type="password" autocomplete="current-password" /></label>
+    <div class="spacer"><strong>页面底部</strong></div>
+  </main>
+  <script>
+    document.getElementById("page-title").textContent = new URLSearchParams(location.search).get("tab") || "状态测试页";
+    document.getElementById("state-input").addEventListener("input", (event) => {
+      document.getElementById("state-output").textContent = `当前输入：${event.target.value || "空"}`;
+    });
+  </script>
+</body>
+</html>

@@ -9,6 +9,26 @@ import app
 
 
 class WorkbenchStatusTests(unittest.TestCase):
+    def test_all_project_pages_default_to_shared_light_theme(self):
+        root = Path(__file__).resolve().parents[1]
+        version = (root / "VERSION").read_text(encoding="utf-8").strip()
+        pages = sorted((root / "static").glob("*.html"))
+        self.assertGreaterEqual(len(pages), 18)
+        for page in pages:
+            source = page.read_text(encoding="utf-8")
+            self.assertIn('data-theme="light"', source, page.name)
+            self.assertIn(f'/static/theme.js?v={version}', source, page.name)
+
+        dashboard = (root / "projects" / "cid-dashboard-v2.html").read_text(encoding="utf-8")
+        self.assertIn('data-theme="light"', dashboard)
+        self.assertIn("THEME_KEY='workbench-theme'", dashboard)
+        self.assertNotIn("prefers-color-scheme:dark", dashboard)
+
+        theme_source = (root / "static" / "theme.js").read_text(encoding="utf-8")
+        self.assertIn('const DEFAULT_THEME = "light"', theme_source)
+        self.assertIn('window.addEventListener("storage"', theme_source)
+        self.assertIn('button.setAttribute("aria-pressed"', theme_source)
+
     def test_service_worker_allows_root_scope_and_is_not_cached(self):
         root = Path(__file__).resolve().parents[1]
         version = (root / "VERSION").read_text(encoding="utf-8").strip()
@@ -62,7 +82,7 @@ class WorkbenchStatusTests(unittest.TestCase):
             self.assertIn("companion-toggle", source, page)
         web_research_page = (root / "static" / "web-research.html").read_text(encoding="utf-8")
         self.assertIn("address-form", web_research_page)
-        self.assertIn("AI 伴读", web_research_page)
+        self.assertIn("随时问我", web_research_page)
         self.assertNotIn("gemini-toggle", web_research_page)
         self.assertIn("applyIncomingContext", web_research)
         self.assertIn('id="research-bookmarklet"', (root / "static" / "web-research.html").read_text(encoding="utf-8"))

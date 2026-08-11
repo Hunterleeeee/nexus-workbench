@@ -18,3 +18,4 @@ outputs/
 _to_delete/
 .understand-anything/
 .workbuddy/
+dist/

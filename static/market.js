@@ -20,6 +20,20 @@ function pctColor(value) { const n = Number(value); if (!Number.isFinite(n)) ret
 
 /* ── 自选与行情 ── */
 let lastQuotes = [];
+function syncMarketDependents(market) {
+  document.dispatchEvent(new CustomEvent("market:state-updated", { detail: { market } }));
+  if ((market?.watchlist || []).length) {
+    loadAIScan();
+    loadPortfolio();
+    return;
+  }
+  const scanState = $("#ai-scan-state");
+  const scanAnswer = $("#ai-scan-answer");
+  const portfolio = $("#portfolio-check");
+  if (scanState) scanState.textContent = "等待自选";
+  if (scanAnswer) scanAnswer.innerHTML = '<div class="m2-empty">添加自选并刷新行情后，AI 才会整理这些股票发生了什么。</div>';
+  if (portfolio) portfolio.innerHTML = '<div class="m2-empty">当前没有自选，组合体检不会使用已经删除的旧行情。</div>';
+}
 function renderQuotes(market) {
   const watchlist = market.watchlist || [];
   const quotes = market.quotes || [];
@@ -29,12 +43,22 @@ function renderQuotes(market) {
   $("#checked-at").textContent = market.checked_at ? `最近同步 ${formatDate(market.checked_at)}` : "尚未同步";
   const upCount = quotes.filter((q) => Number(q.change_pct) > 0).length;
   const downCount = quotes.filter((q) => Number(q.change_pct) < 0).length;
-  $("#market-kpi-today").innerHTML = `<span class="kpi-up">▲ ${upCount} 涨</span><span class="kpi-down">▼ ${downCount} 跌</span>`;
+  $("#market-kpi-today").innerHTML = watchlist.length ? `<span class="kpi-up">▲ ${upCount} 涨</span><span class="kpi-down">▼ ${downCount} 跌</span>` : "";
+  const ruleBySymbol = new Map(watchlist.map((item) => [String(item.symbol || "").toLowerCase().replace(/^[a-z]+/, ""), item]));
   const rows = quotes.map((q) => {
     const change = Number(q.change_pct);
-    return `<article class="quote-row"><div class="quote-main"><strong>${escapeHtml(q.name || q.symbol)}</strong><small>${escapeHtml(String(q.symbol || "").toUpperCase())} · 开 ${escapeHtml(formatQuoteValue(q.open))} · 量 ${escapeHtml(formatQuoteValue(q.volume))}</small></div><div class="quote-trend">${sparkline(q.trend, change >= 0)}</div><div class="quote-price">${escapeHtml(formatQuoteValue(q.price))}<small>PE ${escapeHtml(q.pe != null ? q.pe : "—")}</small></div><div class="quote-change ${pctClass(change)}">${pctText(change)}</div></article>`;
+    const symbol = String(q.symbol || "");
+    const rule = ruleBySymbol.get(symbol.toLowerCase().replace(/^[a-z]+/, "")) || {};
+    const lines = [
+      rule.buy_below ? `<span class="buy-line">买 ≤ ${escapeHtml(formatQuoteValue(rule.buy_below))}</span>` : "",
+      rule.sell_above ? `<span class="sell-line">卖 ≥ ${escapeHtml(formatQuoteValue(rule.sell_above))}</span>` : "",
+      rule.stop_below ? `<span class="stop-line">停 &lt; ${escapeHtml(formatQuoteValue(rule.stop_below))}</span>` : "",
+    ].filter(Boolean).join("") || '<span class="unset-line">还没有写买卖计划</span>';
+    return `<article class="quote-row"><div class="quote-main"><strong>${escapeHtml(q.name || q.symbol)}</strong><small>${escapeHtml(symbol.toUpperCase())} · 开 ${escapeHtml(formatQuoteValue(q.open))} · 量 ${escapeHtml(formatQuoteValue(q.volume))}</small></div><div class="quote-trend">${sparkline(q.trend, change >= 0)}</div><div class="quote-price">${escapeHtml(formatQuoteValue(q.price))}<small>PE ${escapeHtml(q.pe != null ? q.pe : "—")}</small></div><div class="quote-change ${pctClass(change)}">${pctText(change)}</div><div class="quote-plan"><span class="quote-plan-label">我的计划</span><div class="quote-plan-lines">${lines}</div></div><button type="button" class="quote-action-button" data-edit-rule="${escapeHtml(symbol)}" data-name="${escapeHtml(q.name || symbol)}">设线</button></article>`;
   }).join("");
-  $("#quote-list").innerHTML = rows || '<div class="m2-empty">还没有行情快照。点「刷新行情」获取数据。</div>';
+  $("#quote-list").innerHTML = !watchlist.length
+    ? '<div class="m2-empty watch-empty"><strong>你的自选现在是空的</strong><p>这里不会再显示系统固定股票。你可以直接添加一只，也可以先按条件筛选候选。</p><div class="watch-empty-actions"><button type="button" data-open-watch>添加自选</button><a href="#screen-card">先去找候选</a></div></div>'
+    : rows || '<div class="m2-empty">自选已经保存，但还没有行情。点「刷新行情」再试一次。</div>';
   const quoteSymbols = new Set(quotes.map((q) => String(q.symbol || "").toLowerCase().replace(/^[a-z]+/, "")));
   const missing = (watchlist || []).map((i) => String(i.symbol || "").toLowerCase().replace(/^[a-z]+/, "")).filter((s) => s && !quoteSymbols.has(s));
   const miss = $("#quote-missing");
@@ -81,17 +105,19 @@ $("#watchlist-form").addEventListener("submit", async (event) => {
   WorkbenchUX.wbSetBusy(button, true, "保存中…");
   try {
     const body = await requestJson("/api/market/watchlist", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbols: $("#symbols").value.split(/[\s,，]+/).filter(Boolean) }) });
-    renderQuotes(body.market || body);
+    const savedMarket = body.market || body;
+    renderQuotes(savedMarket);
+    syncMarketDependents(savedMarket);
     $("#market-message").textContent = "自选已保存，正在拉取最新行情…";
-    try { const fresh = await requestJson("/api/market/refresh", { method: "POST" }); renderQuotes(fresh.market || fresh); $("#market-message").textContent = fresh.message || "行情已更新。"; } catch (refreshError) { $("#market-message").textContent = `自选已保存，但行情刷新失败：${refreshError.message}`; }
-    closeWatchModal(); loadAIScan(); loadPortfolio();
+    try { const fresh = await requestJson("/api/market/refresh", { method: "POST" }); const freshMarket = fresh.market || fresh; renderQuotes(freshMarket); syncMarketDependents(freshMarket); $("#market-message").textContent = fresh.message || "行情已更新。"; } catch (refreshError) { $("#market-message").textContent = `自选已保存，但行情刷新失败：${refreshError.message}`; }
+    closeWatchModal();
   } catch (error) { $("#market-message").textContent = error.message; }
   finally { WorkbenchUX.wbSetBusy(button, false); }
 });
 $("#refresh-quotes").addEventListener("click", async () => {
   const button = $("#refresh-quotes");
   WorkbenchUX.wbSetBusy(button, true, "刷新中…");
-  try { const body = await requestJson("/api/market/refresh", { method: "POST" }); renderQuotes(body.market || body); loadAIScan(); loadPortfolio(); }
+  try { const body = await requestJson("/api/market/refresh", { method: "POST" }); const market = body.market || body; renderQuotes(market); syncMarketDependents(market); }
   catch (error) { $("#checked-at").textContent = error.message; }
   finally { WorkbenchUX.wbSetBusy(button, false); }
 });
@@ -202,6 +228,34 @@ function calcPosition() {
 }
 ["ps-capital", "ps-risk", "ps-stop", "ps-winrate", "ps-ratio"].forEach((id) => { const el = $("#" + id); if (el) el.addEventListener("input", calcPosition); });
 calcPosition();
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-open-watch]")) {
+    openWatchModal();
+    return;
+  }
+  const ruleButton = event.target.closest("[data-edit-rule]");
+  if (ruleButton && typeof window.marketTodayOpenRule === "function") {
+    window.marketTodayOpenRule(ruleButton.dataset.editRule, ruleButton.dataset.name || ruleButton.dataset.editRule);
+    return;
+  }
+  const planButton = event.target.closest("[data-plan-symbol]");
+  if (planButton) {
+    const symbol = planButton.dataset.planSymbol || "";
+    const current = $("#symbols").value.split(/[\s,，]+/).filter(Boolean);
+    if (symbol && !current.includes(symbol)) current.push(symbol);
+    $("#symbols").value = current.join("\n");
+    $("#market-message").textContent = `${planButton.dataset.planName || symbol} 已加入待保存自选，保存后可设买入、卖出和止损线。`;
+    openWatchModal();
+    return;
+  }
+  if (event.target.closest("[data-scroll-watch]")) {
+    document.querySelector("#watch-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (event.target.closest("[data-scroll-today]")) {
+    document.querySelector("#today-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+});
 
 /* ── 高级研究工具（回测/样本外/对比/估值/报告/采样） ── */
 function injectLegacyTools() {
@@ -337,10 +391,12 @@ async function toggleSampling() {
 async function loadMarket() {
   try {
     const body = await requestJson("/api/market");
-    renderQuotes(body.market || body);
-    loadAIScan(); loadPortfolio();
+    const market = body.market || body;
+    renderQuotes(market);
+    syncMarketDependents(market);
   } catch (error) { $("#quote-list").innerHTML = `<div class="m2-empty">${escapeHtml(error.message)}</div>`; }
 }
+document.addEventListener("market:rules-updated", () => void loadMarket());
 loadMarket();
 loadETF();
 loadCB();

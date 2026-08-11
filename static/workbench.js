@@ -6,22 +6,25 @@ const workbenchRequestJson = window.WorkbenchUX?.requestJson || (async (url, opt
   return body;
 });
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.140"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
-  const topbar = document.querySelector(".topbar-right");
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.153"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  const topbar = document.querySelector(".topbar-right, .top-actions");
   if (!topbar || topbar.querySelector("[data-theme-toggle]")) return;
-  const saved = localStorage.getItem("workbench-theme") || "dark";
-  document.documentElement.dataset.theme = saved;
+  const theme = window.WorkbenchTheme;
+  if (!theme) document.documentElement.dataset.theme = localStorage.getItem("workbench-theme") === "dark" ? "dark" : "light";
   const button = document.createElement("button");
-  button.type = "button"; button.className = "theme-toggle"; button.dataset.themeToggle = "true"; button.title = "切换浅色/深色主题";
-  const render = () => { const dark = document.documentElement.dataset.theme === "dark"; button.textContent = dark ? "浅色" : "深色"; button.setAttribute("aria-label", dark ? "切换浅色主题" : "切换深色主题"); };
-  button.addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("workbench-theme", next); render(); });
-  topbar.append(button); render();
+  button.type = "button"; button.className = "theme-toggle";
+  topbar.append(button);
+  if (theme) theme.bindToggle(button, { text: true });
+  else {
+    const render = () => { const dark = document.documentElement.dataset.theme === "dark"; button.textContent = dark ? "浅色" : "深色"; button.setAttribute("aria-label", dark ? "切换到浅色模式" : "切换到深色模式"); button.setAttribute("aria-pressed", String(dark)); };
+    button.addEventListener("click", () => { const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next; localStorage.setItem("workbench-theme", next); render(); }); render();
+  }
 }
 setupThemeToggle();
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistrations()
     .then((registrations) => Promise.all(registrations.filter((registration) => registration.scope === `${location.origin}/static/`).map((registration) => registration.unregister())))
-    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.140", { scope: "/" }))
+    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.153", { scope: "/" }))
     .catch(() => {});
 }
 const icons = {
@@ -63,6 +66,45 @@ function projectCard(project) {
   const hideLabel = `隐藏${project.title || "项目"}`;
   return `<article class="project-card ${escapeHtml(project.accent || "blue")}" data-project-id="${escapeHtml(project.id || "")}" draggable="true"><div class="project-card-head"><span class="project-icon">${icons[project.icon] || icons.chart}</span><span class="project-title-wrap"><span class="project-top"><h3>${escapeHtml(project.title)}</h3><span class="project-agent-badge status-${escapeHtml(agentStatus)}" title="${escapeHtml(agentStatusLabel)}">${escapeHtml(agentStatusLabel)}</span></span><span class="project-meta" title="${escapeHtml(project.meta || "")}">${escapeHtml(project.meta || "")}</span></span><span class="project-card-tools"><button class="project-favorite ${project.favorite ? "active" : ""}" data-project-favorite="${escapeHtml(project.id || "")}" type="button" aria-pressed="${project.favorite ? "true" : "false"}" title="${favoriteLabel}" aria-label="${favoriteLabel}">★</button><button class="project-hide" data-project-hide="${escapeHtml(project.id || "")}" type="button" title="${hideLabel}" aria-label="${hideLabel}">×</button><button class="project-drag-handle" type="button" draggable="true" title="拖动排序" aria-label="拖动排序">⋮⋮</button><span class="project-state ${escapeHtml(state.tone || "offline")}" data-label="${escapeHtml(stateLabel)}" title="${escapeHtml(stateLabel)}" role="img" aria-label="${escapeHtml(stateLabel)}" tabindex="0"><i aria-hidden="true"></i></span></span></div><p class="project-description">${escapeHtml(project.description)}</p><div class="project-summary"><strong>${escapeHtml(summary.value ?? "—")}</strong><span>${escapeHtml(summary.label || "")}</span><small>${escapeHtml(summary.detail || "")}</small></div><div class="project-health ${healthTone}" title="${escapeHtml([healthDetail, healthMeta].filter(Boolean).join(" · "))}"><i aria-hidden="true"></i><span><b>${escapeHtml(healthLabel)}</b><small>${escapeHtml(healthDetail)}${healthMeta ? ` · ${escapeHtml(healthMeta)}` : ""}</small></span></div>${projectActivityMarkup(project)}<div class="project-actions"><a class="project-primary" target="_blank" rel="noopener" href="${escapeHtml(action.href)}">${escapeHtml(action.label)} <span>↗</span></a></div></article>`;
 }
+function openAddProjectModal() {
+  const modal = $("#add-project-modal");
+  if (!modal) { window.location.hash = "projects"; return; }
+  modal.classList.remove("hidden");
+  const message = $("#add-project-message");
+  if (message) message.textContent = "";
+  const close = () => { modal.classList.add("hidden"); };
+  modal.querySelectorAll("[data-close-add-project]").forEach((btn) => btn.addEventListener("click", close));
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  const form = $("#add-project-form");
+  if (form && !form.dataset.bound) {
+    form.dataset.bound = "true";
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const submit = form.querySelector("button[type=submit]");
+      submit.disabled = true;
+      if (message) message.textContent = "保存中…";
+      try {
+        const body = await workbenchRequestJson("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+          id: $("#add-project-id").value.trim(),
+          title: $("#add-project-title").value.trim(),
+          description: $("#add-project-desc").value.trim(),
+          group: $("#add-project-group").value,
+        }) });
+        if (message) { message.textContent = "已添加入口。"; message.dataset.tone = "success"; }
+        $("#add-project-id").value = ""; $("#add-project-title").value = ""; $("#add-project-desc").value = "";
+        projects = body.projects || projects;
+        renderProjects();
+        window.setTimeout(close, 600);
+      } catch (error) {
+        if (message) { message.textContent = error.message || "添加失败"; message.dataset.tone = "error"; }
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  }
+  window.setTimeout(() => $("#add-project-id")?.focus(), 0);
+}
+
 function renderProjects() { const query = $("#project-search").value.trim().toLowerCase(); const matchesGroup = (project) => activeGroup === "all" || (activeGroup === "favorite" ? project.favorite === true : project.group === activeGroup); const visible = projects.filter((project) => matchesGroup(project) && (!query || `${project.title} ${project.description} ${project.meta}`.toLowerCase().includes(query))); $("#project-count").textContent = visible.length; $("#project-note").textContent = `${visible.length} 个入口 · ${activeGroup === "favorite" ? "常用视图" : "紧凑视图"}`; $("#project-grid").innerHTML = visible.length ? visible.map(projectCard).join("") : '<div class="empty-projects">没有匹配的项目。换个关键词，或在其他分组里看看。</div>'; ["favorite", "all", "organize", "produce", "discover", "monitor"].forEach((group) => { const target = $(`#${group}-count`); if (target) target.textContent = group === "all" ? projects.length : group === "favorite" ? projects.filter((item) => item.favorite === true).length : projects.filter((item) => item.group === group).length; }); }
 function projectPreferencesPayload() { return { order: projects.map((project) => project.id), favorite_ids: projects.filter((project) => project.favorite).map((project) => project.id), groups: Object.fromEntries(projects.filter((project) => project.group).map((project) => [project.id, project.group])), hidden_ids: [...hiddenProjectIds] }; }
 async function saveProjectPreferences() {
@@ -1031,7 +1073,11 @@ function agentResultContractMarkup(contract = {}) {
   const coverageText = coverage.total ? `引用覆盖：${coverage.with_locator || 0}/${coverage.total} 可定位 · ${coverage.with_data_time || 0}/${coverage.total} 有数据时间` : "";
   const plan = contract.execution_plan || {};
   const planTrace = agentExecutionPlanTrace(plan);
-  const trace = [contract.data_as_of ? `数据时间：${escapeHtml(contract.data_as_of)}` : "", refs ? `来源：${refs}` : "", coverageText, planTrace, contract.artifact_ids?.length ? `产物 ${contract.artifact_ids.length} 份` : "", contract.work_item_ids?.length ? `事项 ${contract.work_item_ids.length} 条` : "", contract.relation_ids?.length ? `关联 ${contract.relation_ids.length} 条` : "", review, contract.replay?.href ? `<a href="${escapeHtml(contract.replay.href)}" target="_blank" rel="noopener noreferrer">查看执行回放</a>` : ""].filter(Boolean).join(" · ");
+  const memoryTrace = contract.memory_refs?.length ? `使用了 ${contract.memory_refs.length} 条已确认记忆` : "";
+  const memoryUpdateTrace = contract.memory_updates?.length ? `本轮发现 ${contract.memory_updates.length} 条记忆` : "";
+  const memoryContext = contract.memory_context || {};
+  const memoryBudgetTrace = memoryContext.chars ? `记忆上下文 ${Number(memoryContext.chars)} 字${Number(memoryContext.calls) > 1 ? ` / ${Number(memoryContext.calls)} 次调用` : ""}` : "";
+  const trace = [contract.data_as_of ? `数据时间：${escapeHtml(contract.data_as_of)}` : "", refs ? `来源：${refs}` : "", coverageText, memoryTrace, memoryBudgetTrace, memoryUpdateTrace, planTrace, contract.artifact_ids?.length ? `产物 ${contract.artifact_ids.length} 份` : "", contract.work_item_ids?.length ? `事项 ${contract.work_item_ids.length} 条` : "", contract.relation_ids?.length ? `关联 ${contract.relation_ids.length} 条` : "", review, contract.replay?.href ? `<a href="${escapeHtml(contract.replay.href)}" target="_blank" rel="noopener noreferrer">查看执行回放</a>` : ""].filter(Boolean).join(" · ");
   return `<details class="agent-result-contract"><summary>结构化结果 · ${escapeHtml(contract.summary || "查看结论与证据")}</summary>${body || `<p>${escapeHtml(contract.summary || "暂无结构化摘要")}</p>`}${citations ? `<div class="agent-result-citations"><strong>可回溯来源</strong><p>${citations}</p></div>` : ""}${trace ? `<div class="agent-result-citations"><strong>审计链</strong><p>${trace}</p></div>` : ""}</details>`;
 }
 function agentRunReplayMarkup(runId) {
@@ -1040,7 +1086,12 @@ function agentRunReplayMarkup(runId) {
 function setupGlobalAgentV2(){
   const modal = $("#global-agent-modal"), button = $("#global-agent-button"), form = $("#global-agent-form"), input = $("#global-agent-input"), target = $("#global-agent-target"), message = $("#global-agent-message"), result = $("#global-agent-result"), submit = $("#global-agent-submit");
   if (!modal || !button || !form) return;
-  const history = [];
+  let history = [];
+  let sessionId = "";
+  const formStack = form.querySelector(".form-stack");
+  formStack?.insertAdjacentHTML("afterbegin", `<div class="agent-session-toolbar"><label>继续之前的会话<select id="global-agent-sessions" aria-label="选择总调度会话"><option value="">新会话</option></select></label><button id="global-agent-new-session" class="secondary-button" type="button">新会话</button></div>`);
+  const sessionSelect = $("#global-agent-sessions"), newSessionButton = $("#global-agent-new-session");
+  const historyFromMessages = (items = []) => items.map((item) => item.role === "user" ? { role: "user", content: item.content || "" } : { role: "assistant", content: item.content || "", children: item.metadata?.result_contract?.agent_name || "工作台总调度 Agent", actions: item.metadata?.actions || [], result_contract: item.metadata?.result_contract || {}, run_id: item.metadata?.run_id || "" });
   const renderHistory = () => {
     result.innerHTML = `<div class="agent-thread">${history.map((turn) => turn.role === "user" ? `<div class="agent-bubble user"><span class="agent-bubble-label">你</span><div>${escapeHtml(turn.content)}</div></div>` : `<div class="agent-bubble assistant"><span class="agent-bubble-label">${escapeHtml(turn.children || "工作台总调度 Agent")}</span><div class="agent-answer-copy">${renderAgentAnswer(turn.content)}</div>${agentResultContractMarkup(turn.result_contract)}${turn.actions?.length ? `<div class="agent-action-heading">动作状态</div>${agentActionMarkup(turn.actions)}` : ""}${agentRunReplayMarkup(turn.run_id)}</div>`).join("")}</div>`;
     result.hidden = !history.length;
@@ -1051,7 +1102,27 @@ function setupGlobalAgentV2(){
     target.innerHTML = '<option value="">自动判断</option>' + (body.global_agent?.children || []).map((id) => { const agent = (body.agents || []).find((item) => item.project_id === id); return `<option value="${escapeHtml(id)}">${escapeHtml(agent?.name || id)} · ${escapeHtml(agent?.status_label || agent?.status || "规划中")}</option>`; }).join("");
     return body;
   }
-  button.addEventListener("click", async () => { modal.classList.remove("hidden"); modal.dataset.prevFocus = document.activeElement?.id || ""; message.textContent = "正在读取子 Agent 能力…"; message.classList.remove("error"); try { const body = await loadAgents(); message.textContent = `已接入 ${body.global_agent?.children?.length || 0} 个子 Agent；可自动调度。`; input.focus(); } catch (error) { message.textContent = error.message; message.classList.add("error"); } });
+  async function loadSession(id) {
+    if (!id) { sessionId = ""; history = []; renderHistory(); if (sessionSelect) sessionSelect.value = ""; return; }
+    const body = await workbenchRequestJson(`/api/agent/workbench/sessions/${encodeURIComponent(id)}`);
+    sessionId = id;
+    history = historyFromMessages(body.messages || []);
+    renderHistory();
+    if (sessionSelect) sessionSelect.value = id;
+  }
+  async function loadSessions(restoreLatest = false) {
+    const body = await workbenchRequestJson("/api/agent/workbench/sessions?limit=30");
+    const sessions = body.sessions || [];
+    if (sessionSelect) {
+      sessionSelect.innerHTML = '<option value="">新会话</option>' + sessions.map((session) => `<option value="${escapeHtml(session.id)}">${escapeHtml(session.title)}</option>`).join("");
+      sessionSelect.value = sessionId;
+    }
+    if (restoreLatest && !sessionId && sessions.length) await loadSession(sessions[0].id);
+    return sessions;
+  }
+  button.addEventListener("click", async () => { modal.classList.remove("hidden"); modal.dataset.prevFocus = document.activeElement?.id || ""; message.textContent = "正在读取会话和子 Agent 能力…"; message.classList.remove("error"); try { const [body] = await Promise.all([loadAgents(), loadSessions(true)]); message.textContent = `已接入 ${body.global_agent?.children?.length || 0} 个子 Agent · 会话和记忆保存在本机。`; input.focus(); } catch (error) { message.textContent = error.message; message.classList.add("error"); } });
+  sessionSelect?.addEventListener("change", () => loadSession(sessionSelect.value).catch((error) => { message.textContent = error.message; message.classList.add("error"); }));
+  newSessionButton?.addEventListener("click", () => { sessionId = ""; history = []; renderHistory(); if (sessionSelect) sessionSelect.value = ""; message.textContent = "已开始新会话；已确认的长期记忆仍会保留。"; input.focus(); });
   document.querySelectorAll("[data-close-global-agent]").forEach((item) => item.addEventListener("click", () => { modal.classList.add("hidden"); const prev = document.getElementById(modal.dataset.prevFocus || ""); (prev || button).focus(); }));
   modal.addEventListener("click", (event) => { if (event.target === modal) { modal.classList.add("hidden"); const prev = document.getElementById(modal.dataset.prevFocus || ""); (prev || button).focus(); } });
   modal.addEventListener("keydown", (event) => { if (event.key === "Tab") { const focusables = [...modal.querySelectorAll("button, input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((el) => !el.disabled && !el.hidden); if (!focusables.length) return; const first = focusables[0], last = focusables[focusables.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } });
@@ -1087,14 +1158,109 @@ function setupGlobalAgentV2(){
     history.push({ role: "user", content: text }); renderHistory(); submit.disabled = true; message.classList.remove("error"); message.textContent = "正在检查上下文、调用子 Agent 并汇总…";
     const pending = { role: "assistant", content: "正在读取项目数据并执行工作流…", children: "工作台总调度 Agent" }; history.push(pending); renderHistory();
     try {
-      const body = await workbenchRequestJson("/api/agent/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text, intent: "", project_ids: target.value ? [target.value] : [], context: { source: "workbench_home", conversation_turns: history.length, intent: "" } }) });
-      history.pop(); history.push({ role: "assistant", content: body.answer || "没有返回结果", children: (body.children || []).map((item) => item.name || item.project_id).join(" · "), actions: (body.children || []).flatMap((item) => item.actions || []), result_contract: body.result_contract, run_id: body.run?.id || "" });
-      renderHistory(); message.textContent = `已完成 · 工作项 #${body.dispatch?.id || "—"} 已写入本地数据库`; void loadNotifications();
+      const body = await workbenchRequestJson("/api/agent/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message: text, intent: "", project_ids: target.value ? [target.value] : [], context: { source: "workbench_home", conversation_turns: history.length, intent: "" } }) });
+      sessionId = body.session?.id || sessionId;
+      history = body.messages?.length ? historyFromMessages(body.messages) : [...history.slice(0, -1), { role: "assistant", content: body.answer || "没有返回结果", children: (body.children || []).map((item) => item.name || item.project_id).join(" · "), actions: (body.children || []).flatMap((item) => item.actions || []), result_contract: body.result_contract, run_id: body.run?.id || "" }];
+      renderHistory(); await loadSessions(false); message.textContent = `已完成 · 会话已保存${body.memory_updates?.length ? ` · 本轮发现 ${body.memory_updates.length} 条记忆` : ""}`; void loadNotifications();
     } catch (error) { history.pop(); history.push({ role: "assistant", content: `这次调度没有完成：${error.message}`, children: "工作台总调度 Agent" }); renderHistory(); message.textContent = error.message; message.classList.add("error"); }
     finally { submit.disabled = false; }
+  });
+}
+
+function setupMemoryCenter() {
+  const nav = document.querySelector(".platform-nav");
+  if (!nav || document.querySelector("#memory-open")) return;
+  const button = document.createElement("button");
+  button.id = "memory-open";
+  button.className = "platform-nav-item";
+  button.type = "button";
+  button.innerHTML = '<span class="platform-nav-dot violet"></span>我的记忆<span id="memory-nav-badge" class="platform-nav-badge" data-zero="true">—</span>';
+  const usageLink = [...nav.querySelectorAll("a")].find((item) => item.getAttribute("href") === "/usage");
+  nav.insertBefore(button, usageLink || null);
+  const mobileButton = document.createElement("button");
+  mobileButton.id = "memory-mobile-open";
+  mobileButton.className = "memory-top-button";
+  mobileButton.type = "button";
+  mobileButton.setAttribute("aria-haspopup", "dialog");
+  mobileButton.setAttribute("aria-controls", "memory-modal");
+  mobileButton.innerHTML = '<span aria-hidden="true">◈</span><span>记忆</span><b id="memory-mobile-badge" data-zero="true">—</b>';
+  const topActions = document.querySelector(".top-actions");
+  topActions?.insertBefore(mobileButton, topActions.querySelector(".notification-menu"));
+
+  const modal = document.createElement("div");
+  modal.id = "memory-modal";
+  modal.className = "modal-backdrop hidden";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-labelledby", "memory-modal-title");
+  modal.innerHTML = `<div class="modal memory-modal"><div class="modal-head"><div><h2 id="memory-modal-title">我的记忆</h2><p>只有“已确认”的内容会影响 Agent。你可以随时修改、忽略或彻底删除。</p></div><button class="icon-button" data-close-memory type="button" aria-label="关闭我的记忆">×</button></div><div id="memory-summary" class="memory-summary" aria-live="polite"><span>正在读取…</span></div><form id="memory-create-form" class="memory-create-form"><label>新增一条明确记忆<textarea id="memory-create-content" rows="2" required maxlength="1000" placeholder="例如：回答默认用中文，先说结论。"></textarea></label><div class="memory-create-grid"><label>范围<select id="memory-create-scope"><option value="global">整个工作台</option><option value="project">指定项目</option></select></label><label>项目 ID（项目记忆才需要）<input id="memory-create-project" maxlength="80" placeholder="例如 market" /></label><label>类型<select id="memory-create-kind"><option value="preference">偏好</option><option value="constraint">边界</option><option value="routine">习惯</option><option value="decision">决策</option><option value="profile">个人信息</option></select></label><button class="primary-button" type="submit">确认并记住</button></div></form><div class="memory-toolbar"><label>查看<select id="memory-filter"><option value="active">有效记忆</option><option value="candidate">待确认</option><option value="confirmed">已确认</option><option value="all">全部</option></select></label><div><button id="memory-import" class="secondary-button" type="button">预览已有偏好</button><button id="memory-refresh" class="secondary-button" type="button">刷新</button></div></div><p id="memory-message" class="modal-message" role="status" aria-live="polite"></p><div id="memory-list" class="memory-list" aria-live="polite"><div class="memory-empty">正在读取记忆…</div></div></div>`;
+  document.body.append(modal);
+  const summary = modal.querySelector("#memory-summary"), list = modal.querySelector("#memory-list"), status = modal.querySelector("#memory-message"), filter = modal.querySelector("#memory-filter"), badges = [document.querySelector("#memory-nav-badge"), document.querySelector("#memory-mobile-badge")].filter(Boolean);
+  const close = () => { modal.classList.add("hidden"); const previous = document.getElementById(modal.dataset.prevFocus || ""); (previous || button).focus(); };
+  const setStatus = (text, error = false) => { status.textContent = text; status.classList.toggle("error", error); status.setAttribute("role", error ? "alert" : "status"); };
+  const option = (value, current, label) => `<option value="${value}"${value === current ? " selected" : ""}>${label}</option>`;
+  const renderItems = (items = []) => {
+    list.innerHTML = items.length ? items.map((item) => `<article class="memory-item" data-memory-id="${escapeHtml(item.id)}"><div class="memory-item-head"><div><span class="memory-status status-${escapeHtml(item.status)}">${escapeHtml(item.status_label)}</span><span class="memory-kind">${escapeHtml(item.kind_label)}</span>${item.pinned ? '<span class="memory-pinned">置顶</span>' : ""}</div><small>${escapeHtml(item.scope === "global" ? "整个工作台" : `项目 · ${item.project_id || "未指定"}`)}</small></div><textarea class="memory-item-content" rows="2" maxlength="1000" aria-label="记忆内容">${escapeHtml(item.content)}</textarea><div class="memory-item-fields"><label>范围<select data-memory-scope>${option("global", item.scope, "整个工作台")}${option("project", item.scope, "指定项目")}</select></label><label>项目<input data-memory-project maxlength="80" value="${escapeHtml(item.project_id || "")}" placeholder="项目 ID" /></label><label>类型<select data-memory-kind>${option("preference", item.kind, "偏好")}${option("constraint", item.kind, "边界")}${option("routine", item.kind, "习惯")}${option("decision", item.kind, "决策")}${option("profile", item.kind, "个人信息")}</select></label><label class="memory-pin"><input data-memory-pinned type="checkbox"${item.pinned ? " checked" : ""} /> 置顶</label></div><div class="memory-item-foot"><small>可信度 ${Math.round(Number(item.confidence || 0) * 100)}% · 使用 ${Number(item.use_count || 0)} 次${item.source_type ? ` · 来源 ${escapeHtml(item.source_type)}` : ""}</small><div class="memory-actions"><button class="secondary-button" data-memory-action="save" type="button">保存修改</button>${item.status === "candidate" ? '<button class="primary-button" data-memory-action="confirm" type="button">确认</button><button class="secondary-button" data-memory-action="reject" type="button">忽略</button>' : ""}<button class="memory-delete" data-memory-action="delete" type="button">删除</button></div></div></article>`).join("") : '<div class="memory-empty">当前筛选下没有记忆。你也可以直接说“记住：以后都用中文”。</div>';
+  };
+  async function loadMemories() {
+    setStatus("正在读取记忆…");
+    const body = await workbenchRequestJson(`/api/memories?status=${encodeURIComponent(filter.value)}&limit=300`);
+    const info = body.summary || {};
+    summary.innerHTML = `<span><strong>${info.confirmed || 0}</strong> 已确认</span><span><strong>${info.candidate || 0}</strong> 待确认</span><span><strong>${info.global || 0}</strong> 全局</span><span><strong>${info.project || 0}</strong> 项目</span>`;
+    badges.forEach((badge) => { badge.textContent = info.candidate || info.confirmed || 0; badge.dataset.zero = String(!(info.candidate || info.confirmed)); });
+    renderItems(body.items || []);
+    setStatus(body.policy || "记忆已更新。");
+    return body;
+  }
+  const open = async (event) => { modal.classList.remove("hidden"); modal.dataset.prevFocus = document.activeElement?.id || event.currentTarget?.id || "memory-open"; try { await loadMemories(); modal.querySelector("#memory-create-content").focus(); } catch (error) { setStatus(error.message, true); } };
+  button.addEventListener("click", open);
+  mobileButton.addEventListener("click", open);
+  modal.querySelector("[data-close-memory]").addEventListener("click", close);
+  modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+  modal.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); if (event.key !== "Tab") return; const focusable = [...modal.querySelectorAll("button, input, select, textarea")].filter((item) => !item.disabled && !item.hidden); if (!focusable.length) return; const first = focusable[0], last = focusable[focusable.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } });
+  filter.addEventListener("change", () => loadMemories().catch((error) => setStatus(error.message, true)));
+  modal.querySelector("#memory-refresh").addEventListener("click", () => loadMemories().catch((error) => setStatus(error.message, true)));
+  modal.querySelector("#memory-create-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = event.submitter, content = modal.querySelector("#memory-create-content"), scope = modal.querySelector("#memory-create-scope"), project = modal.querySelector("#memory-create-project"), kind = modal.querySelector("#memory-create-kind");
+    submit.disabled = true; setStatus("正在保存…");
+    try {
+      await workbenchRequestJson("/api/memories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: content.value.trim(), scope: scope.value, project_id: project.value.trim(), kind: kind.value, status: "confirmed", confidence: 1 }) });
+      content.value = ""; await loadMemories(); setStatus("已经记住，并会在相关对话中使用。");
+    } catch (error) { setStatus(error.message, true); } finally { submit.disabled = false; }
+  });
+  list.addEventListener("click", async (event) => {
+    const actionButton = event.target.closest("[data-memory-action]");
+    if (!actionButton) return;
+    const card = actionButton.closest("[data-memory-id]"), id = card?.dataset.memoryId, action = actionButton.dataset.memoryAction;
+    if (!id) return;
+    if (action === "delete" && !window.confirm("确定彻底删除这条记忆吗？删除后不会再用于 Agent。")) return;
+    actionButton.disabled = true; setStatus("正在更新记忆…");
+    try {
+      if (action === "save") {
+        await workbenchRequestJson(`/api/memories/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: card.querySelector(".memory-item-content").value.trim(), scope: card.querySelector("[data-memory-scope]").value, project_id: card.querySelector("[data-memory-project]").value.trim(), kind: card.querySelector("[data-memory-kind]").value, pinned: card.querySelector("[data-memory-pinned]").checked }) });
+      } else if (action === "delete") {
+        await workbenchRequestJson(`/api/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
+      } else {
+        await workbenchRequestJson(`/api/memories/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+      }
+      await loadMemories(); setStatus(action === "delete" ? "记忆已彻底删除。" : action === "confirm" ? "记忆已确认，之后会用于相关对话。" : action === "reject" ? "已忽略这条候选记忆。" : "修改已保存。");
+    } catch (error) { actionButton.disabled = false; setStatus(error.message, true); }
+  });
+  modal.querySelector("#memory-import").addEventListener("click", async (event) => {
+    const importButton = event.currentTarget;
+    importButton.disabled = true; setStatus("正在读取已有偏好预览…");
+    try {
+      const preview = await workbenchRequestJson("/api/memories-import/workbuddy");
+      const lines = (preview.items || []).map((item) => `• ${item.content}`).join("\n");
+      if (!lines) { setStatus("没有找到可导入的用户偏好。"); return; }
+      if (!window.confirm(`只会导入以下“用户偏好”，不会导入服务器或部署信息：\n\n${lines}\n\n确认导入吗？`)) { setStatus("已取消导入，没有写入任何内容。"); return; }
+      const body = await workbenchRequestJson("/api/memories-import/workbuddy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+      await loadMemories(); setStatus(`已导入 ${body.items?.length || 0} 条已有偏好。`);
+    } catch (error) { setStatus(error.message, true); } finally { importButton.disabled = false; }
   });
 }
 function setupGlobalSettings() {
   window.WorkbenchLLMSettings?.init?.();
 }
-document.querySelectorAll("[data-group]").forEach((button) => button.addEventListener("click", () => { document.querySelectorAll("[data-group]").forEach((item) => item.classList.remove("active")); button.classList.add("active"); activeGroup = button.dataset.group; renderProjects(); })); $("#project-search").addEventListener("input", renderProjects); $("#add-project").addEventListener("click", () => { window.location.hash = "projects"; const note = $("#project-note"); note.textContent = "新增项目入口需要改配置文件（projects.json），这是维护操作；如需要可以告诉我，我帮你加。"; note.classList.add("error"); window.setTimeout(() => { note.classList.remove("error"); renderProjects(); }, 6000); }); $("#restore-project-layout")?.addEventListener("click", async () => { const button = $("#restore-project-layout"); button.disabled = true; button.textContent = "恢复中…"; try { const body = await workbenchRequestJson("/api/projects/preferences/reset", { method: "POST" }); hiddenProjectIds = new Set(); projects = body.projects || []; renderProjects(); $("#project-note").textContent = "已恢复默认顺序、分组和可见项目"; } catch (error) { $("#project-note").textContent = error.message; } finally { button.disabled = false; button.textContent = "恢复默认布局"; } }); setupProjectInteractions(); setupGlobalSettings(); setupGlobalAgentV2(); setupWorkItems(); setupNotifications(); setupProjectAudit(); setupTraceCenter(); setupPushPanel(); setupCommandPalette(); setupPwaInstall(); loadProjects(); loadWorkItems(); void loadAppVersion(); void loadApprovalQueue();
+document.querySelectorAll("[data-group]").forEach((button) => button.addEventListener("click", () => { document.querySelectorAll("[data-group]").forEach((item) => item.classList.remove("active")); button.classList.add("active"); activeGroup = button.dataset.group; renderProjects(); })); $("#project-search").addEventListener("input", renderProjects); $("#add-project").addEventListener("click", () => openAddProjectModal()); $("#restore-project-layout")?.addEventListener("click", async () => { const button = $("#restore-project-layout"); button.disabled = true; button.textContent = "恢复中…"; try { const body = await workbenchRequestJson("/api/projects/preferences/reset", { method: "POST" }); hiddenProjectIds = new Set(); projects = body.projects || []; renderProjects(); $("#project-note").textContent = "已恢复默认顺序、分组和可见项目"; } catch (error) { $("#project-note").textContent = error.message; } finally { button.disabled = false; button.textContent = "恢复默认布局"; } }); setupProjectInteractions(); setupGlobalSettings(); setupGlobalAgentV2(); setupMemoryCenter(); setupWorkItems(); setupNotifications(); setupProjectAudit(); setupTraceCenter(); setupPushPanel(); setupCommandPalette(); setupPwaInstall(); loadProjects(); loadWorkItems(); void loadAppVersion(); void loadApprovalQueue();

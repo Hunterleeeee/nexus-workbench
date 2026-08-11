@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="/static/theme.js?v=0.3.153"></script>
 <title>中国独立开发者 · 实时看板</title>
 <meta name="theme-color" content="#2563eb">
 <meta name="description" content="中国独立开发者项目实时看板，支持趋势分析、筛选、收藏与 AI 对话">
@@ -380,8 +381,8 @@
   }
   @media(max-width:640px){
     .hwrap{padding:10px 14px 0} main{padding:14px 14px 70px}
-    .toprow{gap:7px}.brand{font-size:14px}.brand-mark{width:26px;height:26px}.source-meta{display:none}
-    .brand a{font-size:10px;padding:2px 5px}.stats{grid-template-columns:repeat(2,1fr);gap:8px}.stat{min-height:60px;padding:10px 11px}.stat .n{font-size:19px}
+    .toprow{gap:7px}.brand{flex:1;min-width:0;font-size:14px}.brand #title-text{min-width:0;overflow:hidden;text-overflow:ellipsis}.brand-mark{width:26px;height:26px}.source-meta,.spacer,.brand a{display:none}
+    .iconbtn{flex:0 0 32px;width:32px;height:32px}.stats{grid-template-columns:repeat(2,1fr);gap:8px}.stat{min-height:60px;padding:10px 11px}.stat .n{font-size:19px}
     .searchbox{min-width:100%;order:0}.segwrap{flex:1}.seg{flex:1}.searchrow>.btn{flex:1;justify-content:center}.searchrow>.btn.primary{flex-basis:100%}
     .filters-inner{align-items:stretch}.filter-range{width:100%;flex-wrap:wrap}.filter-range .filter-input{flex:1;min-width:110px}.fsep{display:none}
     .panel{padding:15px 14px}.group>summary{padding:14px}.devblock{padding:2px 14px 14px}
@@ -419,7 +420,7 @@
     </div>
     <span class="source-meta" id="source-meta" aria-live="polite">数据源连接中…</span>
     <div class="spacer"></div>
-    <button class="iconbtn" id="theme" title="切换深色模式" aria-label="切换深色模式"><svg class="icon"><use href="#icon-contrast"></use></svg></button>
+    <button class="iconbtn" id="theme" data-theme-toggle title="切换到深色模式" aria-label="切换到深色模式" aria-pressed="false"><svg class="icon"><use href="#icon-contrast"></use></svg></button>
     <button class="iconbtn" id="settings" title="设置" aria-label="打开设置"><svg class="icon"><use href="#icon-settings"></use></svg></button>
     <button class="iconbtn" id="refresh" title="刷新" aria-label="刷新数据"><svg class="icon"><use href="#icon-refresh"></use></svg></button>
   </div>
@@ -592,7 +593,7 @@ const SEEN_KEY='cid_seen_v4', FAV_KEY='cid_fav_v4', LAST_KEY='cid_lastview_v4',
       SNAP_KEY='cid_snap_v4', TR_KEY='cid_tr_v4', CHAT_KEY='cid_chat_v4', OVERVIEW_CHAT_KEY='__overview__',
       AI_KEY='cid_ai_v4', WATCH_KEY='cid_watch_v4', FILT_KEY='cid_filters_v4',
       REPO_KEY='cid_repo_v4', CACHE_KEY='cid_cache_text_v4', CACHE_REPO='cid_cache_repo_v4',
-      THEME_KEY='cid_theme_v4';
+      THEME_KEY='workbench-theme';
 const STATUS={':white_check_mark:':{c:'on',t:'已上线'},':clock8:':{c:'dev',t:'开发中'},':x:':{c:'off',t:'已关闭'}};
 /* 分类规则：强关键词命中 1 次即可入选，弱关键词只用于补充；最多保留 3 个赛道，避免“智能/模型/设计”等泛词把所有项目打成同一类。 */
 const CATS=[
@@ -1960,7 +1961,8 @@ on('wipe','click',()=>{ if(!confirm('将清除本机的收藏、已读、翻译�
   [SEEN_KEY,FAV_KEY,LAST_KEY,SNAP_KEY,TR_KEY,CHAT_KEY,AI_KEY,WATCH_KEY,FILT_KEY,REPO_KEY,CACHE_KEY,CACHE_REPO]
     .forEach(k=>{ try{localStorage.removeItem(k);}catch(e){} });
   location.reload(); });
-on('theme','click',()=>{ const cur=document.documentElement.getAttribute('data-theme');
+on('theme','click',()=>{ if(window.WorkbenchTheme){ window.WorkbenchTheme.toggle(); return; }
+  const cur=document.documentElement.getAttribute('data-theme');
   const next=cur==='dark'?'light':'dark';
   document.documentElement.setAttribute('data-theme',next); lset(THEME_KEY,next); });
 const topBtn=document.getElementById('top');
@@ -1969,9 +1971,8 @@ topBtn.addEventListener('click',()=>window.scrollTo({top:0,behavior:'smooth'}));
 
 /* ===================== 初始化 ===================== */
 (function init(){
-  const saved=ls(THEME_KEY);
-  document.documentElement.setAttribute('data-theme',
-    saved||(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'));
+  if(window.WorkbenchTheme) window.WorkbenchTheme.syncToggle(document.getElementById('theme'));
+  else document.documentElement.setAttribute('data-theme',ls(THEME_KEY)==='dark'?'dark':'light');
   SEEN=new Set(jls(SEEN_KEY,[])); FAV=new Set(jls(FAV_KEY,[]));
   // 旧版 CID 的本机 AI 配置保留在 localStorage 里作为可清理遗留，不再读取或发送。
   updateGlobalAgentStatus();

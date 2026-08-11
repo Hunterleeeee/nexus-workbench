@@ -1,132 +1,178 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
+  <script src="/static/theme.js?v=0.3.153"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f172a" />
-  <title>网页研究浏览器 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
-  <link rel="stylesheet" href="/static/web-research.css?v=0.3.140" />
+  <meta name="theme-color" content="#f7f8fa" />
+  <title>Workbench 浏览器</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.153" />
+  <link rel="stylesheet" href="/static/web-research.css?v=0.3.153" />
+  <link rel="stylesheet" href="/static/web-research-plus.css?v=0.3.153" />
 </head>
 <body data-project-id="web-research">
-  <a class="skip-link" href="#page-frame">跳到网页内容</a>
-  <div class="research-app">
-    <header class="research-topbar">
-      <a class="research-brand" href="/" aria-label="返回工作台">
-        <span class="research-brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4.5 6.5h15v11h-15z" stroke="currentColor" stroke-width="1.5"/><path d="M7.5 10h9M7.5 13h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="m17.2 4.2 2.6 2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
-        <span><strong>Workbench</strong><small>AI BROWSER</small></span>
+  <div class="browser-product">
+    <header class="browser-topbar">
+      <a class="browser-brand" href="/" aria-label="返回 Workbench">
+        <span class="browser-brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M5 6.5h14v11H5z" stroke="currentColor" stroke-width="1.6"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="m16.5 4.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span>
+        <span class="browser-brand-copy"><strong>Workbench</strong><small>AI 浏览器</small></span>
       </a>
-      <div class="research-top-actions">
-        <span class="research-boundary"><i></i>公开网页 · 证据优先</span>
-        <a href="/?settings=llm" target="_blank" rel="noopener">全局 LLM / 本机 Gemini ↗</a>
-        <button id="theme-toggle" class="icon-action" type="button" aria-label="切换主题">☼</button>
-        <a class="back-link" href="/">← 工作台</a>
+      <div class="browser-top-actions">
+        <span class="privacy-state"><i></i>本地上下文优先</span>
+        <a class="llm-link" href="/?settings=llm" target="_blank" rel="noopener">AI 设置</a>
+        <button id="sidebar-mobile-toggle" class="icon-action sidebar-mobile-toggle" type="button" aria-label="打开标签、书签和密码" aria-expanded="false" title="浏览器资料"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5h16v14H4zM9 5v14" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
+        <button id="theme-toggle" class="icon-action" type="button" aria-label="切换主题" title="切换主题">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+        <span class="version-chip">v0.3.153</span>
       </div>
     </header>
 
-    <!-- 浏览器工具条：标签页 + 地址栏 -->
-    <div class="browser-bar">
-      <div id="context-tabs" class="browser-tabs" role="list" aria-label="打开的网页标签"><div class="context-empty">还没有打开网页</div></div>
-      <div class="browser-address">
-        <button id="new-context" class="browser-new-tab" type="button" aria-label="新标签页" title="新标签页">＋</button>
-        <form id="address-form" class="address-form">
-          <input id="address-input" type="text" placeholder="输入网址，例如 https://www.tabbit.com/ （回车打开并自动阅读）" autocomplete="off" spellcheck="false" />
-          <button id="address-go" class="address-go" type="submit" aria-label="打开并阅读">打开并阅读</button>
-        </form>
-        <button id="toggle-view" class="browser-action" type="button" disabled>原网页视图</button>
-        <button id="shot-view" class="browser-action primary-action" type="button" disabled>真实页面</button>
-        <button id="open-external" class="browser-action" type="button" hidden>新标签页打开 ↗</button>
-      </div>
-      <div class="browser-status" id="browser-status" role="status" aria-live="polite">还没有打开网页</div>
-    </div>
-
-    <div class="browser-main">
-      <!-- 网页内容区 -->
-      <section class="browser-viewport" aria-label="网页内容">
-        <div id="iframe-host" class="iframe-host" hidden>
-          <iframe id="page-frame" title="网页视图" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
-          <div id="iframe-note" class="iframe-note" hidden>部分网站禁止内嵌浏览。点「AI 阅读本页」用阅读器看内容，或「新标签页打开」。</div>
+    <div class="browser-shell">
+      <aside class="workspace-sidebar" aria-label="浏览器工作区">
+        <div class="sidebar-heading">
+          <div><span class="overline">WORKSPACE</span><strong>浏览空间</strong></div>
+          <button id="new-context" class="sidebar-add" type="button" title="新建标签页" aria-label="新建标签页">＋</button>
         </div>
-        <div id="reader-view" class="reader-view" hidden>
-          <div id="reader-meta" class="reader-meta"></div>
-          <article id="reader-body" class="reader-body"><div class="reader-empty">还没有正文。在地址栏输入网址，或点「AI 阅读本页」抓取并整理内容。</div></article>
+        <div class="sidebar-library-tabs" role="tablist" aria-label="浏览器资料">
+          <button id="sidebar-tabs-button" class="active" type="button" role="tab" aria-selected="true" aria-controls="sidebar-tabs-pane" data-sidebar-view="tabs">标签 <span id="tab-count">0</span></button>
+          <button id="sidebar-bookmarks-button" type="button" role="tab" aria-selected="false" aria-controls="sidebar-bookmarks-pane" data-sidebar-view="bookmarks">书签 <span id="bookmark-count">0</span></button>
+          <button id="sidebar-passwords-button" type="button" role="tab" aria-selected="false" aria-controls="sidebar-passwords-pane" data-sidebar-view="passwords">密码</button>
         </div>
-        <div id="shot-view-host" class="shot-view" hidden>
-          <img id="shot-image" alt="真实页面截图" />
-          <div id="shot-note" class="iframe-note">服务器用无头浏览器渲染的真实页面截图（不可点击）；想看可交互内容请「新标签页打开」。</div>
-        </div>
-      </section>
-
-      <!-- AI 伴读 -->
-      <aside class="copilot-panel" aria-label="AI 伴读">
-        <div class="copilot-head">
-          <div class="copilot-title-row"><span class="copilot-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v3M7 6.5 5.5 5M17 6.5 18.5 5M4.5 12h-2M21.5 12h-2M7 17.5 5.5 19M17 17.5l1.5 1.5M12 18v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="4.6" stroke="currentColor" stroke-width="1.6"/><circle cx="10.6" cy="11" r=".7" fill="currentColor"/><circle cx="13.4" cy="11" r=".7" fill="currentColor"/><path d="M10.2 13.8c1.2.7 2.4.7 3.6 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span><div><span class="card-kicker">AI COPILOT</span><h2>AI 伴读</h2></div></div>
-          <span id="copilot-state" class="copilot-state">等待打开网页</span>
-        </div>
-        <div id="copilot-messages" class="copilot-messages" aria-live="polite">
-          <div class="chat-hint">打开一个网页后会自动阅读并总结；在正文里选中一段文字，可点「问选中内容」。</div>
-        </div>
-        <div class="copilot-quick" id="copilot-quick" aria-label="快捷动作">
-          <button type="button" data-copilot-quick="bullets" disabled>要点</button>
-          <button type="button" data-copilot-quick="risks" disabled>找风险</button>
-          <button type="button" data-copilot-quick="translate" disabled>翻译</button>
-          <button type="button" data-copilot-quick="actions" disabled>行动项</button>
-          <button id="selection-action" class="selection-quick" type="button" disabled>问选中内容</button>
-        </div>
-        <form id="chat-form" class="copilot-form">
-          <textarea id="chat-input" rows="2" placeholder="继续问当前网页…（Enter 发送，Shift+Enter 换行）" disabled></textarea>
-          <button id="chat-submit" type="submit" aria-label="发送追问" disabled><svg viewBox="0 0 24 24" fill="none"><path d="m4 4 16 8-16 8 3-8-3-8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7 12h13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
-        </form>
-        <div class="copilot-foot">
-          <select id="handoff-target" aria-label="交接目标"><option value="knowledge">沉淀到知识库</option><option value="doc-factory">交给文档工厂</option><option value="idea-analysis">交给想法分析</option></select>
-          <button id="handoff-evidence" class="secondary-button" type="button" disabled>沉淀/交接</button>
-          <span id="handoff-status" class="inline-status" role="status" aria-live="polite"></span>
+        <section id="sidebar-tabs-pane" class="sidebar-library-pane active" role="tabpanel" aria-labelledby="sidebar-tabs-button">
+          <div class="sidebar-list-heading"><span>打开的页面</span><button id="tab-rail-new" class="visually-hidden" type="button" aria-hidden="true" tabindex="-1">＋</button><span id="open-tab-count">0</span></div>
+          <div id="context-tabs" class="sidebar-tabs" role="list" aria-label="打开的网页">
+            <div class="sidebar-empty"><span class="empty-mark">＋</span><strong>从一个问题开始</strong><p>输入网址或搜索词，AI 会陪你一起读。</p></div>
+          </div>
+        </section>
+        <section id="sidebar-bookmarks-pane" class="sidebar-library-pane" role="tabpanel" aria-labelledby="sidebar-bookmarks-button" hidden>
+          <button id="bookmark-current-sidebar" class="sidebar-primary" type="button" disabled>收藏当前网页</button>
+          <label class="sidebar-search"><span class="visually-hidden">搜索书签</span><input id="bookmark-search" type="search" placeholder="搜索书签" autocomplete="off" /></label>
+          <div id="bookmark-list" class="sidebar-resource-list"><div class="sidebar-empty compact"><strong>还没有书签</strong><p>打开网页后点地址栏旁的星标。</p></div></div>
+          <p id="bookmark-status" class="sidebar-inline-status" role="status" aria-live="polite"></p>
+        </section>
+        <section id="sidebar-passwords-pane" class="sidebar-library-pane" role="tabpanel" aria-labelledby="sidebar-passwords-button" hidden>
+          <div class="vault-site"><span>当前网站</span><strong id="credential-origin">请先打开网页</strong></div>
+          <button id="credential-capture" class="sidebar-primary" type="button" disabled>保存网页里已输入的账号</button>
+          <p class="vault-help">密码由 macOS 系统加密，AI 看不到，也不会自动登录。</p>
+          <div id="credential-list" class="sidebar-resource-list"><div class="sidebar-empty compact"><strong>当前网站没有已存账号</strong></div></div>
+          <details class="credential-manual">
+            <summary>手动添加账号</summary>
+            <form id="credential-form" autocomplete="off">
+              <label><span>账号</span><input id="credential-username" type="text" maxlength="320" autocomplete="off" required /></label>
+              <label><span>密码</span><span class="password-field"><input id="credential-password" type="password" maxlength="4096" autocomplete="new-password" required /><button id="credential-password-toggle" type="button" aria-label="显示密码">显示</button></span></label>
+              <button class="sidebar-primary" type="submit">加密保存</button>
+            </form>
+          </details>
+          <p id="credential-status" class="sidebar-inline-status" role="status" aria-live="polite"></p>
+        </section>
+        <div class="sidebar-foot">
+          <div class="sidebar-foot-row"><span class="status-dot"></span><span>AI 受控操作</span></div>
+          <small>付款、发送、删除、登录等操作始终由你确认；密码不进入 AI 上下文。</small>
         </div>
       </aside>
+
+      <main class="browser-main">
+        <section class="browser-canvas" aria-label="网页浏览区">
+          <div class="browser-toolbar">
+            <div class="nav-actions" aria-label="页面导航">
+              <button id="nav-back" class="toolbar-icon" type="button" aria-label="后退" title="后退 (Alt+←)" disabled>←</button>
+              <button id="nav-forward" class="toolbar-icon" type="button" aria-label="前进" title="前进 (Alt+→)" disabled>→</button>
+              <button id="nav-reload" class="toolbar-icon" type="button" aria-label="重新阅读" title="重新阅读本页 (Ctrl+R)">↻</button>
+            </div>
+            <form id="address-form" class="address-form" autocomplete="off">
+              <span class="address-lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="5.5" y="10" width="13" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 10V7.8a4 4 0 0 1 8 0V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+              <input id="address-input" type="text" placeholder="输入网址或搜索你想知道的事" spellcheck="false" />
+              <select id="search-engine" class="search-engine" aria-label="搜索引擎"><option value="bing">必应</option><option value="baidu">百度</option></select>
+              <button id="address-go" class="address-go" type="submit">打开</button>
+            </form>
+            <div class="toolbar-tools">
+              <button id="bookmark-current" class="toolbar-icon toolbar-tool-icon" type="button" aria-label="收藏当前网页" title="收藏当前网页" disabled><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
+              <button id="credentials-open" class="toolbar-icon toolbar-tool-icon" type="button" aria-label="管理当前网站账号密码" title="管理当前网站账号密码" disabled><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="8" cy="12" r="4" stroke="currentColor" stroke-width="1.6"/><path d="M12 12h9M17 12v3M20 12v2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+              <button id="toggle-view" class="toolbar-button" type="button" disabled>网页</button>
+              <button id="shot-view" class="toolbar-button soft" type="button" disabled>截图</button>
+              <button id="open-external" class="toolbar-button" type="button" hidden>打开原页 ↗</button>
+            </div>
+          </div>
+          <div class="canvas-status" id="browser-status" role="status" aria-live="polite">输入网址或搜索词开始</div>
+
+          <div class="page-stage">
+            <div id="native-browser-host" class="native-browser-host" hidden aria-label="桌面真实网页画布">
+              <div class="native-browser-placeholder"><span></span><strong>正在连接真实网页</strong><small>网页会直接显示在这里，右侧 AI 与它保持同屏。</small></div>
+            </div>
+            <div id="iframe-host" class="iframe-host" hidden>
+              <iframe id="page-frame" title="网页视图" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+              <div id="iframe-note" class="stage-note" hidden>该网站拒绝内嵌显示。可以切换到阅读模式，或打开原页继续操作。</div>
+            </div>
+            <div id="reader-view" class="reader-view" hidden>
+              <div class="reader-head"><span class="reader-kicker">AI READER</span><div id="reader-meta" class="reader-meta"></div></div>
+              <article id="reader-body" class="reader-body"><div class="reader-empty"><span>AI</span><strong>让网页变得更容易理解</strong><p>打开一个页面，正文、来源和关键上下文会在这里整理好。</p></div></article>
+            </div>
+            <div id="shot-view-host" class="shot-view" hidden>
+              <img id="shot-image" alt="真实页面截图" />
+              <div id="shot-note" class="stage-note">服务器渲染的页面截图，仅供核对版面；想要交互请打开原页。</div>
+            </div>
+          </div>
+          <div class="canvas-footer">
+            <span id="source-badge"><i></i>等待页面</span>
+            <span id="selection-hint">选中文字后，点击右侧“问这段”</span>
+            <span id="fit-hint" class="fit-hint" hidden>网页原始比例</span>
+            <button id="source-copy" class="quiet-button" type="button" disabled>复制来源</button>
+          </div>
+        </section>
+
+        <aside class="assistant-panel" aria-label="AI 助手">
+          <div class="assistant-header">
+            <div class="assistant-identity"><span class="assistant-mark"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.7 5.7l2.1 2.1M16.2 16.2l2.1 2.1M18.3 5.7l-2.1 2.1M7.8 16.2l-2.1 2.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><div><span class="overline">AI COPILOT</span><strong>随时问我</strong></div></div>
+            <span id="copilot-state" class="assistant-state">等待页面</span>
+          </div>
+          <div id="assistant-context" class="assistant-context"><span class="context-icon">⌁</span><span>还没有当前网页</span></div>
+          <div id="copilot-messages" class="copilot-messages" aria-live="polite"><div class="chat-hint"><span class="hint-mark">AI</span><strong>让 AI 跟着你一起浏览</strong><p>可以问内容，也可以说“点击价格”“在搜索框输入耳机”“向下滚动”。</p></div></div>
+          <div id="assistant-mode" class="assistant-mode" aria-label="AI 工作方式">
+            <button class="active" type="button" data-assistant-mode="auto" aria-pressed="true">智能判断</button>
+            <button type="button" data-assistant-mode="ask" aria-pressed="false">只问页面</button>
+            <button type="button" data-assistant-mode="act" aria-pressed="false">操作页面</button>
+          </div>
+          <div id="copilot-quick" class="copilot-quick" aria-label="快捷动作">
+            <button type="button" data-copilot-quick="bullets" disabled>提炼要点</button>
+            <button type="button" data-copilot-quick="risks" disabled>找风险</button>
+            <button type="button" data-copilot-quick="translate" disabled>翻译</button>
+            <button type="button" data-copilot-quick="actions" disabled>下一步</button>
+            <button type="button" data-browser-command="向下滚动一屏" disabled>向下滚动</button>
+            <button type="button" data-browser-command="回到页面顶部" disabled>回到顶部</button>
+            <button id="selection-action" class="selection-quick" type="button" disabled>问这段</button>
+            <button id="mention-open" type="button" title="引用页面、知识库或待办">@ 引用</button>
+            <button id="shot-to-chat" type="button" disabled title="保存当前页面截图供核对">截图</button>
+          </div>
+          <div id="mention-chips" class="mention-chips" hidden aria-label="已引用的上下文"></div>
+          <div id="mention-popup" class="mention-popup" hidden role="listbox" aria-label="选择要引用的内容"></div>
+          <div id="browser-action-status" class="browser-action-status" hidden role="status" aria-live="polite"></div>
+          <form id="chat-form" class="copilot-form">
+            <textarea id="chat-input" rows="2" placeholder="问关于当前页面的问题…" disabled></textarea>
+            <button id="chat-submit" type="submit" aria-label="发送追问" disabled><svg viewBox="0 0 24 24" fill="none"><path d="m4 4 16 8-16 8 3-8-3-8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7 12h13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+          </form>
+          <div class="assistant-footer">
+            <select id="handoff-target" aria-label="交接目标"><option value="knowledge">保存到知识库</option><option value="doc-factory">交给文档工厂</option><option value="idea-analysis">交给想法分析</option></select>
+            <button id="handoff-evidence" class="secondary-button" type="button" disabled>保存这次研究</button>
+            <span id="handoff-status" class="inline-status" role="status" aria-live="polite"></span>
+          </div>
+        </aside>
+      </main>
     </div>
 
-    <!-- 批量研究抽屉 -->
-    <details id="research-drawer" class="research-drawer">
-      <summary>批量研究：多个网页 → 一次对比分析</summary>
-      <div class="research-drawer-body">
-        <form id="research-form" class="research-form">
-          <label class="research-field"><span>研究问题</span><textarea id="research-question" rows="2" maxlength="2000" placeholder="例如：比较这几家产品的定价、目标用户和最明显的风险。" required></textarea></label>
-          <label class="research-field"><span>网页地址 <small>每行一个 URL</small></span><textarea id="research-urls" rows="3" placeholder="https://example.com/article&#10;https://example.org/pricing" required></textarea></label>
-          <div class="command-options">
-            <label><input id="render-js" type="checkbox" checked />执行 JavaScript</label>
-            <label><input id="refresh-source" type="checkbox" />跳过缓存</label>
-            <label>最多页面 <input id="max-pages" type="number" min="1" max="20" value="5" /></label>
-            <button id="sample-query" class="quiet-action" type="button">填入示例</button>
-            <span class="command-status" id="command-status" role="status" aria-live="polite"></span>
-            <button id="start-research" class="primary-action" type="submit">开始研究 <span>↗</span></button>
-          </div>
-        </form>
-        <div class="research-drawer-grid">
-          <section class="evidence-panel card" aria-labelledby="evidence-title">
-            <div class="section-heading"><div><span class="card-kicker">SOURCE MATERIAL</span><h3 id="evidence-title">来源与证据</h3></div><div class="section-heading-actions"><button id="copy-evidence" class="quiet-action" type="button" disabled>复制证据</button><button id="cancel-research" class="quiet-action danger-action" type="button" hidden>取消任务</button></div></div>
-            <div id="evidence-list" class="evidence-list" aria-live="polite"><div class="empty-result"><span>01</span><strong>还没有打开网页</strong><p>抓取完成后，来源会按质量和正文长度显示在这里。</p></div></div>
-            <details class="run-log"><summary>查看任务日志 <span id="log-count">0</span></summary><div id="activity-log" class="activity-log"><span>等待任务开始。</span></div></details>
-          </section>
-          <section class="answer-panel card" aria-labelledby="answer-title">
-            <div class="section-heading"><div><span class="card-kicker">RESEARCH COPILOT</span><h3 id="answer-title">研究结论</h3></div><span class="answer-badge"><i></i>基于本次来源</span></div>
-            <div id="answer-content" class="answer-content"><div class="empty-result compact"><strong>回答会出现在这里</strong><p>先输入问题和网页地址；如果证据不足，助手会明确告诉你缺什么。</p></div></div>
-          </section>
-        </div>
-      </div>
-    </details>
-
-    <!-- 书签工具抽屉 -->
-    <details id="bookmarklet-drawer" class="research-drawer">
-      <summary>书签工具：浏览任意网页时一键带回研究</summary>
-      <div class="bookmarklet-body">
-        <p>把这个按钮拖到浏览器书签栏。浏览网页时点击它，就能把当前网址和选中文字带回本页。选中文字会随研究请求发送到 Workbench，请勿选择密码或 Token。</p>
-        <a id="research-bookmarklet" class="bookmarklet-link" href="#" draggable="true">拖到书签栏 · 研究此页</a>
-        <button id="copy-bookmarklet" class="small-action companion-button" type="button">复制书签地址</button>
-        <small id="bookmarklet-status">不安装扩展，不读取 Cookie，不自动提交外部表单。</small>
-      </div>
-    </details>
+    <div class="utility-dock" aria-label="研究工具">
+      <details id="research-drawer" class="utility-card"><summary><span>批量研究</span><small>对比多个页面</small></summary><div class="utility-body">
+        <form id="research-form" class="research-form"><label><span>研究问题</span><textarea id="research-question" rows="2" maxlength="2000" placeholder="比较这些页面的价格、目标用户和风险。" required></textarea></label><label><span>网页地址 <small>每行一个</small></span><textarea id="research-urls" rows="2" placeholder="https://example.com/article" required></textarea></label><div class="command-options"><label><input id="render-js" type="checkbox" checked />执行 JavaScript</label><label><input id="refresh-source" type="checkbox" />跳过缓存</label><label>最多页面 <input id="max-pages" type="number" min="1" max="20" value="5" /></label><button id="sample-query" class="quiet-action" type="button">示例</button><span id="command-status" class="command-status" role="status"></span><button id="start-research" class="primary-action" type="submit">开始研究</button></div></form>
+        <div class="research-drawer-grid"><section class="evidence-panel card"><div class="section-heading"><div><span class="card-kicker">SOURCE MATERIAL</span><h3>来源与证据</h3></div><div class="section-heading-actions"><button id="copy-evidence" class="quiet-action" type="button" disabled>复制证据</button><button id="cancel-research" class="quiet-action danger-action" type="button" hidden>取消</button></div></div><div id="evidence-list" class="evidence-list"><div class="empty-result compact"><strong>还没有批量研究</strong><p>这里会显示来源质量、时间和正文长度。</p></div></div><details class="run-log"><summary>任务日志 <span id="log-count">0</span></summary><div id="activity-log" class="activity-log"></div></details></section><section class="answer-panel card"><div class="section-heading"><div><span class="card-kicker">RESEARCH COPILOT</span><h3>研究结论</h3></div></div><div id="answer-content" class="answer-content"><div class="empty-result compact"><strong>结论会出现在这里</strong><p>证据不足时，助手会明确说缺什么。</p></div></div></section></div>
+      </div></details>
+      <details id="agent-drawer" class="utility-card"><summary><span>深度任务</span><small>让 AI 自己翻页找答案</small></summary><div class="utility-body"><form id="agent-form" class="research-form"><label><span>目标</span><textarea id="agent-goal" rows="2" maxlength="2000" placeholder="查清这家公司的产品定位和定价差异。" required></textarea></label><label><span>起始页面</span><input id="agent-start" type="url" placeholder="https://example.com/pricing" required /></label><div class="command-options"><label>最多读 <input id="agent-max" type="number" min="2" max="12" value="6" /> 页</label><label><input id="agent-render" type="checkbox" checked />执行 JavaScript</label><span id="agent-status" class="command-status" role="status"></span><button id="agent-start-button" class="primary-action" type="submit">开始任务</button></div></form><p class="agent-boundary">只读模式：只跟随公开链接，不登录、不填表、不提交。</p><div id="agent-result" class="agent-result"><div class="empty-result compact"><strong>等待任务</strong><p>每条结论都会附带来源。</p></div></div></div></details>
+      <details id="bookmarklet-drawer" class="utility-card"><summary><span>外部浏览器入口</span><small>把外部网页带回来</small></summary><div class="utility-body bookmarklet-body"><p>如果你在 Chrome 等外部浏览器里看到资料，可把这个入口拖到它的书签栏。</p><a id="research-bookmarklet" class="bookmarklet-link" href="#" draggable="true">拖到外部书签栏 · 研究此页</a><button id="copy-bookmarklet" class="small-action companion-button" type="button">复制入口地址</button><small id="bookmarklet-status">不读取 Cookie，不自动提交外部表单。</small></div></details>
+    </div>
   </div>
-  <script src="/static/request.js?v=0.3.140"></script>
-  <script src="/static/web-research.js?v=0.3.140"></script>
+  <script src="/static/request.js?v=0.3.153"></script>
+  <script src="/static/web-research.js?v=0.3.153"></script>
+  <script src="/static/web-research-plus.js?v=0.3.153"></script>
 </body>
 </html>

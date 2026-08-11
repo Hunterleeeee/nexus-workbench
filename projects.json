@@ -141,6 +141,19 @@
     "favorite": true
   },
   {
+    "id": "product-manager",
+    "title": "产品作战室",
+    "eyebrow": "PRODUCT",
+    "description": "把反馈、需求、Cowart 原型、优先级和决策放进同一条可追溯的产品工作流。",
+    "meta": "反馈证据 · RICE · Cowart 原型 · PRD · 决策",
+    "href": "/projects/product-manager",
+    "accent": "orange",
+    "icon": "spark",
+    "status": "ready",
+    "group": "produce",
+    "favorite": true
+  },
+  {
     "id": "cid-dashboard",
     "title": "中国独立开发者看板",
     "eyebrow": "DISCOVER",
@@ -166,5 +179,18 @@
     "status": "ready",
     "group": "discover",
     "favorite": false
+  },
+  {
+    "id": "ai-learning",
+    "title": "AI 转型学习",
+    "eyebrow": "LEARN",
+    "description": "每天学一个 AI 知识点、拆一个工作案例，再完成练习与复盘。",
+    "meta": "每日课程 · 案例拆解 · AI 教练 · 学习推送",
+    "href": "/projects/ai-learning",
+    "accent": "violet",
+    "icon": "book",
+    "status": "ready",
+    "group": "discover",
+    "favorite": true
   }
 ]

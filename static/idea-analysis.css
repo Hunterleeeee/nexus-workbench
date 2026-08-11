@@ -132,3 +132,28 @@
 
 @media (max-width: 960px) { .metric-form-grid { grid-template-columns: 1fr 1fr; } .metric-form-grid .primary-button { grid-column: 1 / -1; } }
 @media (max-width: 620px) { .evidence-actions { justify-content: start; } .metric-form-grid { grid-template-columns: 1fr; } .metric-form-grid .primary-button { grid-column: auto; } }
+
+/* ── 深色主题适配：硬编码浅色卡片/标签换成深色变量 ── */
+[data-theme="dark"] .opportunity-item { background: #272c36; border-color: #3a4350; }
+[data-theme="dark"] .opportunity-item.is-done { background: #1f2b26; border-color: #2e4a40; }
+[data-theme="dark"] .opportunity-item.is-failed { background: #2b2321; border-color: #4a3632; }
+[data-theme="dark"] .opportunity-start { color: #a9a4e8; background: #332f4d; }
+[data-theme="dark"] .opportunity-start:hover { background: #3d3a5e; }
+[data-theme="dark"] .opportunity-start.done { color: #6fd3a8; background: #1d3328; }
+[data-theme="dark"] .opportunity-pulse { box-shadow: 0 0 0 4px rgba(140, 126, 220, .15); }
+[data-theme="dark"] .session-item:hover, [data-theme="dark"] .session-item.active { border-color: #5550bb; }
+[data-theme="dark"] .conversation-tip { background: #26243a; border-color: #3d3a5e; }
+[data-theme="dark"] .verdict.good { color: #6fd3a8; background: #1d3328; border-color: #2e4a40; }
+[data-theme="dark"] .verdict.check { color: #e8b868; background: #33291a; border-color: #4a3d24; }
+[data-theme="dark"] .verdict.hold { color: #e88a84; background: #382422; border-color: #553430; }
+[data-theme="dark"] .idea-message.error { color: #e88a84; background: #382422; border-color: #553430; }
+[data-theme="dark"] .plan-version { color: #a9a4e8; background: #26243a; border-color: #3d3a5e; }
+[data-theme="dark"] .decision-strip > div, [data-theme="dark"] .decision-rules > div { background: #262433; border-color: #3a3a52; }
+[data-theme="dark"] .decision-strip > div:first-child { background: #2b2a45; border-color: #45426e; }
+[data-theme="dark"] .hypothesis-status, [data-theme="dark"] .task-status { color: #e8b868; background: #33291a; border-color: #4a3d24; }
+[data-theme="dark"] .hypothesis-status.confirmed, [data-theme="dark"] .task-status.status-done { color: #6fd3a8; background: #1d3328; border-color: #2e4a40; }
+[data-theme="dark"] .task-status.status-failed, [data-theme="dark"] .task-status.status-blocked { color: #e88a84; background: #382422; border-color: #553430; }
+[data-theme="dark"] .evidence-status { color: #e8b868; background: #33291a; border-color: #4a3d24; }
+[data-theme="dark"] .evidence-status.supported { color: #6fd3a8; background: #1d3328; border-color: #2e4a40; }
+[data-theme="dark"] .evidence-status.contradicted { color: #e88a84; background: #382422; border-color: #553430; }
+[data-theme="dark"] .evidence-status.partial { color: #e8b868; background: #33291a; border-color: #4a3d24; }

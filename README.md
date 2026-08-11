@@ -20,7 +20,9 @@
 - `/projects/market`：量化选股（4 段式研究流程、SVG 走势图、因子、观察任务、显式历史样本采集、日报/周报、回测）
 - `/projects/server`：服务器只读监控（可配置阈值、历史展开）
 - `/projects/aihot`：AI 热点研究（多数据源、洞察、机会交接、摘要推送 Web Push）
+- `/projects/ai-learning`：AI 转型学习教练（每日知识、工作案例、练习自测、进度复盘与定时 Push）
 - `/projects/idea-analysis`：想法分析（结构化验证、证据/指标回填、继续/暂停/转向）
+- `/projects/product-manager`：产品作战室（反馈证据、需求池、RICE 优先级、Cowart 无限画布与原型版本、决策记录、PRD 生成）
 - `/automation`：自动化中心（规则类型目录、多步骤计划、重试与人工接管；线上实际规则数量以页面和 API 为准）
 
 首页“总调度 Agent”是父 Agent；各项目入口声明为子 Agent。调度结果会写入 `data/workbench.db` 的 `work_items`，跨项目交接通过 `/api/handoffs` 记录。总调度对子 Agent 并发调用并建立独立 child Run（失败隔离、partial 标记）。
@@ -31,6 +33,7 @@
 
 - `app.py`：FastAPI、Agent、联动与本地数据接口。
 - `static/`：工作台和各项目页面资源。
+- `static/vendor/cowart/`：固定为 Cowart 0.1.25 的 Workbench 画布前端；默认统计标识已移除，生产使用 tldraw 前仍需确认适用授权。
 - `data/`：SQLite、脱敏快照、LLM 本地配置与可恢复备份；不提交版本库。
 - `knowledge-base/`：工作台生成的 Markdown 知识资产。
 - `outputs/`：版本化草稿和正式 DOCX/PDF 交付包。

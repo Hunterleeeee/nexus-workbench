@@ -1,21 +1,95 @@
-.theme-toggle { min-height: 28px; padding: 0 8px; color: var(--muted, #66727d); background: var(--surface, var(--panel, #fff)); border: 1px solid var(--line, #dfe5e9); border-radius: 6px; font-size: 10px; cursor: pointer; }
-.theme-toggle:hover { color: var(--ink, var(--text, #17212b)); border-color: var(--violet, var(--accent, #3b82f6)); }
+:root { color-scheme: light; }
 
-/* Project and platform pages share the same persisted theme preference. */
-html[data-theme="dark"] {
-  --platform-bg: #0d1117; --platform-panel: #111820; --platform-soft: #151e28; --platform-ink: #eff5f5; --platform-muted: #aab7c1; --platform-faint: #71808d; --platform-line: #273442; --platform-line-strong: #3b4b59; --platform-orange-soft: #14233c; --platform-blue-soft: #17243a; --platform-violet-soft: #211e3b; --platform-teal-soft: #162b2a; --platform-danger-soft: #2b1b1d;
-  --bg: #0d1117; --panel: #111820; --raised: #151e28; --panel-soft: #151e28; --surface: #111820; --surface-muted: #151e28; --ink: #eff5f5; --muted: #aab7c1; --faint: #71808d; --line: #273442; --line-strong: #3b4b59; --accent-soft: #14233c;
-}
-html[data-theme="dark"] .platform-topbar { background: rgba(17, 24, 32, .94); }
-html[data-theme="dark"] .page-topbar { border-color: var(--line); }
-html[data-theme="dark"] .card, html[data-theme="dark"] .platform-card, html[data-theme="dark"] .global-button, html[data-theme="dark"] .secondary-button { box-shadow: none; }
-html[data-theme="dark"] .chip, html[data-theme="dark"] .priority-chip, html[data-theme="dark"] .item-more-actions summary, html[data-theme="dark"] .platform-row-actions button { background: var(--surface); }
+.theme-toggle { min-height: 30px; padding: 0 9px; color: var(--muted, var(--platform-muted, #5d6b77)); background: var(--surface, var(--panel, var(--platform-panel, #fff))); border: 1px solid var(--line, var(--platform-line, #dfe5e9)); border-radius: 7px; font-size: 10px; font-weight: 650; cursor: pointer; }
+.theme-toggle:hover { color: var(--ink, var(--text, var(--platform-ink, #17212b))); border-color: var(--violet, var(--accent, var(--platform-blue, #3b82f6))); }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent, var(--platform-blue, #3b82f6)); outline-offset: 2px; }
 
-/* The Workbench/Crawl studio defaults are dark; light mode changes the shared
-   surface variables and the few fixed chrome colors that otherwise remain. */
+/* Every page starts light. Dark mode is entered only through the persisted
+   Workbench preference, so project pages never disagree with the homepage. */
 html[data-theme="light"] {
-  --bg: #f4f6f8; --panel: #ffffff; --panel-2: #f8fafb; --panel-3: #eef2f5; --line: #dfe5e9; --line-soft: #e9eef1; --text: #17212b; --muted: #5d6b77; --faint: #7d8a95; --accent: #3b82f6; --accent-soft: #7aa8f5; --teal: #17866d; --danger: #bd4d49;
+  color-scheme: light;
+  --bg: #f4f6f8; --canvas: #f4f6f8; --canvas-warm: #f8f9fb; --rail: #ffffff;
+  --panel: #ffffff; --panel-2: #f8fafb; --panel-3: #eef2f5; --panel-soft: #f8fafb; --panel-hover: #fffaf7;
+  --raised: #f8fafb; --surface: #ffffff; --surface-muted: #f8fafb; --surface-soft: #f8fafb;
+  --ink: #17212b; --text: #17212b; --muted: #5d6b77; --faint: #75828f;
+  --line: #dfe5e9; --line-soft: #e9eef1; --line-strong: #cfd8df;
+  --accent: #3b82f6; --accent-soft: #e6f1ff; --orange: #3b82f6; --orange-soft: #e6f1ff;
+  --violet: #6f61c9; --violet-soft: #f0efff; --teal: #17866d; --teal-soft: #e8f7f1;
+  --green: #238b72; --blue: #3f6fc5; --blue-soft: #dde9f9; --danger: #bd4d49; --red: #bd4d49;
+  --platform-bg: #f4f6f8; --platform-panel: #ffffff; --platform-soft: #f8fafb;
+  --platform-ink: #17212b; --platform-muted: #66727d; --platform-faint: #7d8994;
+  --platform-line: #dfe5e9; --platform-line-strong: #c9d2d8;
+  --platform-orange-soft: #e6f1ff; --platform-blue-soft: #eef3ff; --platform-violet-soft: #f2f0ff;
+  --platform-teal-soft: #edf8f4; --platform-danger-soft: #fff1ef;
 }
 html[data-theme="light"] .topbar { background: rgba(255,255,255,.94); }
 html[data-theme="light"] .control-panel { background: #fff; }
 html[data-theme="light"] .document-view { background: #fbfcfd; }
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117; --canvas: #0d1117; --canvas-warm: #111820; --rail: #111820;
+  --panel: #111820; --panel-2: #151e28; --panel-3: #1b2632; --panel-soft: #151e28; --panel-hover: #182332;
+  --raised: #151e28; --surface: #111820; --surface-muted: #151e28; --surface-soft: #151e28;
+  --ink: #eff5f5; --text: #eff5f5; --muted: #aab7c1; --faint: #7f8f9b;
+  --line: #273442; --line-soft: #202d39; --line-strong: #3b4b59;
+  --accent: #6ea8ff; --accent-soft: #14233c; --orange: #6ea8ff; --orange-soft: #14233c;
+  --violet: #aaa0f3; --violet-soft: #26243f; --teal: #6fd3b0; --teal-soft: #162b28;
+  --green: #6fd3a8; --blue: #89b4ef; --blue-soft: #17243a; --danger: #e88a84; --red: #e88a84;
+  --platform-bg: #0d1117; --platform-panel: #111820; --platform-soft: #151e28;
+  --platform-ink: #eff5f5; --platform-muted: #aab7c1; --platform-faint: #7f8f9b;
+  --platform-line: #273442; --platform-line-strong: #3b4b59;
+  --platform-orange-soft: #14233c; --platform-blue-soft: #17243a; --platform-violet-soft: #211e3b;
+  --platform-teal-soft: #162b2a; --platform-danger-soft: #2b1b1d;
+}
+
+html[data-theme="dark"] .platform-topbar,
+html[data-theme="dark"] .topbar,
+html[data-theme="dark"] .main-topbar { background: color-mix(in srgb, var(--surface, var(--platform-panel)) 94%, transparent); }
+html[data-theme="dark"] .page-topbar { border-color: var(--line); }
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .platform-card,
+html[data-theme="dark"] .global-button,
+html[data-theme="dark"] .secondary-button { box-shadow: none; }
+html[data-theme="dark"] .chip,
+html[data-theme="dark"] .priority-chip,
+html[data-theme="dark"] .item-more-actions summary,
+html[data-theme="dark"] .platform-row-actions button { background: var(--surface, var(--platform-panel)); }
+html[data-theme="dark"] .summary-stat { background: color-mix(in srgb, var(--panel) 88%, transparent); }
+
+/* Shared project components that previously kept light-only fills. */
+html[data-theme="dark"] .inbox-classifier-stats,
+html[data-theme="dark"] .inbox-triage,
+html[data-theme="dark"] .inbox-next-steps,
+html[data-theme="dark"] .factory-source-picker,
+html[data-theme="dark"] .factory-review-answer,
+html[data-theme="dark"] .project-agent-capability,
+html[data-theme="dark"] .project-agent-incoming,
+html[data-theme="dark"] .factory-deliver-hint { background: var(--surface-muted); border-color: var(--line); }
+html[data-theme="dark"] .factory-source-option:hover,
+html[data-theme="dark"] .factory-source-option:has(input:checked),
+html[data-theme="dark"] .agent-quick-actions button,
+html[data-theme="dark"] .project-agent-incoming-item button,
+html[data-theme="dark"] .project-agent-handoff button,
+html[data-theme="dark"] .project-agent-inline-retry { background: var(--surface); border-color: var(--line-strong); }
+html[data-theme="dark"] .factory-output-sources em,
+html[data-theme="dark"] .inbox-classifier-chip { background: var(--violet-soft); border-color: #48466f; }
+html[data-theme="dark"] .factory-approval.pending .factory-approval-state,
+html[data-theme="dark"] .inbox-triage-due,
+html[data-theme="dark"] .llm-provider.is-incomplete { color: #e8b868; background: #33291a; border-color: #4a3d24; }
+html[data-theme="dark"] .factory-approval.approved .factory-approval-state { background: #1d3328; border-color: #2e4a40; }
+html[data-theme="dark"] .factory-approval.rejected .factory-approval-state,
+html[data-theme="dark"] .inbox-triage-duplicate,
+html[data-theme="dark"] .project-agent-message.error { background: #382422; border-color: #553430; }
+
+/* Platform actions and form placeholders retain readable contrast in dark mode. */
+html[data-theme="dark"] .platform-brand-mark { border-color: #29476a; }
+html[data-theme="dark"] .platform-button-danger { border-color: #553430; }
+html[data-theme="dark"] .project-agent-launcher { color: #ffffff; background: #2563eb; border-color: #3b82f6; }
+html[data-theme="dark"] .platform-button,
+html[data-theme="dark"] .primary-button,
+html[data-theme="dark"] .project-agent-form-foot button { color: #ffffff; background: #2563eb; border-color: #3b82f6; }
+html[data-theme="dark"] .platform-form input::placeholder,
+html[data-theme="dark"] .platform-form textarea::placeholder,
+html[data-theme="dark"] input::placeholder,
+html[data-theme="dark"] textarea::placeholder { color: #71808d; }

@@ -72,3 +72,21 @@
 
 /* 新出现热点徽标 */
 .signal-new { flex: 0 0 auto; padding: 1px 6px; color: var(--danger, #e06c5f); background: rgba(224, 108, 95, .12); border-radius: 999px; font: 9px var(--mono, monospace); }
+
+/* ── 深色主题适配 ── */
+[data-theme="dark"] .opportunity-button { color: #a9a4e8 !important; background: #332f4d !important; }
+[data-theme="dark"] .agent-prompt { color: var(--muted); background: #242c3a; border-color: #34405a; }
+
+/* ── 深色主题适配 ── */
+[data-theme="dark"] .opportunity-button { color: #a9a4e8 !important; background: #332f4d !important; }
+[data-theme="dark"] .agent-prompt { color: var(--muted); background: #242c3a; border-color: #34405a; }
+
+/* 更多操作（收敛次要按钮，减少操作过载） */
+.signal-more { position: relative; margin-left: auto; }
+.signal-more summary { list-style: none; cursor: pointer; color: var(--muted); font-size: 10px; padding: 4px 6px; border-radius: 5px; }
+.signal-more summary::-webkit-details-marker { display: none; }
+.signal-more summary:hover { color: var(--accent); }
+.signal-more[open] summary { color: var(--accent); }
+.signal-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: grid; gap: 2px; min-width: 110px; padding: 5px; background: var(--surface, #fff); border: 1px solid var(--line, #dfe5e9); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+.signal-more-menu a, .signal-more-menu button { display: block; width: 100%; padding: 6px 8px; text-align: left; border: 0; border-radius: 5px; background: transparent; color: var(--muted, #5d6b77); font-size: 10px; text-decoration: none; cursor: pointer; }
+.signal-more-menu a:hover, .signal-more-menu button:hover { background: var(--surface-muted, #f1f5f9); color: var(--accent, #3b82f6); }

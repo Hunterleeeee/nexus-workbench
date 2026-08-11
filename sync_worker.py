@@ -27,8 +27,32 @@ POLL_SECONDS = max(30, int(os.getenv("WORKBENCH_SYNC_POLL_SECONDS", "30")))
 STOP = False
 
 
-def due(rule: dict[str, Any]) -> bool:
+def due(rule: dict[str, Any], now: datetime | None = None) -> bool:
     schedule = str(rule.get("schedule") or "")
+    current = now or datetime.now().astimezone()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    if schedule.startswith("daily:"):
+        try:
+            hour_text, minute_text = schedule.split(":", 1)[1].split(":", 1)
+            hour, minute = int(hour_text), int(minute_text)
+            if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+                return False
+        except (TypeError, ValueError):
+            return False
+        target = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if current < target:
+            return False
+        last = str(rule.get("last_run_at") or "")
+        if not last:
+            return True
+        try:
+            at = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        return at.astimezone(current.tzinfo) < target
     if not schedule.startswith("every:"):
         return False
     try:
@@ -44,7 +68,7 @@ def due(rule: dict[str, Any]) -> bool:
         return True
     if at.tzinfo is None:
         at = at.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - at >= timedelta(seconds=interval)
+    return current.astimezone(timezone.utc) - at.astimezone(timezone.utc) >= timedelta(seconds=interval)
 
 
 async def worker_loop() -> None:

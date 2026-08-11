@@ -1,0 +1,59 @@
+/* Usage report page. Scoped so it cannot leak into other project pages. */
+.usage-window { display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px; background: var(--surface-sunken, rgba(15, 23, 42, 0.05)); }
+.usage-window-button { border: 0; background: transparent; padding: 6px 14px; border-radius: 999px; font-size: 13px; cursor: pointer; color: inherit; }
+.usage-window-button.is-active { background: var(--surface, #fff); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12); font-weight: 600; }
+
+.usage-card { background: var(--surface, #fff); border: 1px solid var(--border, rgba(15, 23, 42, 0.08)); border-radius: 16px; padding: 20px; margin-bottom: 18px; }
+.usage-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.usage-card-head h2 { margin: 2px 0 0; font-size: 17px; }
+.usage-card-head small { display: block; margin-top: 4px; opacity: 0.6; font-size: 12px; }
+.usage-kicker { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.55; }
+.usage-state { font-size: 12px; opacity: 0.6; white-space: nowrap; }
+.usage-empty { padding: 18px 0; opacity: 0.55; font-size: 13px; }
+
+.usage-highlights { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.usage-highlights li { padding: 10px 14px; border-radius: 10px; background: var(--surface-sunken, rgba(15, 23, 42, 0.04)); font-size: 14px; line-height: 1.6; }
+
+.usage-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.usage-kpi { background: var(--surface, #fff); border: 1px solid var(--border, rgba(15, 23, 42, 0.08)); border-radius: 14px; padding: 14px 16px; }
+.usage-kpi strong { display: block; font-size: 26px; line-height: 1.2; }
+.usage-kpi span { font-size: 12px; opacity: 0.6; }
+
+.usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+
+.usage-projects { display: grid; gap: 8px; }
+.usage-row { display: grid; grid-template-columns: minmax(140px, 1.4fr) 1fr auto; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 12px; background: var(--surface-sunken, rgba(15, 23, 42, 0.03)); }
+.usage-row-name { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.usage-row-name a { font-weight: 600; font-size: 14px; text-decoration: none; color: inherit; }
+.usage-row-name a:hover { text-decoration: underline; }
+.usage-row-meta { font-size: 12px; opacity: 0.6; }
+.usage-bar { height: 8px; border-radius: 999px; background: rgba(15, 23, 42, 0.08); overflow: hidden; }
+.usage-bar i { display: block; height: 100%; border-radius: 999px; background: #2563eb; }
+.usage-verdict { font-size: 12px; padding: 4px 10px; border-radius: 999px; white-space: nowrap; font-weight: 600; }
+.usage-verdict.active { background: rgba(22, 163, 74, 0.12); color: #15803d; }
+.usage-verdict.rare { background: rgba(217, 119, 6, 0.14); color: #b45309; }
+.usage-verdict.idle { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
+.usage-verdict.unreliable { background: rgba(147, 51, 234, 0.14); color: #7e22ce; }
+
+.usage-flow { display: grid; gap: 12px; }
+.usage-flow-row { display: grid; gap: 6px; }
+.usage-flow-row header { display: flex; justify-content: space-between; font-size: 13px; }
+.usage-flow-row header b { font-weight: 600; }
+.usage-flow-note { font-size: 12px; opacity: 0.6; }
+
+.usage-llm-total { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 12px; }
+.usage-llm-total div strong { display: block; font-size: 20px; }
+.usage-llm-total div span { font-size: 12px; opacity: 0.6; }
+.usage-llm-list { display: grid; gap: 6px; }
+.usage-llm-item { display: grid; grid-template-columns: minmax(90px, 1fr) 1fr auto; gap: 10px; align-items: center; font-size: 13px; }
+
+.usage-trend { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 6px; }
+.usage-trend-col { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 3px; }
+.usage-trend-label { margin-top: 4px; color: var(--faint, #7d8a95); font: 9px var(--mono, monospace); white-space: nowrap; overflow: hidden; max-width: 100%; }
+.usage-trend-bar { flex: 1 1 auto; min-width: 3px; background: #2563eb; border-radius: 3px 3px 0 0; opacity: 0.85; }
+.usage-trend-bar:hover { opacity: 1; }
+
+@media (max-width: 640px) {
+  .usage-row { grid-template-columns: 1fr auto; }
+  .usage-row .usage-bar { grid-column: 1 / -1; }
+}

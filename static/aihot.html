@@ -1,12 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
+  <script src="/static/theme.js?v=0.3.153"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>AI 热点研究 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
-  <link rel="stylesheet" href="/static/aihot.css?v=0.3.140" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.153" />
+  <link rel="stylesheet" href="/static/aihot.css?v=0.3.153" />
 </head>
 <body>
   <div class="page-shell">
@@ -37,7 +38,7 @@
       </section>
     </main>
   </div>
-      <script src="/static/request.js?v=0.3.140"></script><script src="/static/project.js?v=0.3.140"></script>
+      <script src="/static/request.js?v=0.3.153"></script><script src="/static/project.js?v=0.3.153"></script>
   <script>
     const feedList = qs("#feed-list");
     const feedStatus = qs("#feed-status");
@@ -80,8 +81,8 @@
             <button class="select-signal ${selected.has(id) ? "active" : ""}" type="button">${selected.has(id) ? "已选入对话" : "加入对话"}</button>
           </div>
           <div class="signal-actions signal-primary-actions">
-            <button class="opportunity-button ${opportunityDone ? "done" : ""}" data-opportunity="${opportunityDone ? "done" : "create"}" type="button" ${opportunityDone ? "disabled" : ""}>${opportunityDone ? "已交给想法分析" : "交给想法分析"}</button>${opportunityDone ? `<button class="opportunity-button review" data-review-opportunity="${escapeHtml(id)}" type="button">记录复盘</button>` : ""}
-            ${item.link ? `<a href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer">阅读原文 ↗</a>` : ""}
+            <button class="opportunity-button ${opportunityDone ? "done" : ""}" data-opportunity="${opportunityDone ? "done" : "create"}" type="button" ${opportunityDone ? "disabled" : ""}>${opportunityDone ? "已交给想法分析" : "交给想法分析"}</button>
+            <details class="signal-more" title="更多操作"><summary>更多</summary><div class="signal-more-menu">${opportunityDone ? `<button class="opportunity-button review" data-review-opportunity="${escapeHtml(id)}" type="button">记录复盘</button>` : ""}${item.link ? `<a href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer">阅读原文 ↗</a>` : ""}</div></details>
           </div>
         </article>`;
       }).join("");
@@ -203,13 +204,7 @@
           setFeedStatus("已交给想法分析 Agent，可在应用通知和想法分析项目中继续", "success");
         } catch (error) { button.disabled = false; button.textContent = "交给想法分析"; setFeedStatus(`登记失败：${error.message}`, "error"); }
       }
-      if (button.dataset.reviewOpportunity) {
-        const verdict = window.prompt("这条机会当前判断？例如：继续验证 / 暂停 / 不相关", "继续验证");
-        if (!verdict) return;
-        const rationale = window.prompt("记录一句判断依据（可选）", "");
-        button.disabled = true; button.textContent = "保存中…";
-        try { await requestJson(`/api/aihot/opportunities/${encodeURIComponent(button.dataset.reviewOpportunity)}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ verdict, rationale: rationale || "", confirmed: true }) }); setFeedStatus("机会复盘已保存，可在想法分析中继续验证。", "success"); } catch (error) { button.disabled = false; setFeedStatus(`复盘失败：${error.message}`, "error"); }
-      }
+      if (button.dataset.reviewOpportunity) return; // 由弹窗处理
     });
 
     function appendChat(role, content) { qs("#chat-log").insertAdjacentHTML("beforeend", `<div class="chat-message ${role}"><strong>${role === "user" ? "你" : "AI 热点研究 Agent"}</strong><p>${escapeHtml(content)}</p></div>`); qs("#chat-log").scrollTop = qs("#chat-log").scrollHeight; }
@@ -231,6 +226,44 @@
     loadAihotRuns().catch(() => {});
     loadFeed();
     updateAgentState();
+
+    // 复盘弹窗（替代原生 prompt）
+    let reviewTargetId = null;
+    const reviewModal = document.createElement("div");
+    reviewModal.className = "modal-backdrop hidden";
+    reviewModal.innerHTML = `<form id="review-form" class="modal audit-modal">
+      <div class="modal-head"><div><h2>机会复盘</h2><p>当前判断 + 一句依据，保存后可回到想法分析继续验证。</p></div><button class="icon-button" data-close-review type="button" aria-label="关闭">×</button></div>
+      <label>当前判断<input id="review-verdict" type="text" value="继续验证" maxlength="60" placeholder="例如：继续验证 / 暂停 / 不相关" /></label>
+      <label>判断依据（可选）<textarea id="review-rationale" rows="3" maxlength="500" placeholder="为什么这么判断？"></textarea></label>
+      <div class="modal-actions"><button class="secondary-button" data-close-review type="button">取消</button><button class="primary-button" type="submit">保存复盘</button></div>
+      <p class="modal-message" id="review-message" role="status"></p>
+    </form>`;
+    document.body.appendChild(reviewModal);
+    const closeReview = () => { reviewModal.classList.add("hidden"); reviewTargetId = null; qs("#review-message").textContent = ""; };
+    reviewModal.addEventListener("click", (e) => { if (e.target === reviewModal || e.target.closest("[data-close-review]")) closeReview(); });
+    reviewModal.querySelector("#review-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!reviewTargetId) return;
+      const verdict = reviewModal.querySelector("#review-verdict").value.trim();
+      const rationale = reviewModal.querySelector("#review-rationale").value.trim();
+      const msg = reviewModal.querySelector("#review-message");
+      const submit = reviewModal.querySelector("button[type=submit]");
+      submit.disabled = true; msg.textContent = "保存中…";
+      try {
+        await requestJson(`/api/aihot/opportunities/${encodeURIComponent(reviewTargetId)}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ verdict, rationale, confirmed: true }) });
+        msg.textContent = "已保存。"; setTimeout(closeReview, 700); setFeedStatus("机会复盘已保存，可在想法分析中继续验证。", "success");
+      } catch (error) { msg.textContent = error.message; }
+      finally { submit.disabled = false; }
+    });
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-review-opportunity]");
+      if (!btn) return;
+      reviewTargetId = btn.dataset.reviewOpportunity;
+      reviewModal.classList.remove("hidden");
+      reviewModal.querySelector("#review-verdict").value = "继续验证";
+      reviewModal.querySelector("#review-rationale").value = "";
+      reviewModal.querySelector("#review-verdict").focus();
+    });
   </script>
 </body>
 </html>

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <script src="/static/theme.js?v=0.3.153"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>AI 转型学习 · Workbench</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.153" />
+  <link rel="stylesheet" href="/static/ai-learning.css?v=0.3.153" />
+</head>
+<body data-project-id="ai-learning">
+  <div class="page-shell learning-shell">
+    <header class="page-topbar">
+      <a class="page-brand" href="/" aria-label="返回工作台">
+        <span class="brand-mark-small" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M5 7.5 12 4l7 3.5-7 3.5-7-3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7.5 9.2v5.3c2.5 2 6.5 2 9 0V9.2M19 8v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span><strong>Workbench</strong><small>AI LEARNING</small></span>
+      </a>
+      <div class="page-actions">
+        <a class="back-link" href="/"><span aria-hidden="true">←</span><span>返回工作台</span></a>
+        <button id="global-settings-button" class="global-button unconfigured" type="button"><i class="dot"></i><span class="global-label">配置全局 LLM</span></button>
+      </div>
+    </header>
+
+    <main class="page-main">
+      <section class="learning-hero" aria-labelledby="learning-title">
+        <div class="learning-hero-copy">
+          <div class="eyebrow">每日课程</div>
+          <h1 id="learning-title">AI 转型学习</h1>
+          <p class="lede">每天完成一节课程，包含知识、案例、练习和自测。</p>
+          <div class="hero-status-row" aria-live="polite">
+            <span id="learning-source-status" class="learning-status-chip">正在准备今日课程</span>
+            <span id="learning-push-status" class="learning-status-chip neutral">正在读取推送状态</span>
+          </div>
+        </div>
+        <div class="learning-kpis" aria-label="学习进度">
+          <div><span>连续学习</span><strong id="stat-streak">—</strong><small>天</small></div>
+          <div><span>已完成</span><strong id="stat-completed">—</strong><small>课</small></div>
+          <div><span>本周</span><strong id="stat-weekly">—</strong><small>/ 5 课</small></div>
+          <div><span>自测正确率</span><strong id="stat-accuracy">—</strong><small>%</small></div>
+        </div>
+      </section>
+
+      <div id="learning-page-status" class="learning-page-status" role="status" aria-live="polite"></div>
+
+      <section class="learning-layout">
+        <article id="today-lesson" class="card lesson-card" aria-labelledby="lesson-title">
+          <div class="lesson-loading" role="status"><span class="loading-line wide"></span><span class="loading-line"></span><span class="loading-line short"></span></div>
+        </article>
+
+        <aside class="learning-rail" aria-label="学习设置与路线">
+          <section class="card rail-card coach-card">
+            <div class="rail-head"><div><span class="rail-kicker">课程内容</span><h2>学习设置</h2></div><button id="profile-toggle" class="icon-circle" type="button" aria-expanded="false" aria-controls="profile-form" title="编辑学习设置"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m14.5 5.5 4 4L9 19H5v-4l9.5-9.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m12.5 7.5 4 4" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+            <p id="profile-summary" class="rail-copy">填写当前岗位和目标后，后续课程会优先使用你的工作场景。</p>
+            <form id="profile-form" class="learning-form hidden">
+              <label for="current-role">当前岗位<input id="current-role" name="current_role" placeholder="例如：产品经理 / 运营 / 创业者" /></label>
+              <label for="target-role">目标岗位<input id="target-role" name="target_role" placeholder="例如：AI 产品经理 / AI 应用开发" /></label>
+              <div class="form-two">
+                <label for="experience">当前基础<select id="experience" name="experience"><option value="beginner">刚开始</option><option value="practical">会用常见工具</option><option value="technical">能写代码 / 接 API</option></select></label>
+                <label for="daily-minutes">每天投入<select id="daily-minutes" name="daily_minutes"><option value="15">15 分钟</option><option value="25">25 分钟</option><option value="40">40 分钟</option><option value="60">60 分钟</option></select></label>
+              </div>
+              <label for="focus">优先方向<select id="focus" name="focus"><option value="work-efficiency">工作提效</option><option value="product">AI 产品</option><option value="technical">技术与开发</option><option value="business">商业与创业</option><option value="management">团队管理</option></select></label>
+              <label for="learning-goal">学习目标<textarea id="learning-goal" name="goal" rows="3" placeholder="例如：三个月内做出一个能展示的 AI 产品作品"></textarea></label>
+              <button class="primary-button" type="submit">保存学习设置</button>
+              <p id="profile-message" class="form-note" role="status" aria-live="polite"></p>
+            </form>
+          </section>
+
+          <section class="card rail-card push-card">
+            <div class="rail-head"><div><span class="rail-kicker">通知</span><h2>每日提醒</h2></div><span id="push-dot" class="status-dot" aria-hidden="true"></span></div>
+            <p class="rail-copy">到点后发送工作台提醒。浏览器通知需要在当前设备授权。</p>
+            <form id="push-form" class="push-form">
+              <label class="push-switch" for="push-enabled"><span><strong>每日学习提醒</strong><small id="push-rule-note">读取中…</small></span><input id="push-enabled" type="checkbox" role="switch" /></label>
+              <label for="push-time">提醒时间<input id="push-time" type="time" value="08:30" /></label>
+              <div class="rail-actions"><button class="secondary-button" type="submit">保存时间</button><button id="subscribe-push" class="secondary-button" type="button">订阅浏览器 Push</button></div>
+              <p id="push-message" class="form-note" role="status" aria-live="polite"></p>
+            </form>
+          </section>
+
+          <section class="card rail-card roadmap-card">
+            <div class="rail-head"><div><span class="rail-kicker">14 天</span><h2>学习路线</h2></div></div>
+            <ol id="learning-phases" class="learning-phases"><li class="phase-placeholder">正在读取学习路线…</li></ol>
+          </section>
+
+          <section class="card rail-card history-card">
+            <div class="rail-head"><div><span class="rail-kicker">最近课程</span><h2>学习记录</h2></div><a href="/projects/knowledge" target="_blank" rel="noopener">知识库 ↗</a></div>
+            <div id="lesson-history" class="lesson-history"><div class="history-empty">还没有历史课程。</div></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/request.js?v=0.3.153"></script>
+  <script src="/static/llm-settings.js?v=0.3.153"></script>
+  <script src="/static/project.js?v=0.3.153"></script>
+  <script src="/static/ai-learning.js?v=0.3.153"></script>
+</body>
+</html>

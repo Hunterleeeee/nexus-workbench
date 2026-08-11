@@ -1,67 +1,160 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
+  <script src="/static/theme.js?v=0.3.153"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>量化选股 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.140" />
-  <link rel="stylesheet" href="/static/market.css?v=0.3.140" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.153" />
+  <link rel="stylesheet" href="/static/market.css?v=0.3.153" />
 </head>
 <body data-project-id="market">
   <div class="page-shell">
     <header class="page-topbar">
       <a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>MARKET RESEARCH</small></span></a>
-      <div class="page-actions"><a class="back-link" href="/">← 返回工作台</a><span class="market-note">行情仅供研究，不构成投资建议</span></div>
+      <div class="page-actions"><span class="ver-badge" title="当前加载的版本">v0.3.153</span><a class="back-link" href="/">← 返回工作台</a></div>
     </header>
     <main class="page-main">
-      <section class="page-heading">
-        <div>
-          <div class="eyebrow">量化选股</div>
-          <h1>量化选股</h1>
-          <p class="lede">看自选行情 → 让 AI 总结 → 输入代码出一张研究卡。所有数据只作参考，不会自动下单。</p>
+      <section class="market-hero">
+        <div class="market-hero-copy">
+          <div class="eyebrow">独立项目 · 量化选股</div>
+          <h1>今天该看什么，一页说清楚</h1>
+          <p class="lede">这个项目只做三件事：按条件找候选、跟踪你加入的自选、价格碰到你写的买点 / 卖点 / 止损时提醒。它不是固定股票榜，也不会替你下单。</p>
+          <div class="market-hero-note"><span class="status-dot"></span><span>不自动下单 · 每个结论都带数据时间和风险提示</span></div>
         </div>
-        <div class="page-kpi"><strong id="watch-count">0</strong><span>只自选</span><div id="market-kpi-today" class="market-kpi-today"></div></div>
+        <div class="market-hero-actions">
+          <button id="edit-watch" class="m2-button" type="button">编辑自选</button>
+          <button id="today-refresh" class="m2-button primary" type="button">刷新行情</button>
+        </div>
       </section>
 
+      <nav class="market-flow" aria-label="量化工作流">
+        <a class="market-flow-step active" href="#decision-center"><span>01</span><strong>看今日待办</strong><small>有没有触到计划线</small></a>
+        <a class="market-flow-step" href="#watch-section"><span>02</span><strong>管理我的自选</strong><small>只显示你留下的股票</small></a>
+        <a class="market-flow-step" href="#screen-card"><span>03</span><strong>按条件找候选</strong><small>筛选，不直接推荐</small></a>
+        <a class="market-flow-step" href="#research-section"><span>04</span><strong>核对理由和风险</strong><small>把依据留住再决定</small></a>
+      </nav>
+
+      <section class="market-signal-strip" aria-label="今日信号概览">
+        <div class="market-signal-stat stat-buy"><span class="signal-stat-icon">↘</span><div><strong id="today-count-buy">—</strong><span>你的买点</span></div></div>
+        <div class="market-signal-stat stat-sell"><span class="signal-stat-icon">↗</span><div><strong id="today-count-sell">—</strong><span>你的卖点</span></div></div>
+        <div class="market-signal-stat stat-stop"><span class="signal-stat-icon">!</span><div><strong id="today-count-stop">—</strong><span>止损提醒</span></div></div>
+        <div class="market-signal-stat stat-near"><span class="signal-stat-icon">○</span><div><strong id="today-count-near">—</strong><span>接近计划线</span></div></div>
+        <div class="market-signal-stat stat-watch"><span class="signal-stat-icon">#</span><div><strong id="watch-count">0</strong><span>只自选</span><small id="market-kpi-today" class="market-kpi-today"></small></div></div>
+      </section>
+
+      <section class="decision-center" id="decision-center" aria-labelledby="decision-title">
+        <div class="decision-head">
+          <div><span class="card-kicker">01 · 今日待办</span><h2 id="decision-title">现在有没有需要你处理的？</h2><p>只检查你的真实自选和你自己写的计划线。删除自选后，这里也会立即消失，不会补进系统固定股票。</p></div>
+          <div class="decision-data"><span id="decision-quality">正在读取样本</span><span id="decision-time">—</span></div>
+        </div>
+        <div class="decision-verdict" id="decision-verdict" data-tone="calm">
+          <div><span>今日结论</span><strong id="decision-verdict-title">读取中…</strong><p id="decision-verdict-detail">正在核对行情、计划线和历史样本。</p></div>
+          <button class="m2-button" type="button" data-open-watch>管理自选</button>
+        </div>
+        <nav class="decision-groups" aria-label="决策分组">
+          <button type="button" data-decision-group="must"><strong id="decision-count-must">—</strong><span>必须处理</span><small>止损 / 买点 / 卖点</small></button>
+          <button type="button" data-decision-group="near"><strong id="decision-count-near">—</strong><span>快到计划线</span><small>先准备，不追着动</small></button>
+          <button type="button" data-decision-group="watch"><strong id="decision-count-watch">—</strong><span>暂时不动</span><small>仍在你的计划内</small></button>
+          <button type="button" data-decision-group="setup"><strong id="decision-count-setup">—</strong><span>没设计划</span><small>先写买 / 卖 / 止损</small></button>
+        </nav>
+        <div id="decision-list" class="decision-list" aria-live="polite"><div class="today-empty">正在生成决策卡…</div></div>
+        <div class="decision-foot"><span id="decision-disclaimer">量化结果仅作研究参考，不构成投资建议。</span><details><summary>参考买卖区间怎么算</summary><p>用本地历史价格样本的分位区间定位“相对偏低”和“相对偏高”，同时展示样本数、覆盖天数、波动和回撤；样本不够就明确说不够。</p></details></div>
+      </section>
+
+      <div class="market-primary-grid" hidden aria-hidden="true">
+        <section class="today-card" id="today-card" aria-labelledby="today-title">
+          <div class="today-head">
+            <div><span class="card-kicker">01 · 今日信号</span><h2 id="today-title">今天先看有没有触线</h2><p class="section-subtitle">只显示你自己设过的买入、卖出和止损计划。</p></div>
+            <div class="today-head-meta"><span id="today-checked-at">等待同步</span><button id="refresh-quotes" class="m2-button" type="button">刷新行情</button></div>
+          </div>
+          <div class="today-verdict" id="today-verdict">
+            <strong id="today-verdict-text">读取中…</strong>
+            <p id="today-verdict-detail">读取中…</p>
+          </div>
+          <div class="today-signal-legend"><span><i class="legend-dot buy"></i>买点 = 价格到了你的买入线</span><span><i class="legend-dot sell"></i>卖点 = 价格到了你的卖出线</span><span><i class="legend-dot stop"></i>止损 = 价格跌破你的止损线</span></div>
+          <div id="today-list" class="today-list"></div>
+          <p class="today-foot">计划线是你写下的提醒，不是 AI 对未来价格的预测。没有设线的自选，会明确标成“待设计划”。</p>
+        </section>
+
+        <aside class="market-plan-card" aria-labelledby="plan-guide-title">
+          <div class="plan-card-top"><span class="card-kicker">小白入口</span><span class="plan-badge">先写计划</span></div>
+          <h2 id="plan-guide-title">买点和卖点怎么用？</h2>
+          <p class="plan-intro">你不需要先学会一堆指标。先回答买之前的三个问题：</p>
+          <ol class="plan-steps">
+            <li><span>1</span><div><strong>跌到多少，才值得我看一眼？</strong><small>写成你的买入线</small></div></li>
+            <li><span>2</span><div><strong>涨到多少，我愿意兑现？</strong><small>写成你的卖出线</small></div></li>
+            <li><span>3</span><div><strong>跌破哪里，说明我看错了？</strong><small>写成你的止损线</small></div></li>
+          </ol>
+          <button class="plan-cta" type="button" data-scroll-watch>去自选里设线 <span>↓</span></button>
+          <div class="plan-disclaimer"><strong>工作台会做什么</strong><span>盯价格 · 到线提醒 · 展开依据 · 保留数据时间</span><strong>工作台不会做什么</strong><span>不会替你下单，也不会假装知道明天涨跌</span></div>
+        </aside>
+      </div>
+
       <div class="m2-layout">
-        <main class="m2-main">
-
-          <section class="m2-card m2-ai" aria-labelledby="ai-scan-title">
+        <div class="m2-main">
+          <section class="m2-card market-section watch-section" id="watch-section" aria-labelledby="watch-title">
             <div class="m2-card-head">
-              <div><span class="card-kicker">AI 一眼看</span><h2 id="ai-scan-title">今天值得注意什么</h2></div>
-              <span id="ai-scan-state" class="m2-state">等待行情</span>
+              <div><span class="card-kicker">02 · 我的自选</span><h2 id="watch-title">自选 + 我的买卖计划</h2><small id="checked-at">尚未同步</small></div>
+              <div class="m2-head-actions"><button id="watch-section-edit" class="m2-button" type="button" data-open-watch>编辑自选</button><button class="m2-button primary" type="button" data-scroll-today>看今日信号</button></div>
             </div>
-            <div id="ai-scan-answer" class="m2-ai-answer"><div class="m2-empty">先添加自选并刷新行情，我会基于快照数据给你一句人话总结。</div></div>
-            <form id="ai-scan-form" class="m2-ai-form">
-              <input id="ai-scan-question" type="text" placeholder="追问，例如：长鑫和传智相比哪个更值得盯？（回车发送）" autocomplete="off" />
-              <button type="submit">追问</button>
-            </form>
-          </section>
-
-          <section class="m2-card" aria-labelledby="watch-title">
-            <div class="m2-card-head">
-              <div><span class="card-kicker">我的自选</span><h2 id="watch-title">自选与行情</h2><small id="checked-at">尚未同步</small></div>
-              <div class="m2-head-actions">
-                <button id="edit-watch" class="m2-button" type="button">编辑自选</button>
-                <button id="refresh-quotes" class="m2-button primary" type="button">刷新行情</button>
-              </div>
-            </div>
-            <div id="quote-list" class="quote-list" aria-live="polite"><div class="m2-empty">先添加自选股票，再刷新行情。</div></div>
+            <div class="watch-explainer"><span>行情只是事实</span><b>·</b><span>买入 / 卖出 / 止损线才是你的计划</span><b>·</b><span>点每行右侧“设线”开始</span></div>
+            <div id="quote-list" class="quote-list" aria-live="polite"><div class="m2-empty">还没有自选。点「编辑自选」添加。</div></div>
             <div id="quote-missing" class="quote-missing" hidden></div>
           </section>
 
-          <section class="m2-card" aria-labelledby="research-card-title">
-            <div class="m2-card-head">
-              <div><span class="card-kicker">个股研究卡</span><h2 id="research-card-title">输入代码，出一张研究卡</h2><small>行情 + 估值 + 回测样本外，一次生成</small></div>
-              <form id="research-card-form" class="m2-inline-form">
-                <input id="research-card-symbol" type="text" placeholder="例如 600519 或 sh600519" autocomplete="off" />
-                <button type="submit">生成研究卡</button>
-              </form>
+          <section class="screen-card market-section" id="screen-card" aria-labelledby="screen-title">
+            <div class="today-head">
+              <div><span class="card-kicker">03 · 找股票</span><h2 id="screen-title">先选一个目标，再筛候选</h2><p class="section-subtitle">筛选负责缩小范围，不负责替你决定买。</p></div>
+              <div class="screen-head-actions"><button id="screen-selftest" class="m2-button" type="button" title="检查行情数据源是否可用">检查数据源</button><button id="screen-run" class="m2-button primary" type="button">开始筛选</button></div>
             </div>
-            <div id="research-card-result" class="m2-research-card"><div class="m2-empty">输入股票代码后生成：先看行情和估值，再看量化回测与样本外结论。</div></div>
+            <div class="screen-plain-guide"><strong>你可以这样说：</strong><span>我想找稳一点的长期候选</span><span>我想找最近回调、但别太贵的</span><span>我想先看高股息</span></div>
+            <div class="screen-presets" aria-label="常用筛选目标">
+              <button type="button" class="screen-preset active" data-screen-preset="steady"><strong>稳健长期</strong><small>大市值 · 低波动</small></button>
+              <button type="button" class="screen-preset" data-screen-preset="growth"><strong>成长观察</strong><small>动量更重要</small></button>
+              <button type="button" class="screen-preset" data-screen-preset="pullback"><strong>回调观察</strong><small>离高点有距离</small></button>
+              <button type="button" class="screen-preset" data-screen-preset="custom"><strong>自己调整</strong><small>打开高级条件</small></button>
+            </div>
+            <details class="screen-config" id="screen-config">
+              <summary>高级筛选条件 <small>市值、估值、换手、打分权重</small></summary>
+              <div class="screen-grid">
+                <label>总市值下限 <small>亿元</small><input id="sc-cap-min" type="number" value="50" min="0" /></label>
+                <label>总市值上限 <small>亿元</small><input id="sc-cap-max" type="number" value="3000" min="0" /></label>
+                <label>市盈率上限 <small>亏损公司自动排除</small><input id="sc-pe-max" type="number" value="60" min="0" /></label>
+                <label>市净率上限<input id="sc-pb-max" type="number" value="8" min="0" step="0.1" /></label>
+                <label>换手率下限 <small>%</small><input id="sc-turnover" type="number" value="1" min="0" step="0.1" /></label>
+                <label>成交额下限 <small>亿元</small><input id="sc-amount" type="number" value="1" min="0" step="0.1" /></label>
+                <label>出多少只<input id="sc-limit" type="number" value="15" min="5" max="40" /></label>
+                <label class="screen-check"><input id="sc-st" type="checkbox" checked />排除 ST 和退市股</label>
+              </div>
+              <div class="screen-weights"><span class="screen-weights-title">三个维度怎么排顺序</span><label>涨得好 <small>近 20 日动量</small><input id="sc-w-mom" type="range" min="0" max="100" value="40" /><b id="sc-w-mom-v">40</b></label><label>买得便宜 <small>市盈率越低越高分</small><input id="sc-w-val" type="range" min="0" max="100" value="30" /><b id="sc-w-val-v">30</b></label><label>波动小 <small>年化波动越低越高分</small><input id="sc-w-sta" type="range" min="0" max="100" value="30" /><b id="sc-w-sta-v">30</b></label></div>
+            </details>
+            <div id="screen-status" class="screen-status" role="status" aria-live="polite"></div>
+            <div id="screen-funnel" class="screen-funnel" hidden></div>
+            <div id="screen-result" class="screen-result"><div class="today-empty">选一个目标后，点「开始筛选」。</div></div>
+            <details class="screen-limits"><summary>这套规则的限制</summary><ul id="screen-limitations"></ul></details>
           </section>
 
+          <section class="market-research-section market-section" id="research-section" aria-labelledby="research-section-title">
+            <div class="section-heading-row"><div><span class="card-kicker">04 · 研究记录</span><h2 id="research-section-title">把“为什么看它”留住</h2><p class="section-subtitle">AI 可以帮你整理事实，但每个结论都要能追溯到数据。</p></div></div>
+            <div class="research-grid">
+              <section class="m2-card m2-ai" aria-labelledby="ai-scan-title">
+                <div class="m2-card-head"><div><span class="card-kicker">AI 整理</span><h3 id="ai-scan-title">今天自选发生了什么</h3></div><span id="ai-scan-state" class="m2-state">等待行情</span></div>
+                <div id="ai-scan-answer" class="m2-ai-answer"><div class="m2-empty">刷新行情后，AI 会把自选的涨跌、异常和需要你核对的地方整理成一段人话。</div></div>
+                <form id="ai-scan-form" class="m2-ai-form"><input id="ai-scan-question" type="text" placeholder="例如：哪只今天波动最大？" autocomplete="off" /><button type="submit">问 AI</button></form>
+              </section>
+              <section class="m2-card" aria-labelledby="research-card-title">
+                <div class="m2-card-head"><div><span class="card-kicker">个股研究卡</span><h3 id="research-card-title">输入代码，生成一张可复盘的卡</h3></div></div>
+                <form id="research-card-form" class="m2-inline-form"><input id="research-card-symbol" type="text" placeholder="例如 600519 或 sh600519" autocomplete="off" /><button type="submit">生成研究卡</button></form>
+                <div id="research-card-result" class="m2-research-card"><div class="m2-empty">会包含行情、估值、回测和样本外验证；样本不足会直接写出来。</div></div>
+              </section>
+            </div>
+          </section>
+
+          <details class="today-more" id="today-more">
+            <summary><strong>更多研究工具</strong><small>ETF · 转债 · 估值 · 仓位 · 回测</small></summary>
+            <div class="today-more-body">
           <section class="m2-tools" aria-label="研究工具">
             <div class="m2-card">
               <div class="m2-card-head"><div><span class="card-kicker">ETF 动量轮动</span><h3>宽基四选一</h3></div><button id="refresh-etf" class="m2-button" type="button">刷新</button></div>
@@ -89,7 +182,7 @@
                   <label>策略胜率 %<input id="ps-winrate" type="number" value="55" /></label>
                   <label>盈亏比<input id="ps-ratio" type="number" value="1.5" step="0.1" /></label>
                 </div>
-                <p id="ps-result" class="m2-result">2% 法则：单笔最大亏损 ≤ 总资金 2%，根据止损距离算出建议买入金额。半凯利作为进阶参考。</p>
+                <p id="ps-result" class="m2-result">按 2% 风险法则算建议买入金额。</p>
               </div>
             </div>
           </section>
@@ -100,10 +193,12 @@
               <div id="legacy-tools"></div>
             </details>
           </section>
-        </main>
+            </div>
+          </details>
+        </div>
       </div>
 
-      <section class="market-agent-foot"><span class="market-step-num">·</span><div><strong>量化研究 Agent</strong><p>自选读写 · 行情快照 · AI 一眼看 · 研究卡 · ETF 轮动 · 可转债 · 指数估值 · 仓位参考 · 观察任务 · 回测研究 · 日报周报。所有结论只沉淀到知识库，不连接券商、不自动下单。</p></div></section>
+
     </main>
   </div>
 
@@ -124,8 +219,29 @@
       <p id="market-message" class="modal-message" role="status"></p>
     </form>
   </div>
-  <script src="/static/request.js?v=0.3.140"></script>
-  <script src="/static/project.js?v=0.3.140"></script>
-  <script src="/static/market.js?v=0.3.140"></script>
+
+  <div id="rule-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="rule-modal-title">
+    <form id="rule-form" class="modal audit-modal">
+      <div class="modal-head"><div><h2 id="rule-modal-title">给这只设线</h2><p id="rule-modal-sub">留空表示不设这条线。</p></div><button class="icon-button" data-close-rule type="button" aria-label="关闭">×</button></div>
+      <div class="m2-form-grid">
+        <label>跌到多少想买<input id="rule-buy" type="number" step="0.001" placeholder="例如 1400" /></label>
+        <label>涨到多少想卖<input id="rule-sell" type="number" step="0.001" placeholder="例如 1800" /></label>
+        <label>跌破多少要停手<input id="rule-stop" type="number" step="0.001" placeholder="例如 1300" /></label>
+        <label>给自己留一句话<input id="rule-note" type="text" maxlength="60" placeholder="例如：等季报出来再看" /></label>
+      </div>
+      <p class="form-note">这三条线只保存在你自己的工作台，用于到线提醒。工作台不会据此下单，也不判断这个价格是否合理。</p>
+      <div class="modal-actions">
+        <button class="secondary-button" data-close-rule type="button">取消</button>
+        <button class="primary-button" type="submit">保存</button>
+      </div>
+      <p id="rule-message" class="modal-message" role="status"></p>
+    </form>
+  </div>
+  <script src="/static/request.js?v=0.3.153"></script>
+  <script src="/static/project.js?v=0.3.153"></script>
+  <script src="/static/market.js?v=0.3.153"></script>
+  <script src="/static/market-today.js?v=0.3.153"></script>
+  <script src="/static/market-decision.js?v=0.3.153"></script>
+  <script src="/static/market-screen.js?v=0.3.153"></script>
 </body>
 </html>
