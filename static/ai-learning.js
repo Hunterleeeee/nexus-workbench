@@ -36,6 +36,30 @@ function lessonSourceLabel(lesson = {}) {
   return lesson.source === "personalized" ? "按目标生成" : "内置课程";
 }
 
+function aiReviewMarkup(lesson) {
+  const fb = lesson.feedback || {};
+  if (!fb.reviewed_at) {
+    return `<div id="ai-review" class="ai-review empty"><div class="ai-review-head"><strong>AI 批改</strong><small>按本课的交付物标准逐条对照你的产出</small></div><p class="ai-review-hint">写完练习成果后点这里，会得到：哪些做到了、差在哪（引用你的原话）、一份保留你业务场景的改写版本。答错的自测题还会说明你选的那个选项背后的误解。</p><button id="request-ai-review" class="secondary-button" type="button">让 AI 批改我的练习</button></div>`;
+  }
+  const list = (items, cls) => (items || []).length ? `<ul class="ai-review-list ${cls}">${items.map((x) => `<li>${learnEscape(x)}</li>`).join("")}</ul>` : "";
+  const verdictClass = fb.verdict === "达标" ? "pass" : fb.verdict === "未达标" ? "fail" : "partial";
+  return `<div id="ai-review" class="ai-review ${verdictClass}">
+    <div class="ai-review-head"><strong>AI 批改：${learnEscape(fb.verdict)}</strong>${fb.score ? `<span class="ai-review-score">${learnEscape(fb.score)}/100</span>` : ""}<small>${learnEscape(formatReviewTime(fb.reviewed_at))}</small></div>
+    ${fb.raw_only ? `<p>${learnEscape(fb.rewrite)}</p>` : `
+      ${list(fb.met, "met")}
+      ${fb.gaps && fb.gaps.length ? `<div class="ai-review-block"><h4>差在哪</h4>${list(fb.gaps, "gaps")}</div>` : ""}
+      ${fb.misconception ? `<div class="ai-review-block"><h4>自测这题的误解</h4><p>${learnEscape(fb.misconception)}</p></div>` : ""}
+      ${fb.rewrite ? `<details class="ai-review-block"><summary>达标版本改写（保留你的业务场景）</summary><pre class="ai-review-rewrite">${learnEscape(fb.rewrite)}</pre></details>` : ""}
+      ${fb.next_question ? `<div class="ai-review-block next"><h4>下一步想一想</h4><p>${learnEscape(fb.next_question)}</p></div>` : ""}`}
+    <p class="ai-review-policy">${learnEscape(fb.policy || "")}</p>
+    <button id="request-ai-review" class="secondary-button" type="button">重新批改</button>
+  </div>`;
+}
+
+function formatReviewTime(value) {
+  try { return new Date(value).toLocaleString("zh-CN", { hour12: false }); } catch { return ""; }
+}
+
 function lessonFeedbackMarkup(lesson, quiz) {
   if (!lesson.completed) return '<div id="quiz-feedback" class="quiz-feedback" role="status" aria-live="polite"></div>';
   const correct = Boolean(lesson.quiz_correct);
@@ -98,6 +122,7 @@ function renderTodayLesson(lesson = {}) {
           <div class="quiz-options" role="radiogroup" aria-label="选择答案">${(quiz.options || []).map((option, index) => `<label class="quiz-option"><input type="radio" name="quiz_answer" value="${index}" ${selectedAnswer === index ? "checked" : ""} ${completed ? "disabled" : ""} /><span>${learnEscape(option)}</span></label>`).join("")}</div>
           ${completed ? `<div class="lesson-complete-summary"><strong>今日课程已完成</strong><p>${learnEscape(lesson.reflection || "没有填写复盘。")}</p></div>` : `<div class="reflection-grid"><label for="lesson-reflection">复盘<textarea id="lesson-reflection" rows="3" maxlength="4000" placeholder="这节课对你的工作有什么用？">${learnEscape(lesson.reflection || "")}</textarea></label><label class="confidence-field" for="lesson-confidence">掌握程度<select id="lesson-confidence">${[1, 2, 3, 4, 5].map((value) => `<option value="${value}" ${Number(lesson.confidence || 3) === value ? "selected" : ""}>${value} · ${["还没懂", "有点模糊", "基本理解", "能用起来", "能教别人"][value - 1]}</option>`).join("")}</select></label></div>`}
           ${lessonFeedbackMarkup(lesson, quiz)}
+          ${aiReviewMarkup(lesson)}
           <div class="quiz-actions"><span class="takeaway"><strong>本课要点：</strong>${learnEscape(content.takeaway || "把方法用到真实任务里。")}</span>${completed ? "" : '<button class="primary-button" type="submit">完成今日学习</button>'}</div>
         </form>
       </section>
@@ -275,12 +300,36 @@ function scheduleLessonDraftSave() {
   learningState.draftTimer = window.setTimeout(() => saveCurrentLessonDraft().catch(() => {}), 700);
 }
 
+async function requestAiReview(button, lessonId) {
+  const output = (learnQuery("#practice-output")?.value || "").trim();
+  if (!output) {
+    learningSetStatus("请先写下练习成果，AI 才有东西可批改。");
+    learnQuery("#practice-output")?.focus();
+    return;
+  }
+  window.WorkbenchUX?.wbSetBusy?.(button, true, "批改中…");
+  try {
+    // 先把草稿存下来，避免批改的是上一次保存的旧内容。
+    await saveCurrentLessonDraft();
+    // 批改要跑一次 LLM，用写入类默认超时（120s），不要用读取的 15s。
+    const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(lessonId)}/review`, { method: "POST" });
+    if (learningState.dashboard?.today && body.lesson) learningState.dashboard.today = body.lesson;
+    renderTodayLesson(learningState.dashboard?.today || body.lesson);
+    learnQuery("#ai-review")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (error) {
+    learningSetStatus(error.message || "批改失败，请稍后重试。");
+  } finally {
+    window.WorkbenchUX?.wbSetBusy?.(button, false);
+  }
+}
+
 function bindLessonActions() {
   const lesson = learningState.dashboard?.today || {};
   learnQuery("#regenerate-lesson")?.addEventListener("click", (event) => regenerateTodayLesson(event.currentTarget));
   learnQuery("#save-lesson-note")?.addEventListener("click", (event) => saveLessonNote(event.currentTarget, lesson.id));
   [learnQuery("#practice-output"), learnQuery("#lesson-reflection")].forEach((field) => field?.addEventListener("input", scheduleLessonDraftSave));
   learnQuery("#lesson-confidence")?.addEventListener("change", scheduleLessonDraftSave);
+  learnQuery("#request-ai-review")?.addEventListener("click", (event) => requestAiReview(event.currentTarget, lesson.id));
   learnQuery("#lesson-complete-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;

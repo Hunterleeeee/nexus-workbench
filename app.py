@@ -2767,6 +2767,10 @@ def _initialize_extended_schema(connection: sqlite3.Connection) -> None:
     ai_learning_lesson_columns = {row[1] for row in connection.execute("PRAGMA table_info(ai_learning_lessons)").fetchall()}
     if "practice_output" not in ai_learning_lesson_columns:
         connection.execute("ALTER TABLE ai_learning_lessons ADD COLUMN practice_output TEXT NOT NULL DEFAULT ''")
+    # 练习成果此前只写不读——用户交了作业没人批，这正是「没达到学习目的」的核心。
+    # feedback_json 保存 AI 批改结果，让反馈可回看、可追溯。
+    if "feedback_json" not in ai_learning_lesson_columns:
+        connection.execute("ALTER TABLE ai_learning_lessons ADD COLUMN feedback_json TEXT NOT NULL DEFAULT '{}'")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_learning_lessons_status ON ai_learning_lessons(status, lesson_date DESC)")
 
     # ------------------------------------------------------------------
@@ -7917,6 +7921,23 @@ def decode_json_column(value: str | None) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def extract_json_block(text: str) -> str:
+    """从 LLM 回答里取出 JSON 主体。
+
+    模型经常把 JSON 包在 ```json 围栏里，或前后带一句解释。这里按
+    「围栏 -> 首尾大括号 -> 原文」的顺序退让，尽量拿到可解析的片段。
+    """
+    candidate = str(text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", candidate, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1)
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start >= 0 and end > start:
+        return candidate[start : end + 1]
+    return candidate
 
 
 def decode_json_value(value: Any, fallback: Any = None) -> Any:
@@ -14901,6 +14922,7 @@ def ai_learning_lesson_row(row: sqlite3.Row) -> dict[str, Any]:
     lesson["content"] = decode_json_value(lesson.pop("content_json", "{}"), {}) or {}
     lesson["quiz_correct"] = bool(lesson.get("quiz_correct"))
     lesson["completed"] = lesson.get("status") == "completed"
+    lesson["feedback"] = decode_json_value(lesson.pop("feedback_json", "{}"), {}) or {}
     return lesson
 
 
@@ -15199,6 +15221,134 @@ def save_ai_learning_progress(lesson_id: int, request: AILearningProgressRequest
     return {"saved": True, "lesson": get_ai_learning_lesson(lesson_id=lesson_id) or lesson}
 
 
+AI_LEARNING_FEEDBACK_SCHEMA = {
+    "verdict": "达标 / 基本达标 / 未达标 三选一",
+    "score": "0-100 的整数",
+    "met": ["做到了哪些点，逐条对应交付物要求"],
+    "gaps": ["差在哪，必须具体到这份产出里的原话或缺失项"],
+    "rewrite": "把学员产出改写成一份达标版本（保留他自己的业务场景，不要换成通用例子）",
+    "misconception": "如果自测答错，指出他选的那个选项背后的具体误解；答对则留空",
+    "next_question": "一个能推进他下一步的追问",
+}
+
+
+def _ai_learning_work_context(limit: int = 4) -> str:
+    """取几条用户真实的待办，让反馈落在他自己的工作上而不是泛泛而谈。
+
+    这门课的全部前提就是"把你真实的工作 AI 化"。如果批改只对着课程模板讲，
+    学员拿到的仍然是通用建议——那和直接问一个通用模型没有区别。
+    """
+    try:
+        rows = [item for item in list_work_items() if str(item.get("title") or "").strip()]
+    except Exception:
+        log.debug("读取工作项失败，跳过真实工作上下文", exc_info=True)
+        return ""
+    picked = [f"- {clip(str(item.get('title')), 60)}（{item.get('source_project') or 'workbench'}）" for item in rows[:limit]]
+    return "\n".join(picked)
+
+
+def _parse_ai_learning_feedback(raw: str) -> dict[str, Any]:
+    """把模型返回解析成固定结构；解析失败时降级为纯文本，不丢内容。"""
+    parsed = decode_json_value(extract_json_block(raw), {}) or {}
+    if not isinstance(parsed, dict) or not parsed.get("verdict"):
+        return {"verdict": "已生成", "score": 0, "met": [], "gaps": [], "rewrite": clip(raw.strip(), 4000),
+                "misconception": "", "next_question": "", "raw_only": True}
+    def as_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [clip(str(item), 400) for item in value if str(item).strip()][:6]
+        text = str(value or "").strip()
+        return [clip(text, 400)] if text else []
+    try:
+        score = max(0, min(100, int(parsed.get("score") or 0)))
+    except (TypeError, ValueError):
+        score = 0
+    return {
+        "verdict": clip(str(parsed.get("verdict") or "已生成"), 40),
+        "score": score,
+        "met": as_list(parsed.get("met")),
+        "gaps": as_list(parsed.get("gaps")),
+        "rewrite": clip(str(parsed.get("rewrite") or ""), 4000),
+        "misconception": clip(str(parsed.get("misconception") or ""), 800),
+        "next_question": clip(str(parsed.get("next_question") or ""), 400),
+        "raw_only": False,
+    }
+
+
+async def generate_ai_learning_feedback(lesson_id: int) -> dict[str, Any]:
+    """对学员的练习产出和自测选择做一次有依据的批改。
+
+    此前 practice_output 只写不读：学员写完练习什么反馈都没有，自测也只是按
+    correct_index 对答案 + 一段所有人都一样的固定解释。这个函数补上真正的
+    学习闭环——按课程自己声明的交付物要求逐条对照，指出差距并给出改写版本。
+    """
+    lesson = get_ai_learning_lesson(lesson_id=lesson_id)
+    if not lesson:
+        raise HTTPException(404, "学习课程不存在")
+    practice_output = str(lesson.get("practice_output") or "").strip()
+    if not practice_output:
+        raise HTTPException(400, "请先写下练习成果，再让 AI 批改。")
+
+    content = lesson.get("content") or {}
+    practice = content.get("practice") or {}
+    quiz = content.get("quiz") or {}
+    options = list(quiz.get("options") or [])
+    answer_index = int(lesson.get("quiz_answer") if lesson.get("quiz_answer") is not None else -1)
+    correct_index = int(quiz.get("correct_index", -1))
+    chosen = options[answer_index] if 0 <= answer_index < len(options) else ""
+    correct = options[correct_index] if 0 <= correct_index < len(options) else ""
+
+    quiz_block = "学员未作答。"
+    if chosen:
+        quiz_block = (
+            f"题目：{quiz.get('question', '')}\n"
+            f"学员选择：{chosen}\n"
+            f"正确答案：{correct}\n"
+            f"结论：{'答对' if answer_index == correct_index else '答错'}"
+        )
+
+    work_context = _ai_learning_work_context()
+    work_block = f"\n\n学员当前真实的工作项（请让建议落在这些事情上）：\n{work_context}" if work_context else ""
+
+    messages = [
+        {"role": "system", "content": (
+            "你是一位严格但有建设性的 AI 转型教练，正在批改一名学员的练习。\n"
+            "硬性要求：\n"
+            "1. 只依据学员实际写下的内容判断，不要脑补他没写的东西。\n"
+            "2. 指出差距时必须引用他产出里的原话或明确指出缺了哪一项，禁止说空泛的'可以更具体'。\n"
+            "3. 改写版本要保留他自己的业务场景，不要替换成通用示例。\n"
+            "4. 如果他确实写得好，就直接给高分，不要为了显得严格而挑刺。\n"
+            f"只返回一个 JSON 对象，字段含义如下：{json.dumps(AI_LEARNING_FEEDBACK_SCHEMA, ensure_ascii=False)}"
+        )},
+        {"role": "user", "content": (
+            f"课程：{lesson.get('title')}（模块：{lesson.get('module')}）\n"
+            f"学习目标：{content.get('objective', '')}\n"
+            f"练习任务：{practice.get('task', '')}\n"
+            f"要求步骤：{'；'.join(str(item) for item in (practice.get('steps') or []))}\n"
+            f"交付物标准：{practice.get('deliverable', '')}\n\n"
+            f"自测情况：\n{quiz_block}\n\n"
+            f"学员的练习产出：\n{clip_for_llm(practice_output, 6000)}\n\n"
+            f"学员的复盘：{clip(str(lesson.get('reflection') or '（未填写）'), 1000)}\n"
+            f"学员自评信心：{lesson.get('confidence', 0)}/100{work_block}"
+        )},
+    ]
+
+    raw = await call_llm(messages, max_tokens=2000, temperature=0.3, purpose="ai_learning_review")
+    feedback = _parse_ai_learning_feedback(raw)
+    feedback["reviewed_at"] = now_iso()
+    feedback["policy"] = "批改依据是课程声明的交付物标准与你写下的原文；模型可能出错，结论请自行复核。"
+
+    connection = db_connection()
+    try:
+        connection.execute(
+            "UPDATE ai_learning_lessons SET feedback_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(feedback, ensure_ascii=False), now_iso(), lesson_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return {"feedback": feedback, "lesson": get_ai_learning_lesson(lesson_id=lesson_id) or lesson}
+
+
 def save_ai_learning_note(lesson_id: int) -> dict[str, Any]:
     lesson = get_ai_learning_lesson(lesson_id=lesson_id)
     if not lesson:
@@ -15278,6 +15428,18 @@ def post_ai_learning_complete(lesson_id: int, request: AILearningCompleteRequest
 @app.patch("/api/ai-learning/lessons/{lesson_id}/progress")
 def patch_ai_learning_progress(lesson_id: int, request: AILearningProgressRequest) -> dict[str, Any]:
     return {"ok": True, **save_ai_learning_progress(lesson_id, request)}
+
+
+@app.post("/api/ai-learning/lessons/{lesson_id}/review")
+async def review_ai_learning_practice(lesson_id: int) -> dict[str, Any]:
+    """让 AI 批改这节课的练习产出与自测选择。
+
+    这是「自测环节应该给我 AI 反馈」缺的那一环：此前 practice_output 只入库、
+    没有任何东西读它，自测也只是对 correct_index 并回一段人人相同的固定解释。
+    """
+    if not llm_settings().get("configured"):
+        raise HTTPException(503, "请先配置全局 LLM，才能让 AI 批改练习。")
+    return await generate_ai_learning_feedback(lesson_id)
 
 
 @app.post("/api/ai-learning/lessons/{lesson_id}/note")
