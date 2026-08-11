@@ -1,6 +1,11 @@
 /* Shared request and recovery primitives for every Workbench page. */
 (function initWorkbenchRequest() {
+  // 读取类请求：15s 足够，超时基本等于服务端真的不健康。
   const DEFAULT_TIMEOUT_MS = 15000;
+  // 写入 / 触发 Agent 类请求：服务端 LLM 读超时是 120s、nginx proxy_read_timeout 是
+  // 300s，客户端却统一卡 15s —— 这就是「明明成功了却报失败」的来源。对齐到 120s。
+  const MUTATION_TIMEOUT_MS = 120000;
+  const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
   class WorkbenchRequestError extends Error {
     constructor(message, options = {}) {
@@ -10,6 +15,9 @@
       this.code = options.code || "request_failed";
       this.detail = options.detail || "";
       this.url = options.url || "";
+      // 浏览器端 abort 只切断本地这条连接，服务端该写的库、该调的 LLM 一样会跑完。
+      // 所以「写入类请求超时」不等于「操作失败」，调用方不该按失败展示，更不该自动重试。
+      this.mayHaveSucceeded = Boolean(options.mayHaveSucceeded);
     }
   }
 
@@ -22,7 +30,10 @@
     return detail == null ? "" : String(detail);
   }
 
-  function friendlyErrorMessage(status, detail = "", code = "") {
+  function friendlyErrorMessage(status, detail = "", code = "", mayHaveSucceeded = false) {
+    if (code === "timeout" && mayHaveSucceeded) {
+      return "等待服务器响应超时。中断浏览器请求并不会取消服务端处理，这次操作可能已经完成——请刷新页面确认后再决定是否重试，直接重试可能会创建重复记录。";
+    }
     if (code === "timeout") return "请求超时，请稍后重试。";
     if (code === "network") return "网络连接失败，请检查线上入口后重试。";
     if (status === 401) return "线上入口需要认证，请先完成登录后再试。";
@@ -39,7 +50,9 @@
   }
 
   async function requestJson(url, options = {}) {
-    const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
+    const method = String(options.method || "GET").toUpperCase();
+    const isMutation = MUTATION_METHODS.has(method);
+    const { timeoutMs = isMutation ? MUTATION_TIMEOUT_MS : DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     const upstreamSignal = fetchOptions.signal;
     let timer = null;
@@ -57,7 +70,9 @@
       response = await fetch(url, fetchOptions);
     } catch (error) {
       const code = timedOut || error?.name === "AbortError" ? "timeout" : "network";
-      throw new WorkbenchRequestError(friendlyErrorMessage(0, "", code), { code, url });
+      // 只有"确实发出去了但没等到回应"才可能已经成功；调用方主动 abort 的不算。
+      const mayHaveSucceeded = isMutation && timedOut;
+      throw new WorkbenchRequestError(friendlyErrorMessage(0, "", code, mayHaveSucceeded), { code, url, mayHaveSucceeded });
     } finally {
       if (timer !== null) window.clearTimeout(timer);
     }
@@ -93,6 +108,7 @@
 
   window.WorkbenchUX = Object.assign(window.WorkbenchUX || {}, {
     DEFAULT_TIMEOUT_MS,
+    MUTATION_TIMEOUT_MS,
     WorkbenchRequestError,
     requestJson,
     friendlyErrorMessage,
