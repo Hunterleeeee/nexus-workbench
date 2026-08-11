@@ -13,6 +13,7 @@ cannot silently undo it:
 
 import asyncio
 import json
+import sqlite3
 import re
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -824,3 +825,134 @@ class AiLearningReviewTests(unittest.TestCase):
         self.assertEqual(app.extract_json_block('```json\n{"a":1}\n```'), '{"a":1}')
         self.assertEqual(app.extract_json_block('好的，结果如下 {"b":2} 以上'), '{"b":2}')
         self.assertEqual(app.extract_json_block('{"c":3}'), '{"c":3}')
+
+
+class LearningTrackTests(unittest.TestCase):
+    """具身智能原本是 78 行静态页：没有后端、没有课程、没有进度和自测。
+
+    现在它和 AI 转型学习共用同一套机制，只是换一条 track。这需要两次表重建
+    （lesson_date 原本是全局 UNIQUE，profiles 原本带 CHECK (id = 1)），
+    所以迁移的正确性必须被钉住。
+    """
+
+    def legacy_database(self, path, *, with_created_at=True):
+        connection = sqlite3.connect(path)
+        extra = ", created_at TEXT NOT NULL, updated_at TEXT NOT NULL" if with_created_at else ""
+        connection.execute(f"""CREATE TABLE ai_learning_lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, lesson_date TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL, practice_output TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'ready'{extra})""")
+        connection.execute("""CREATE TABLE ai_learning_profiles (
+            id INTEGER PRIMARY KEY CHECK (id = 1), current_role TEXT NOT NULL DEFAULT '',
+            target_role TEXT NOT NULL DEFAULT '', daily_minutes INTEGER NOT NULL DEFAULT 25,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        stamp = app.now_iso()
+        if with_created_at:
+            connection.execute("INSERT INTO ai_learning_lessons (lesson_date,title,practice_output,created_at,updated_at) VALUES ('2026-08-10','旧课程','我的练习',?,?)", (stamp, stamp))
+        else:
+            connection.execute("INSERT INTO ai_learning_lessons (lesson_date,title,practice_output) VALUES ('2026-08-10','旧课程','我的练习')")
+        connection.execute("INSERT INTO ai_learning_profiles (id,current_role,target_role,daily_minutes,created_at,updated_at) VALUES (1,'产品经理','AI 产品',40,?,?)", (stamp, stamp))
+        connection.commit()
+        connection.close()
+
+    def test_migration_preserves_rows_and_assigns_the_default_track(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database_file = Path(tmp) / "workbench.db"
+            self.legacy_database(database_file)
+            with patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+                connection = app.db_connection()
+                try:
+                    lesson = connection.execute("SELECT track, lesson_date, title, practice_output FROM ai_learning_lessons").fetchone()
+                    profile = connection.execute("SELECT track, current_role, target_role, daily_minutes FROM ai_learning_profiles").fetchone()
+                    leftovers = connection.execute("SELECT name FROM sqlite_master WHERE name LIKE '%pre_track%'").fetchall()
+                finally:
+                    connection.close()
+        self.assertEqual(tuple(lesson), ("ai-transformation", "2026-08-10", "旧课程", "我的练习"))
+        self.assertEqual(tuple(profile), ("ai-transformation", "产品经理", "AI 产品", 40))
+        self.assertEqual(leftovers, [], "临时表没有清理")
+
+    def test_migration_survives_a_legacy_table_missing_columns(self):
+        """早期版本的表结构更简单，迁移不能因为缺列就撞 NOT NULL。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            database_file = Path(tmp) / "workbench.db"
+            self.legacy_database(database_file, with_created_at=False)
+            with patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+                connection = app.db_connection()
+                try:
+                    row = connection.execute("SELECT track, title, created_at FROM ai_learning_lessons").fetchone()
+                finally:
+                    connection.close()
+        self.assertEqual(row[0], "ai-transformation")
+        self.assertEqual(row[1], "旧课程")
+        self.assertTrue(row[2], "缺失的 created_at 应被补上时间戳")
+
+    def test_check_constraint_is_dropped_even_if_the_column_already_exists(self):
+        """只 ALTER TABLE 加列不会去掉 CHECK (id = 1)，列有了照样插不进第二行。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            database_file = Path(tmp) / "workbench.db"
+            self.legacy_database(database_file)
+            half = sqlite3.connect(database_file)
+            half.execute("ALTER TABLE ai_learning_profiles ADD COLUMN track TEXT NOT NULL DEFAULT 'ai-transformation'")
+            half.commit()
+            half.close()
+            with patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+                app.get_ai_learning_profile("embodied")
+                connection = app.db_connection()
+                try:
+                    tracks = sorted(row[0] for row in connection.execute("SELECT track FROM ai_learning_profiles"))
+                finally:
+                    connection.close()
+        self.assertEqual(tracks, ["ai-transformation", "embodied"])
+
+    def test_two_tracks_can_hold_a_lesson_on_the_same_day(self):
+        """原表把 lesson_date 声明为全局 UNIQUE，两条轨道同一天必撞。"""
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                for track in ("ai-transformation", "embodied"):
+                    connection.execute(
+                        "INSERT INTO ai_learning_lessons(track,lesson_date,title,created_at,updated_at) VALUES (?,?,?,?,?)",
+                        (track, "2026-08-11", f"{track} 的课", app.now_iso(), app.now_iso()),
+                    )
+                connection.commit()
+                count = connection.execute("SELECT COUNT(*) FROM ai_learning_lessons WHERE lesson_date='2026-08-11'").fetchone()[0]
+            finally:
+                connection.close()
+        self.assertEqual(count, 2)
+
+    def test_lessons_do_not_leak_between_tracks(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                for track, title in (("ai-transformation", "转型课"), ("embodied", "具身课")):
+                    connection.execute(
+                        "INSERT INTO ai_learning_lessons(track,lesson_date,title,created_at,updated_at) VALUES (?,?,?,?,?)",
+                        (track, "2026-08-11", title, app.now_iso(), app.now_iso()),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+            embodied = app.list_ai_learning_lessons(30, "embodied")
+            transformation = app.list_ai_learning_lessons(30, "ai-transformation")
+            picked = app.get_ai_learning_lesson(lesson_date="2026-08-11", track="embodied")
+        self.assertEqual([item["title"] for item in embodied], ["具身课"])
+        self.assertEqual([item["title"] for item in transformation], ["转型课"])
+        self.assertEqual(picked["title"], "具身课")
+
+    def test_every_track_curriculum_has_the_same_shape(self):
+        """两套课程共用同一渲染与批改逻辑，字段结构必须一致。"""
+        required = {"module", "title", "objective", "knowledge", "case", "practice", "quiz", "takeaway"}
+        for track_id, meta in app.LEARNING_TRACKS.items():
+            self.assertTrue(meta["curriculum"], f"{track_id} 没有课程")
+            for lesson in meta["curriculum"]:
+                self.assertEqual(set(lesson), required, f"{track_id} / {lesson.get('title')} 字段不一致")
+                quiz = lesson["quiz"]
+                self.assertTrue(0 <= quiz["correct_index"] < len(quiz["options"]), f"{lesson['title']} 答案索引越界")
+                self.assertGreaterEqual(len(quiz["options"]), 3)
+                self.assertTrue(lesson["practice"]["deliverable"], "没有交付物标准，AI 批改就没有判据")
+
+    def test_unknown_track_falls_back_instead_of_erroring(self):
+        self.assertEqual(app.learning_track_id("no-such-track"), app.DEFAULT_LEARNING_TRACK)
+        self.assertEqual(app.learning_track_id(""), app.DEFAULT_LEARNING_TRACK)
