@@ -467,11 +467,11 @@ class QuantResearchTests(unittest.TestCase):
             try:
                 with patch.object(app, "load_market_watchlist", return_value=[]):
                     with self.assertRaises(app.HTTPException) as context:
-                        asyncio.run(app.update_market_sampling(app.MarketSamplingRequest(enabled=True, interval_seconds=1800)))
+                        app.update_market_sampling(app.MarketSamplingRequest(enabled=True, interval_seconds=1800))
                 self.assertEqual(context.exception.status_code, 400)
 
                 with patch.object(app, "load_market_watchlist", return_value=[{"symbol": "sh600519"}]):
-                    enabled = asyncio.run(app.update_market_sampling(app.MarketSamplingRequest(enabled=True, interval_seconds=1800)))
+                    enabled = app.update_market_sampling(app.MarketSamplingRequest(enabled=True, interval_seconds=1800))
                     state = enabled["sampling"]
                     self.assertTrue(state["enabled"])
                     self.assertEqual(state["interval_seconds"], 1800)
@@ -481,7 +481,7 @@ class QuantResearchTests(unittest.TestCase):
                     self.assertEqual(rule["schedule"], "every:1800")
                     self.assertEqual(rule["config"]["source"], app.MARKET_SAMPLING_SOURCE)
 
-                    stopped = asyncio.run(app.update_market_sampling(app.MarketSamplingRequest(enabled=False, interval_seconds=3600)))
+                    stopped = app.update_market_sampling(app.MarketSamplingRequest(enabled=False, interval_seconds=3600))
                     self.assertFalse(stopped["sampling"]["enabled"])
                     self.assertEqual(stopped["sampling"]["interval_seconds"], 3600)
                     self.assertEqual(app.market_history_count(), 0)
@@ -492,7 +492,7 @@ class QuantResearchTests(unittest.TestCase):
     def test_market_sampling_rejects_arbitrary_interval(self):
         with patch.object(app, "load_market_watchlist", return_value=[{"symbol": "sh600519"}]):
             with self.assertRaises(app.HTTPException) as context:
-                asyncio.run(app.update_market_sampling(app.MarketSamplingRequest(enabled=True, interval_seconds=600)))
+                app.update_market_sampling(app.MarketSamplingRequest(enabled=True, interval_seconds=600))
         self.assertEqual(context.exception.status_code, 400)
 
     def test_factor_thresholds_require_three_and_four_samples(self):

@@ -6,6 +6,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app
+
+
+def fake_llm_client(client_cls):
+    """Patch seam for the pooled LLM client.
+
+    ``call_llm`` no longer builds an ``httpx.AsyncClient`` per request -- it
+    reuses a pooled one via ``app.llm_http_client()`` so repeated Agent calls do
+    not pay a TLS handshake each time.  Tests therefore patch that accessor
+    instead of the httpx class; the fake client only needs ``post``.
+    """
+    instance = client_cls()
+
+    async def _get_client():
+        return instance
+
+    return _get_client
 import httpx
 from fastapi import HTTPException
 
@@ -219,7 +235,7 @@ class LlmConfigTests(unittest.TestCase):
             async def post(self, *args, **kwargs):
                 calls.append(kwargs["json"]["model"])
                 raise LlmConfigTests._status_error(401)
-        with patch("app.llm_provider_state", return_value={"candidates": [primary, fallback]}), patch.object(app, "_llm_health", return_value={"status": "unknown"}), patch("app.httpx.AsyncClient", FailingClient), patch("app.record_llm_usage_event"), patch("app._record_llm_failure"), patch("app._record_llm_success"), self.assertRaisesRegex(RuntimeError, "auth"):
+        with patch("app.llm_provider_state", return_value={"candidates": [primary, fallback]}), patch.object(app, "_llm_health", return_value={"status": "unknown"}), patch("app.llm_http_client", fake_llm_client(FailingClient)), patch("app.schedule_llm_usage_event"), patch("app._record_llm_failure"), patch("app._record_llm_success"), self.assertRaisesRegex(RuntimeError, "auth"):
             asyncio.run(app.call_llm([{"role": "user", "content": "ping"}], purpose="test", track_health=False))
         self.assertEqual(len(calls), 1)
 
@@ -236,7 +252,7 @@ class LlmConfigTests(unittest.TestCase):
                 if len(calls) == 1:
                     raise httpx.ReadTimeout("timeout")
                 return type("Response", (), {"raise_for_status": lambda self: None, "json": lambda self: {"choices": [{"message": {"content": "备用成功"}}]}})()
-        with patch("app.llm_provider_state", return_value={"candidates": [primary, fallback]}), patch("app._llm_health", return_value={"status": "unknown"}), patch("app.httpx.AsyncClient", Client), patch("app.record_llm_usage_event"), patch("app._record_llm_failure"), patch("app._record_llm_success"):
+        with patch("app.llm_provider_state", return_value={"candidates": [primary, fallback]}), patch("app._llm_health", return_value={"status": "unknown"}), patch("app.llm_http_client", fake_llm_client(Client)), patch("app.schedule_llm_usage_event"), patch("app._record_llm_failure"), patch("app._record_llm_success"):
             self.assertEqual(asyncio.run(app.call_llm([{"role": "user", "content": "ping"}], track_health=False)), "备用成功")
         self.assertEqual(len(calls), 2)
 
@@ -254,7 +270,7 @@ class LlmConfigTests(unittest.TestCase):
                     if len(calls) == 1:
                         raise LlmConfigTests._status_error(status)
                     return type("Response", (), {"raise_for_status": lambda self: None, "json": lambda self: {"choices": [{"message": {"content": "备用成功"}}]}})()
-            with patch("app.llm_provider_state", return_value={"candidates": [primary, fallback]}), patch("app._llm_health", return_value={"status": "unknown"}), patch("app.httpx.AsyncClient", Client), patch("app.record_llm_usage_event"), patch("app._record_llm_failure"), patch("app._record_llm_success"):
+            with patch("app.llm_provider_state", return_value={"candidates": [primary, fallback]}), patch("app._llm_health", return_value={"status": "unknown"}), patch("app.llm_http_client", fake_llm_client(Client)), patch("app.schedule_llm_usage_event"), patch("app._record_llm_failure"), patch("app._record_llm_success"):
                 self.assertEqual(asyncio.run(app.call_llm([{"role": "user", "content": "ping"}], track_health=False)), "备用成功")
             self.assertEqual(len(calls), 2)
 
@@ -286,7 +302,7 @@ class LlmConfigTests(unittest.TestCase):
             "model": "test-model",
             "api_key": "test-key",
         }
-        with patch("app.httpx.AsyncClient", FakeClient), patch("app._record_llm_success") as success, patch(
+        with patch("app.llm_http_client", fake_llm_client(FakeClient)), patch("app._record_llm_success") as success, patch(
             "app._record_llm_failure"
         ) as failure:
             answer = asyncio.run(

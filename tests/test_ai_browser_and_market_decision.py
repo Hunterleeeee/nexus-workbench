@@ -180,7 +180,7 @@ class MarketDecisionCenterTests(unittest.TestCase):
              patch.object(app, "list_market_history", return_value=[]), \
              patch.object(app, "list_work_items", return_value=[]), \
              patch.object(app, "analyze_market_snapshot", return_value={}):
-            result = asyncio.run(app.update_market_watchlist(app.MarketWatchlistRequest(symbols=["600000"])))
+            result = app.update_market_watchlist(app.MarketWatchlistRequest(symbols=["600000"]))
         saved_watchlist = save_watchlist.call_args.args[0]
         saved_snapshot = save_snapshot.call_args.args[0]
         self.assertEqual(saved_watchlist, [{"symbol": "sh600000", "buy_below": 9.5, "sell_above": 12.0, "note": "保留计划"}])
@@ -204,7 +204,7 @@ class MarketDecisionCenterTests(unittest.TestCase):
              patch.object(app, "list_market_history", return_value=[]), \
              patch.object(app, "list_work_items", return_value=[]), \
              patch.object(app, "analyze_market_snapshot", return_value={}):
-            result = asyncio.run(app.update_market_watchlist(app.MarketWatchlistRequest(symbols=[])))
+            result = app.update_market_watchlist(app.MarketWatchlistRequest(symbols=[]))
         saved_snapshot = save_snapshot.call_args.args[0]
         self.assertEqual(saved_snapshot["watchlist"], [])
         self.assertEqual(saved_snapshot["quotes"], [])

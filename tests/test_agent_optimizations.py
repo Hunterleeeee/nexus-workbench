@@ -547,7 +547,7 @@ class AgentOptimizationTests(unittest.TestCase):
         request = app.Sub2APIRawSyncRequest(payload={"me": {"balance": "$0"}}, source="panel_bookmarklet_v2")
         for origin in (None, "https://evil.example"):
             with self.assertRaises(app.HTTPException) as context:
-                asyncio.run(app.sync_sub2api_panel_raw(request, origin=origin))
+                app.sync_sub2api_panel_raw(request, origin=origin)
             self.assertEqual(context.exception.status_code, 403)
 
     def test_sub2api_raw_sync_accepts_configured_panel_origin(self):
@@ -555,7 +555,7 @@ class AgentOptimizationTests(unittest.TestCase):
         with patch.object(app, "record_sub2api_snapshot", return_value=({"checked_at": "now"}, {}, None)), \
              patch.object(app, "list_sub2api_history", return_value=[]), \
              patch.object(app, "sub2api_sync_state", return_value={"status": "succeeded"}):
-            result = asyncio.run(app.sync_sub2api_panel_raw(request, origin="https://sub.chengsir.asia"))
+            result = app.sync_sub2api_panel_raw(request, origin="https://sub.chengsir.asia")
         self.assertTrue(result["ok"])
         self.assertEqual(result["snapshot"]["checked_at"], "now")
 
@@ -669,7 +669,7 @@ class AgentOptimizationTests(unittest.TestCase):
              patch.object(app, "register_artifact_safely", return_value={"id": 10, "kind": "knowledge_conflict_paragraph_resolution_record"}) as register_artifact, \
              patch.object(app, "knowledge_conflict_paragraph_draft", return_value={"id": 11, "name": "段落草稿.md"}), \
              patch.object(app, "create_relation_record", return_value={"id": 12}):
-            result = asyncio.run(app.resolve_obsidian_conflict_paragraph("conflict-key", pair["paragraph_key"], app.ObsidianConflictParagraphResolutionRequest(action="merge", note="按数据时间合并", confirmed=True)))
+            result = app.resolve_obsidian_conflict_paragraph("conflict-key", pair["paragraph_key"], app.ObsidianConflictParagraphResolutionRequest(action="merge", note="按数据时间合并", confirmed=True))
         self.assertTrue(result["ok"])
         self.assertEqual(result["draft"]["id"], 11)
         self.assertEqual(save_resolution.call_args.args[2], "merge")
@@ -693,11 +693,9 @@ class AgentOptimizationTests(unittest.TestCase):
                 finally:
                     connection.close()
 
-                result = asyncio.run(
-                    app.create_knowledge_note(
+                result = app.create_knowledge_note(
                         app.InboxRequest(content="# 行情研究\n\n保留来源。", kind="研究笔记", source="inbox:1")
                     )
-                )
 
                 note = result["note"]
                 artifact = note["artifact"]
@@ -729,8 +727,8 @@ class AgentOptimizationTests(unittest.TestCase):
             {"checked_at": "2026-08-04T00:00:00+00:00", "source": "source-a", "quotes": [{"symbol": "sh600000", "price": "11", "previous_close": "10.2", "change_pct": "7.84"}]},
         ]
         with patch.object(app, "list_market_history", return_value=history), patch.object(app, "register_artifact_safely", return_value={"id": 22, "kind": "market_backtest"}):
-            result = asyncio.run(app.run_market_backtest(app.MarketBacktestRequest(symbol="sh600000", strategy="momentum", window=2, fee_bps=10, slippage_bps=5)))
-            comparison = asyncio.run(app.compare_market_strategies(app.MarketStrategyCompareRequest(symbol="sh600000", strategies=["momentum", "mean_reversion"], window=2, fee_bps=10, slippage_bps=5)))
+            result = app.run_market_backtest(app.MarketBacktestRequest(symbol="sh600000", strategy="momentum", window=2, fee_bps=10, slippage_bps=5))
+            comparison = app.compare_market_strategies(app.MarketStrategyCompareRequest(symbol="sh600000", strategies=["momentum", "mean_reversion"], window=2, fee_bps=10, slippage_bps=5))
         self.assertEqual(result["backtest"]["cost_assumptions"]["fee_bps"], 10)
         self.assertIn("sample_quality", result["backtest"])
         self.assertEqual(len(comparison["comparison"]), 2)
@@ -771,7 +769,7 @@ class AgentOptimizationTests(unittest.TestCase):
              patch.object(app, "register_artifact_safely", return_value={"id": 7}), \
              patch.object(app, "create_work_item_record", return_value={"id": 8}) as create_item, \
              patch.object(app, "create_relation_record", return_value={"id": 9}):
-            result = asyncio.run(app.create_market_research(app.MarketResearchRequest(symbol="sh600000", question="为什么波动增加？")))
+            result = app.create_market_research(app.MarketResearchRequest(symbol="sh600000", question="为什么波动增加？"))
         quality = create_item.call_args.kwargs["metadata"]["data_quality"]
         self.assertEqual(quality["freshness_status"], "fresh")
         self.assertEqual(quality["history_count"], 1)
@@ -781,13 +779,13 @@ class AgentOptimizationTests(unittest.TestCase):
     def test_market_research_conclusion_requires_explicit_confirmation(self):
         request = app.MarketResearchConclusionRequest(conclusion="先观察，不做交易")
         with self.assertRaises(app.HTTPException) as context:
-            asyncio.run(app.conclude_market_research(123, request))
+            app.conclude_market_research(123, request)
         self.assertEqual(context.exception.status_code, 409)
 
     def test_knowledge_draft_sync_requires_explicit_confirmation(self):
         request = app.KnowledgeDraftApplyRequest(confirmed=False)
         with self.assertRaises(app.HTTPException) as context:
-            asyncio.run(app.sync_knowledge_draft(123, request))
+            app.sync_knowledge_draft(123, request)
         self.assertEqual(context.exception.status_code, 409)
 
     def test_collaboration_plan_is_not_queued_without_confirmation(self):
@@ -798,7 +796,7 @@ class AgentOptimizationTests(unittest.TestCase):
              patch.object(app, "create_execution_plan", return_value={"id": "plan-1"}) as create_plan, \
              patch.object(app, "get_execution_plan", return_value={"id": "plan-1", "status": "draft"}), \
              patch.object(app, "update_plan_status") as update_status:
-            result = asyncio.run(app.prepare_workbench_collaboration(app.WorkbenchCollaborationRequest(confirmed=False, limit=1)))
+            result = app.prepare_workbench_collaboration(app.WorkbenchCollaborationRequest(confirmed=False, limit=1))
         self.assertTrue(create_plan.called)
         self.assertFalse(update_status.called)
         self.assertIn("确认后", result["message"])
@@ -838,7 +836,7 @@ class AgentOptimizationTests(unittest.TestCase):
              patch.object(app, "create_work_item_record", return_value={"id": 8}), \
              patch.object(app, "create_relation_record", return_value={"id": 9}), \
              patch.object(app, "create_notification_record", return_value={"id": 10}):
-            result = asyncio.run(app.request_server_action(app.ServerActionRequest(action="restart", reason="服务需要人工重启", confirmed=True)))
+            result = app.request_server_action(app.ServerActionRequest(action="restart", reason="服务需要人工重启", confirmed=True))
         self.assertEqual(result["approval"]["id"], "approval-1")
         self.assertIn("不会直接改动服务器", result["message"])
 
