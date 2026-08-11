@@ -14,6 +14,7 @@ cannot silently undo it:
 import asyncio
 import re
 import tempfile
+from datetime import datetime, timedelta, timezone
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -534,3 +535,123 @@ class CidDashboardStaticTests(unittest.TestCase):
         start = source.find("function openDrawer(")
         body = source[start:start + 600]
         self.assertLess(body.find("drawerBody(p)"), body.find("classList.add('show')"))
+
+
+class UsageStatsAccuracyTests(unittest.TestCase):
+    """使用统计页此前有两处口径错误，叠加起来让整块数字都不可信。"""
+
+    def seed(self, connection, rows):
+        for purpose, status, tokens in rows:
+            connection.execute(
+                """INSERT INTO llm_usage_events
+                (provider_id, provider_name, model, status, error_kind, input_tokens, output_tokens,
+                 total_tokens, cost_usd, latency_ms, run_id, purpose, created_at)
+                VALUES ('p','P','m',?,'',0,0,?,0,100,'',?,?)""",
+                (status, tokens, purpose, app.now_iso()),
+            )
+        connection.commit()
+
+    def collect(self, rows):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.seed(connection, rows)
+            finally:
+                connection.close()
+            return app.collect_usage_stats(30)["llm"]
+
+    def test_success_count_matches_the_status_actually_written(self):
+        """record_llm_usage_event 写的是 'succeeded'，统计却查 'ok' —— 成功数恒为 0。"""
+        llm = self.collect([("agent", "succeeded", 100), ("agent", "succeeded", 50), ("agent", "failed", 0)])
+        self.assertEqual(llm["calls"], 3)
+        self.assertEqual(llm["ok"], 2, "成功次数没有统计到，页面上的成功率会永远是 0%")
+
+    def test_connection_test_calls_are_excluded_from_real_usage(self):
+        """「测试连接」按钮产生的探活调用不是真实用量。
+
+        实测用户库里 249 条事件有 244 条是 test，调用次数被放大约 50 倍；
+        而 llm_usage_metrics_payload 早就排除了它们，两个页面因此长期对不上。
+        """
+        llm = self.collect([("agent", "succeeded", 100)] + [("test", "succeeded", 2)] * 20)
+        self.assertEqual(llm["calls"], 1)
+        self.assertEqual(llm["tokens"], 100)
+
+    def test_both_pages_agree_on_the_same_numbers(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.seed(connection, [("agent", "succeeded", 10)] * 3 + [("test", "succeeded", 1)] * 9)
+            finally:
+                connection.close()
+            stats = app.collect_usage_stats(30)["llm"]
+            metrics = app.llm_usage_metrics_payload(24 * 30)["summary"]
+        self.assertEqual(stats["calls"], metrics["calls"], "使用统计与 LLM 运行指标的调用次数口径不一致")
+        self.assertEqual(stats["ok"], metrics["succeeded"], "两处的成功次数口径不一致")
+
+
+class OrphanedCrawlRunTests(unittest.TestCase):
+    """Crawl Worker 没启动时，任务会永远停在 queued，页面上显示"排队等待"。
+
+    原来的回收逻辑只处理 status='running'（被领走后 Worker 死了），而且它本身
+    只在 Crawl Worker 内部调用 —— Worker 不在，连回收都不会发生。
+    """
+
+    def make_run(self, connection, run_id, created_at, status="queued"):
+        connection.execute(
+            """INSERT INTO agent_runs (id, project_id, session_id, kind, title, status, request_json,
+               result_json, error, parent_run_id, attempt, max_attempts, started_at, finished_at, created_at, updated_at)
+               VALUES (?, 'crawl4ai', '', 'crawl', '网页研究', ?, '{}', '{}', '', '', 1, 1, '', '', ?, ?)""",
+            (run_id, status, created_at, created_at),
+        )
+
+    def test_long_queued_runs_are_flagged_when_no_worker_holds_the_lease(self):
+        temp_dir, database_file = temp_database()
+        old = (datetime.now(timezone.utc) - timedelta(seconds=app.WORKBENCH_CRAWL_STALE_SECONDS * 10)).isoformat()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.make_run(connection, "old-1", old)
+                self.make_run(connection, "old-2", old)
+                self.make_run(connection, "fresh", app.now_iso())
+                connection.commit()
+            finally:
+                connection.close()
+            flagged = app.flag_orphaned_crawl_runs()
+            connection = app.db_connection()
+            try:
+                rows = dict(connection.execute("SELECT id, status FROM agent_runs").fetchall())
+                error = connection.execute("SELECT error FROM agent_runs WHERE id = 'old-1'").fetchone()[0]
+            finally:
+                connection.close()
+        self.assertEqual(flagged, 2)
+        self.assertEqual(rows["old-1"], "failed")
+        self.assertEqual(rows["old-2"], "failed")
+        self.assertEqual(rows["fresh"], "queued", "刚入队的任务不该被误伤")
+        self.assertIn("Worker", error)
+
+    def test_a_live_worker_lease_leaves_the_queue_alone(self):
+        temp_dir, database_file = temp_database()
+        old = (datetime.now(timezone.utc) - timedelta(seconds=app.WORKBENCH_CRAWL_STALE_SECONDS * 10)).isoformat()
+        future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.make_run(connection, "waiting", old)
+                connection.execute(
+                    """INSERT INTO worker_leases (worker_id, instance_id, status, lease_until, last_heartbeat, metadata_json)
+                       VALUES ('crawl-worker', 'i-1', 'running', ?, ?, '{}')""",
+                    (future, app.now_iso()),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            flagged = app.flag_orphaned_crawl_runs()
+            connection = app.db_connection()
+            try:
+                status = connection.execute("SELECT status FROM agent_runs WHERE id = 'waiting'").fetchone()[0]
+            finally:
+                connection.close()
+        self.assertEqual(flagged, 0)
+        self.assertEqual(status, "queued", "Worker 还活着时排队是正常的")
