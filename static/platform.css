@@ -41,6 +41,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .platform-nav a:hover, .platform-nav a.active { color: var(--platform-ink); background: var(--platform-soft); border-color: var(--platform-line); }
 .platform-nav a.active { color: var(--platform-blue); font-weight: 700; }
 .platform-version { color: var(--platform-faint); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+/* 平台工具页此前只有 logo 和四个工具之间的互跳导航，没有任何"回工作台"的可见入口，
+   进去之后只能靠浏览器后退。这里补上与项目页 .back-link 一致的显式返回按钮。 */
+.platform-topbar-actions { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.platform-back-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; color: var(--platform-muted); background: transparent; border: 1px solid var(--platform-line); border-radius: 7px; font-size: 11px; text-decoration: none; transition: color .18s ease, background .18s ease, border-color .18s ease; }
+.platform-back-link:hover { color: var(--platform-ink); background: var(--platform-soft); border-color: var(--platform-blue); }
+@media (max-width: 720px) { .platform-back-link span:last-child { display: none; } }
 
 .platform-main { width: min(1440px, calc(100% - 48px)); margin: 0 auto; padding: 36px 0 54px; }
 .platform-hero { display: flex; align-items: end; justify-content: space-between; gap: 22px; margin-bottom: 23px; }
