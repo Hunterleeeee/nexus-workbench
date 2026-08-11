@@ -12,6 +12,7 @@ cannot silently undo it:
 """
 
 import asyncio
+import json
 import re
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -725,3 +726,101 @@ class StaticAssetCompressionTests(unittest.TestCase):
         raw = bundle.read_bytes()
         self.assertGreater(len(raw), 32 * 1024, "小于 32KB 的文件不会被预压缩规则命中")
         self.assertLess(len(gzip_mod.compress(raw, 9)), len(raw) * 0.6)
+
+
+class AiLearningReviewTests(unittest.TestCase):
+    """练习产出此前只写不读——学员交了作业没人批，这是「没达到学习目的」的核心。"""
+
+    FEEDBACK = json.dumps({
+        "verdict": "基本达标", "score": 72,
+        "met": ["列出了输入与输出"],
+        "gaps": ["你写的『整理访谈记录』没有说明每周发生几次"],
+        "rewrite": "任务：整理用户访谈记录（每周 2 次）",
+        "misconception": "你选了『一年一次的战略会』，说明还在按重要性挑任务",
+        "next_question": "哪一步一旦模型出错你能立刻发现？",
+    }, ensure_ascii=False)
+
+    def seed_lesson(self, practice_output="任务：整理访谈记录\n输入：录音转写", answer=0):
+        content = app.AI_LEARNING_CURRICULUM[0]
+        connection = app.db_connection()
+        try:
+            connection.execute(
+                """INSERT INTO ai_learning_lessons(lesson_date,day_index,module,title,content_json,source,status,
+                   quiz_answer,quiz_correct,practice_output,reflection,confidence,note_artifact_id,
+                   started_at,completed_at,created_at,updated_at)
+                   VALUES('2026-08-11',1,?,?,?,'curriculum','in_progress',?,0,?,'感觉有用',3,0,'','',?,?)""",
+                (content["module"], content["title"], json.dumps(content, ensure_ascii=False),
+                 answer, practice_output, app.now_iso(), app.now_iso()),
+            )
+            connection.commit()
+            return int(connection.execute("SELECT id FROM ai_learning_lessons").fetchone()[0])
+        finally:
+            connection.close()
+
+    def test_review_grades_against_the_lesson_rubric_and_persists(self):
+        temp_dir, database_file = temp_database()
+        captured = {}
+
+        async def fake_llm(messages, *args, **kwargs):
+            captured["prompt"] = messages[1]["content"]
+            return self.FEEDBACK
+
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            lesson_id = self.seed_lesson()
+            with patch.object(app, "llm_settings", lambda: {"configured": True}), patch.object(app, "call_llm", fake_llm):
+                result = asyncio.run(app.review_ai_learning_practice(lesson_id))
+                reloaded = app.get_ai_learning_lesson(lesson_id=lesson_id)
+
+        feedback = result["feedback"]
+        self.assertEqual(feedback["verdict"], "基本达标")
+        self.assertEqual(feedback["score"], 72)
+        self.assertTrue(feedback["gaps"])
+        self.assertTrue(reloaded["feedback"].get("reviewed_at"), "批改结果没有落库，刷新后就没了")
+        # 批改必须有依据：课程声明的交付物标准、学员的自测选择、学员的原文
+        self.assertIn("交付物标准", captured["prompt"])
+        self.assertIn("学员选择", captured["prompt"])
+        self.assertIn("整理访谈记录", captured["prompt"])
+
+    def test_empty_practice_output_is_refused_before_spending_an_llm_call(self):
+        temp_dir, database_file = temp_database()
+        calls = {"n": 0}
+
+        async def counting_llm(*args, **kwargs):
+            calls["n"] += 1
+            return self.FEEDBACK
+
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            lesson_id = self.seed_lesson(practice_output="   ")
+            with patch.object(app, "llm_settings", lambda: {"configured": True}), patch.object(app, "call_llm", counting_llm):
+                with self.assertRaises(app.HTTPException) as ctx:
+                    asyncio.run(app.review_ai_learning_practice(lesson_id))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(calls["n"], 0, "空产出不该浪费一次 LLM 调用")
+
+    def test_unconfigured_llm_returns_503_not_a_crash(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            lesson_id = self.seed_lesson()
+            with patch.object(app, "llm_settings", lambda: {"configured": False}):
+                with self.assertRaises(app.HTTPException) as ctx:
+                    asyncio.run(app.review_ai_learning_practice(lesson_id))
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_non_json_model_output_degrades_without_losing_content(self):
+        """模型不听话时不能白跑一次调用，学员至少要看到它说了什么。"""
+        temp_dir, database_file = temp_database()
+
+        async def chatty_llm(*args, **kwargs):
+            return "这份产出方向对了，但缺少频率说明。"
+
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            lesson_id = self.seed_lesson()
+            with patch.object(app, "llm_settings", lambda: {"configured": True}), patch.object(app, "call_llm", chatty_llm):
+                feedback = asyncio.run(app.review_ai_learning_practice(lesson_id))["feedback"]
+        self.assertTrue(feedback["raw_only"])
+        self.assertIn("频率说明", feedback["rewrite"])
+
+    def test_json_extraction_handles_fenced_and_prefixed_output(self):
+        self.assertEqual(app.extract_json_block('```json\n{"a":1}\n```'), '{"a":1}')
+        self.assertEqual(app.extract_json_block('好的，结果如下 {"b":2} 以上'), '{"b":2}')
+        self.assertEqual(app.extract_json_block('{"c":3}'), '{"c":3}')
