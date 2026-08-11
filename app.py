@@ -9273,6 +9273,90 @@ def memory_summary() -> dict[str, Any]:
     return {"confirmed": counts.get("confirmed", 0), "candidate": counts.get("candidate", 0), "rejected": counts.get("rejected", 0), "superseded": counts.get("superseded", 0), "global": global_count, "project": project_count}
 
 
+MEMORY_STALE_DAYS = _int_env("WORKBENCH_MEMORY_STALE_DAYS", 30, minimum=7, maximum=365)
+
+
+def memory_hygiene(limit: int = 40) -> dict[str, Any]:
+    """指出哪些记忆其实在拖后腿。
+
+    记忆表只增不减：expires_at 字段一直存在，但没有任何代码给它赋值，所以
+    确认过的记忆会永久留在检索池里。每轮只有 5 条能进上下文，池子越大、
+    真正相关的越容易被挤掉——这时候"记得多"反而让 Agent 更笨。
+
+    这里不自动删任何东西，只把三类值得你过目的挑出来：
+      never_used  确认很久却一次都没被检索命中，多半是当初随手确认的
+      idle        用过但很久没再用，可能是阶段性信息（比如某个已结束的项目）
+      duplicates  内容高度重合，重复占用本就稀缺的 5 个名额
+    """
+    limit = max(1, min(int(limit or 40), 200))
+    stale_before = (datetime.now(timezone.utc) - timedelta(days=MEMORY_STALE_DAYS)).isoformat()
+    connection = db_connection()
+    try:
+        rows = [dict(row) for row in connection.execute(
+            """SELECT id, content, memory_key, kind, scope, project_id, confidence, pinned,
+                      use_count, last_used_at, created_at, updated_at
+            FROM memory_items
+            WHERE owner_id = ? AND status = 'confirmed' AND pinned = 0
+            ORDER BY updated_at DESC LIMIT 500""",
+            (MEMORY_OWNER_ID,),
+        ).fetchall()]
+    finally:
+        connection.close()
+
+    never_used, idle = [], []
+    for row in rows:
+        used = int(row.get("use_count") or 0)
+        last_used = str(row.get("last_used_at") or "")
+        created = str(row.get("created_at") or "")
+        if used == 0 and created and created < stale_before:
+            never_used.append(row)
+        elif used > 0 and last_used and last_used < stale_before:
+            idle.append(row)
+
+    # 这里原本还有一个"重复记忆"检测，用字符二元组算相似度。实测后删掉了：
+    #   「关注 A 股行情」vs「关注美股行情」重叠 0.75，但它们是两条不同的记忆，
+    #   归档任何一条都是错的；而「每天早上 8 点推送课程」vs「每日 8:00 推送今天
+    #   的课程」确实重复，重叠却只有 0.22。Jaccard 和重叠系数、四档阈值都试过，
+    #   没有一档能同时判对——字面相似度分不清"换个说法"和"差一个关键词"。
+    # 与其给出会诱导用户删错记忆的建议，不如只保留下面两个基于硬事实
+    # （use_count / last_used_at）的信号。真要做去重，需要语义向量而不是字符串。
+
+    return {
+        "never_used": never_used[:limit],
+        "idle": idle[:limit],
+        "stale_days": MEMORY_STALE_DAYS,
+        "checked": len(rows),
+        "policy": (
+            f"只列出已确认、未置顶、且超过 {MEMORY_STALE_DAYS} 天的记忆；置顶记忆永不进入建议。"
+            "这里不会自动删除任何东西，归档需要你确认；归档后记忆仍保留在库中，只是不再进入 Agent 上下文。"
+        ),
+    }
+
+
+def archive_memory_items(memory_ids: list[str]) -> dict[str, Any]:
+    """把记忆移出检索池，但保留记录本身（可追溯，也可恢复）。"""
+    wanted = [str(value).strip() for value in memory_ids if str(value).strip()][:200]
+    if not wanted:
+        return {"archived": 0, "ids": []}
+    timestamp = now_iso()
+    placeholders = ",".join("?" for _ in wanted)
+    connection = db_connection()
+    try:
+        # 置顶记忆是用户明确要一直生效的，批量归档不能顺手带走。
+        cursor = connection.execute(
+            f"""UPDATE memory_items SET status = 'superseded', updated_at = ?
+            WHERE owner_id = ? AND status = 'confirmed' AND pinned = 0 AND id IN ({placeholders})""",
+            [timestamp, MEMORY_OWNER_ID, *wanted],
+        )
+        archived = int(cursor.rowcount or 0)
+        connection.commit()
+    finally:
+        connection.close()
+    if archived:
+        log.info("归档了 %d 条记忆", archived)
+    return {"archived": archived, "ids": wanted, "summary": memory_summary()}
+
+
 def _memory_kind_for_text(text: str) -> str:
     if any(word in text for word in ("必须", "不要", "不能", "别再", "不接受", "务必")):
         return "constraint"
@@ -19793,6 +19877,23 @@ async def refresh_server_monitor(request: ServerMonitorRequest) -> dict[str, Any
 @app.get("/api/meta")
 async def get_meta() -> dict[str, Any]:
     return {"name": "Workbench", "version": WORKBENCH_VERSION, "data_dir": str(DATA_DIR)}
+
+
+class MemoryArchiveRequest(BaseModel):
+    memory_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+@app.get("/api/memories/hygiene")
+def get_memory_hygiene(limit: int = 40) -> dict[str, Any]:
+    """记忆体检：哪些记忆从没被用过、很久没用、或者互相重复。"""
+    return memory_hygiene(limit)
+
+
+@app.post("/api/memories/archive")
+def post_memory_archive(request: MemoryArchiveRequest) -> dict[str, Any]:
+    if not request.memory_ids:
+        raise HTTPException(400, "请至少选择一条记忆")
+    return {"ok": True, **archive_memory_items(request.memory_ids)}
 
 
 @app.get("/api/memories")
