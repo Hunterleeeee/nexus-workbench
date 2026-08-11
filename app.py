@@ -2771,6 +2771,101 @@ def _initialize_extended_schema(connection: sqlite3.Connection) -> None:
     # feedback_json 保存 AI 批改结果，让反馈可回看、可追溯。
     if "feedback_json" not in ai_learning_lesson_columns:
         connection.execute("ALTER TABLE ai_learning_lessons ADD COLUMN feedback_json TEXT NOT NULL DEFAULT '{}'")
+    # 多学习轨道：原表把 lesson_date 声明为全局 UNIQUE，两个轨道在同一天各上一课
+    # 就会撞主键。SQLite 改不了已有约束，只能重建表。旧数据全部归到 AI 转型轨道。
+    if "track" not in ai_learning_lesson_columns:
+        connection.execute("ALTER TABLE ai_learning_lessons RENAME TO ai_learning_lessons_pre_track")
+        connection.execute(
+            """CREATE TABLE ai_learning_lessons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track TEXT NOT NULL DEFAULT 'ai-transformation',
+                lesson_date TEXT NOT NULL,
+                day_index INTEGER NOT NULL DEFAULT 1,
+                module TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL,
+                content_json TEXT NOT NULL DEFAULT '{}',
+                source TEXT NOT NULL DEFAULT 'curriculum',
+                status TEXT NOT NULL DEFAULT 'ready',
+                quiz_answer INTEGER NOT NULL DEFAULT -1,
+                quiz_correct INTEGER NOT NULL DEFAULT 0,
+                practice_output TEXT NOT NULL DEFAULT '',
+                reflection TEXT NOT NULL DEFAULT '',
+                confidence INTEGER NOT NULL DEFAULT 0,
+                note_artifact_id INTEGER NOT NULL DEFAULT 0,
+                feedback_json TEXT NOT NULL DEFAULT '{}',
+                started_at TEXT NOT NULL DEFAULT '',
+                completed_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(track, lesson_date)
+            )"""
+        )
+        # 旧表可能缺任意列（早期版本的结构更简单），所以逐列决定取值：
+        # 有就搬过来，没有就用新表的默认值填，避免 NOT NULL 约束在迁移时炸掉。
+        migration_stamp = now_iso()
+        target_defaults: dict[str, str] = {
+            "id": "NULL", "lesson_date": "''", "day_index": "1", "module": "''", "title": "'历史课程'",
+            "content_json": "'{}'", "source": "'curriculum'", "status": "'ready'", "quiz_answer": "-1",
+            "quiz_correct": "0", "practice_output": "''", "reflection": "''", "confidence": "0",
+            "note_artifact_id": "0", "feedback_json": "'{}'",
+            "started_at": "''", "completed_at": "''",
+            "created_at": f"'{migration_stamp}'", "updated_at": f"'{migration_stamp}'",
+        }
+        columns = ", ".join(target_defaults)
+        selects = ", ".join(
+            name if name in ai_learning_lesson_columns else default
+            for name, default in target_defaults.items()
+        )
+        connection.execute(
+            f"INSERT INTO ai_learning_lessons (track, {columns}) SELECT 'ai-transformation', {selects} FROM ai_learning_lessons_pre_track"
+        )
+        connection.execute("DROP TABLE ai_learning_lessons_pre_track")
+        log.info("ai_learning_lessons 已迁移到多轨道结构")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_learning_lessons_track ON ai_learning_lessons(track, lesson_date DESC)")
+
+    # 档案表原本带 CHECK (id = 1) 的单行约束，多轨道下每条轨道要有自己的档案
+    # （目标岗位、每日时长、推送时间都可能不同），同样只能重建。
+    profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(ai_learning_profiles)").fetchall()}
+    # 判据看约束本身而不是列是否存在：单纯 ALTER TABLE 加列并不会去掉
+    # CHECK (id = 1)，那样列有了、插第二行照样失败。
+    profile_sql = str((connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_learning_profiles'"
+    ).fetchone() or [""])[0] or "")
+    if "track" not in profile_columns or "CHECK (id = 1)" in profile_sql.replace("check", "CHECK"):
+        connection.execute("ALTER TABLE ai_learning_profiles RENAME TO ai_learning_profiles_pre_track")
+        connection.execute(
+            """CREATE TABLE ai_learning_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track TEXT NOT NULL DEFAULT 'ai-transformation' UNIQUE,
+                current_role TEXT NOT NULL DEFAULT '',
+                target_role TEXT NOT NULL DEFAULT '',
+                experience TEXT NOT NULL DEFAULT 'beginner',
+                focus TEXT NOT NULL DEFAULT 'work-efficiency',
+                goal TEXT NOT NULL DEFAULT '',
+                daily_minutes INTEGER NOT NULL DEFAULT 25,
+                push_time TEXT NOT NULL DEFAULT '08:30',
+                daily_push_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        profile_stamp = now_iso()
+        profile_defaults: dict[str, str] = {
+            "current_role": "''", "target_role": "''", "experience": "'beginner'",
+            "focus": "'work-efficiency'", "goal": "''", "daily_minutes": "25",
+            "push_time": "'08:30'", "daily_push_enabled": "1",
+            "created_at": f"'{profile_stamp}'", "updated_at": f"'{profile_stamp}'",
+        }
+        profile_names = ", ".join(profile_defaults)
+        profile_selects = ", ".join(
+            name if name in profile_columns else default for name, default in profile_defaults.items()
+        )
+        connection.execute(
+            f"INSERT INTO ai_learning_profiles (track, {profile_names}) "
+            f"SELECT 'ai-transformation', {profile_selects} FROM ai_learning_profiles_pre_track LIMIT 1"
+        )
+        connection.execute("DROP TABLE ai_learning_profiles_pre_track")
+        log.info("ai_learning_profiles 已迁移到多轨道结构")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_learning_lessons_status ON ai_learning_lessons(status, lesson_date DESC)")
 
     # ------------------------------------------------------------------
@@ -14620,7 +14715,14 @@ async def aihot_page() -> FileResponse:
 
 @app.get("/projects/embodied")
 async def embodied_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "embodied.html")
+    """具身智能改为复用学习页模板。
+
+    原页面是 78 行静态 HTML：一份写死的书单加一个笔记框，没有任何后端
+    （/api/embodied 从来不存在），也就没有课程、进度、自测和批改——这正是
+    「没起到学习作用」的原因。现在它和 AI 转型学习共用同一套课程机制，
+    只是换一条 track。
+    """
+    return FileResponse(STATIC_DIR / "ai-learning.html")
 
 
 @app.get("/projects/ai-learning")
@@ -14864,6 +14966,314 @@ class AILearningProgressRequest(BaseModel):
     confidence: int = Field(default=3, ge=1, le=5)
 
 
+EMBODIED_PHASES = [
+    {"id": "perception", "title": "感知与表征", "description": "机器人怎么把世界变成可计算的状态", "days": "第 1–2 课"},
+    {"id": "control", "title": "控制与策略", "description": "从状态到动作，以及它为什么比预测一句话难", "days": "第 3–4 课"},
+    {"id": "learning", "title": "学习范式", "description": "模仿学习、强化学习与 VLA 大模型", "days": "第 5–6 课"},
+    {"id": "reality", "title": "落到真机", "description": "仿真到现实的鸿沟、评测与安全", "days": "第 7–8 课"},
+]
+
+# 具身智能课程。与 AI 转型课程共用同一套课程/自测/练习/批改机制，
+# 因此每节课的字段结构必须与 AI_LEARNING_CURRICULUM 完全一致。
+EMBODIED_CURRICULUM: list[dict[str, Any]] = [
+    {
+        "module": "感知与表征",
+        "title": "具身智能到底比聊天模型多了什么",
+        "objective": "说清「有身体」带来的三个新约束：实时、闭环、不可撤销。",
+        "knowledge": [
+            "语言模型输出错了可以重说一遍；机械臂把杯子打翻没有撤销键——动作不可逆，所以安全必须前置，而不是事后过滤。",
+            "机器人在闭环里工作：它的动作会改变下一步观察到的世界，误差会累积（compounding error）；而聊天是开环的单轮生成。",
+            "控制频率是硬约束。50Hz 的控制回路只有 20 毫秒走完感知到动作，这排除了大量「想清楚再说」的做法，于是普遍采用慢思考（规划）加快执行（控制器）的分层。",
+        ],
+        "case": {
+            "situation": "团队把一个多模态大模型直接接上机械臂，让它每一步都输出关节角度。",
+            "approach": "改成分层：大模型只输出「把红色杯子放到托盘上」这类子目标，底层由传统控制器高频闭环执行。",
+            "result": "推理延迟从阻塞控制回路变成只在子目标切换时发生，抓取成功率和安全性同时上升。",
+            "lesson": "把「要做什么」和「怎么动」分开，是具身系统的基本结构。",
+        },
+        "practice": {
+            "task": "挑一个你熟悉的物理任务（哪怕是家里的扫地机），拆出感知—决策—执行三层。",
+            "steps": ["写出每一层的输入和输出", "标出哪一层有实时性要求（多少 Hz）", "标出哪个动作是不可逆的"],
+            "deliverable": "一张三层分解表，含频率要求与不可逆动作标记。",
+        },
+        "quiz": {
+            "question": "为什么具身智能不能简单照搬「让大模型每步都输出动作」的做法？",
+            "options": [
+                "因为大模型不支持中文指令",
+                "因为控制回路有毫秒级实时约束，且动作不可逆、误差会在闭环中累积",
+                "因为机器人没有摄像头",
+                "因为强化学习已经解决了所有问题",
+            ],
+            "correct_index": 1,
+            "explanation": "实时性、不可逆性和闭环误差累积，是有身体带来的三个新约束，它们共同决定了分层结构。",
+        },
+        "takeaway": "先问这个任务的控制频率和不可逆动作，再谈用什么模型。",
+    },
+    {
+        "module": "感知与表征",
+        "title": "状态表征：机器人眼里的世界长什么样",
+        "objective": "理解为什么表征选择决定了后面所有方法的上限。",
+        "knowledge": [
+            "同一个任务可以用关节角度、物体位姿、点云或原始像素来表示状态；选择不同，需要的数据量和泛化能力天差地别。",
+            "低维结构化表征（比如物体位姿）样本效率高，但需要可靠的感知前端；端到端像素输入不需要标注，但要海量数据。",
+            "常见折中是用预训练视觉编码器把图像压成特征，再在特征上学策略——既不用手工标物体，也不用从像素从头学。",
+        ],
+        "case": {
+            "situation": "一个抓取策略在实验室桌面训练得很好，换到另一张桌子就失效。",
+            "approach": "排查发现策略把桌面纹理当成了位置线索。改为输入物体相对夹爪的位姿，而不是整幅图像。",
+            "result": "换桌面、换光照后仍然可用。",
+            "lesson": "策略学到的是你喂给它的表征里的相关性，不是你以为的因果。",
+        },
+        "practice": {
+            "task": "为上一课拆出的任务设计两种状态表征方案。",
+            "steps": ["方案 A 用结构化低维量", "方案 B 用原始传感器输入", "各写一条它最可能学到的错误相关性"],
+            "deliverable": "两种表征方案的对比，含各自的失效假设。",
+        },
+        "quiz": {
+            "question": "端到端像素输入相比结构化位姿输入，主要代价是什么？",
+            "options": [
+                "完全无法训练",
+                "需要多得多的数据，且更容易学到与任务无关的表面相关性",
+                "只能用于仿真环境",
+                "推理速度一定更快",
+            ],
+            "correct_index": 1,
+            "explanation": "省掉了感知前端的工程量，代价转移到数据量和泛化风险上。",
+        },
+        "takeaway": "表征选择是在工程量和数据量之间做交换。",
+    },
+    {
+        "module": "控制与策略",
+        "title": "为什么控制比你想的难",
+        "objective": "理解连续动作空间、信用分配和分布偏移这三个坑。",
+        "knowledge": [
+            "动作是连续的高维向量且有物理约束（力矩上限、关节限位），不能像分类那样枚举候选。",
+            "任务往往是长时序的：抓取失败发生在第 3 步，惩罚可能到第 30 步才出现，这就是信用分配问题。",
+            "训练时策略看到的是专家轨迹上的状态，执行时一旦偏离就进入没见过的状态，误差自我放大——这是模仿学习的分布偏移问题。",
+        ],
+        "case": {
+            "situation": "一个用人类遥操作数据训练的策略，前几步很稳，之后越来越歪直到失败。",
+            "approach": "引入 DAgger 式的数据聚合：让策略自己跑，在它跑歪的状态上补专家标注。",
+            "result": "策略在偏离状态下也知道怎么修正，长时序成功率明显提升。",
+            "lesson": "只在完美轨迹上训练，就学不会从错误中恢复。",
+        },
+        "practice": {
+            "task": "描述你的任务里一次「小偏差滚成大失败」的场景。",
+            "steps": ["写出偏差发生的那一步", "写出不纠正会怎样累积", "设计一条能覆盖该状态的数据采集方式"],
+            "deliverable": "一份分布偏移分析，含数据补采方案。",
+        },
+        "quiz": {
+            "question": "模仿学习中的分布偏移指的是什么？",
+            "options": [
+                "训练数据里的图像分辨率和测试时不同",
+                "策略执行时偏离专家轨迹，进入训练中没见过的状态，误差自我放大",
+                "机器人电池电压不稳定",
+                "奖励函数写错了",
+            ],
+            "correct_index": 1,
+            "explanation": "训练分布由专家决定，测试分布由策略自己决定，两者不一致且会自我强化。",
+        },
+        "takeaway": "要让策略学会跑歪之后怎么回来，就必须让它见过跑歪的状态。",
+    },
+    {
+        "module": "控制与策略",
+        "title": "分层：慢思考配快执行",
+        "objective": "能为一个任务划出合理的层级边界。",
+        "knowledge": [
+            "典型三层：任务规划（秒级，大模型擅长）、运动规划与技能选择（百毫秒级）、底层控制（毫秒级，传统控制理论仍然最可靠）。",
+            "层级边界应该切在接口稳定的地方：上层给下层的指令语义要清晰且可验证，比如「移动到位姿 X」而不是「往那边一点」。",
+            "分层的代价是上层可能给出下层做不到的指令，所以下层必须能拒绝并上报，而不是硬执行。",
+        ],
+        "case": {
+            "situation": "上层规划器要求机械臂穿过一个它够不到的位置。",
+            "approach": "底层增加可行性检查，返回不可达并附上最近可行位姿，让上层重新规划。",
+            "result": "从撞上去或卡死，变成一次重规划。",
+            "lesson": "分层系统里，向上反馈失败原因和向下发指令同样重要。",
+        },
+        "practice": {
+            "task": "给你的任务画一张分层图。",
+            "steps": ["定义每层的时间尺度", "写出层间接口的指令格式", "写出下层拒绝指令时上报什么"],
+            "deliverable": "一张含接口定义和失败上报机制的分层图。",
+        },
+        "quiz": {
+            "question": "分层控制中，层间接口应该切在哪里？",
+            "options": [
+                "切在代码文件最多的地方",
+                "切在指令语义清晰、且下层能判断可行性的地方",
+                "任意位置，只要能跑通",
+                "必须让上层直接输出关节力矩",
+            ],
+            "correct_index": 1,
+            "explanation": "接口的价值在于上层不必关心执行细节，而下层能判断这条指令做不做得到。",
+        },
+        "takeaway": "好的层级边界让上层能被替换，下层能说不。",
+    },
+    {
+        "module": "学习范式",
+        "title": "模仿学习：从演示里学技能",
+        "objective": "分清行为克隆、DAgger 和逆强化学习各自解决什么。",
+        "knowledge": [
+            "行为克隆最简单：把（状态, 动作）当监督学习。数据便宜时很有效，但直接暴露在分布偏移问题下。",
+            "DAgger 让策略自己执行、专家在它到达的新状态上补标注，用交互成本换鲁棒性。",
+            "逆强化学习不学动作，而是从演示里反推奖励函数；好处是能泛化到新场景，代价是计算量大且奖励不唯一。",
+        ],
+        "case": {
+            "situation": "只有 50 条遥操作演示，行为克隆效果不稳。",
+            "approach": "改为动作分块（一次预测未来一小段动作序列）并做时序集成，减少高频抖动和累积误差。",
+            "result": "同样的数据量下成功率显著提升。",
+            "lesson": "数据受限时，改动作表示往往比堆数据更有效。",
+        },
+        "practice": {
+            "task": "为你的任务估算一次演示的采集成本。",
+            "steps": ["写出采一条演示要多久", "估算行为克隆大概需要多少条", "判断该选行为克隆还是 DAgger"],
+            "deliverable": "一份数据预算与方法选择说明。",
+        },
+        "quiz": {
+            "question": "DAgger 相比朴素行为克隆的核心改进是什么？",
+            "options": [
+                "使用了更大的神经网络",
+                "在策略自己到达的状态上追加专家标注，直面分布偏移",
+                "不再需要任何演示数据",
+                "把连续动作离散化",
+            ],
+            "correct_index": 1,
+            "explanation": "它把训练分布逐步拉向策略自己的执行分布。",
+        },
+        "takeaway": "数据在哪些状态上采集，比采了多少条更关键。",
+    },
+    {
+        "module": "学习范式",
+        "title": "VLA 与通用机器人策略",
+        "objective": "理解视觉-语言-动作模型带来了什么、还没解决什么。",
+        "knowledge": [
+            "VLA（Vision-Language-Action）把预训练视觉语言模型的常识迁移到机器人上，让「把桌上的橘子放进碗里」这类自然语言指令可执行。",
+            "它的优势是语义泛化：没见过的物体名称也可能奏效，因为语言侧见过。但物理泛化（新的力学、新的接触）仍然很弱。",
+            "真机数据远比网络图文稀缺，所以跨本体的数据共享和统一动作空间是当前主要方向，也是主要难点。",
+        ],
+        "case": {
+            "situation": "一个 VLA 模型能听懂「拿起那个蓝色的东西」，但换一种夹爪就完全失效。",
+            "approach": "把动作输出改为与本体无关的末端位姿增量，再由各本体自己的控制器转换。",
+            "result": "同一策略可在两种夹爪上使用，语义能力得以保留。",
+            "lesson": "语义泛化和本体泛化是两个独立问题，要分别设计。",
+        },
+        "practice": {
+            "task": "判断你的任务更依赖语义泛化还是物理泛化。",
+            "steps": ["列出任务中会变化的因素", "分类为语义变化还是物理变化", "据此判断 VLA 是否合适"],
+            "deliverable": "一份变化因素分类表与方法适配结论。",
+        },
+        "quiz": {
+            "question": "VLA 模型目前最不擅长的是哪一类泛化？",
+            "options": [
+                "没见过的物体名称",
+                "换一种说法的自然语言指令",
+                "新的接触力学与本体差异",
+                "识别常见家居物品",
+            ],
+            "correct_index": 2,
+            "explanation": "语言和视觉的先验来自海量网络数据，物理交互的先验没有对应的大规模来源。",
+        },
+        "takeaway": "VLA 买来的是语义常识，物理能力仍要靠真机数据和结构设计。",
+    },
+    {
+        "module": "落到真机",
+        "title": "Sim2Real：仿真里能跑不等于真机能用",
+        "objective": "能列出现实差距的具体来源并给出应对手段。",
+        "knowledge": [
+            "差距主要有三类：动力学不准（摩擦、接触、延迟）、感知不同（噪声、光照、标定误差）、以及仿真里根本没建模的现象。",
+            "域随机化是主流手段：在仿真中随机化质量、摩擦、光照、延迟，逼策略学习对参数不敏感的行为。",
+            "系统辨识是另一条路：先测量真机参数把仿真调准。两者常组合使用——先辨识缩小范围，再随机化覆盖残差。",
+        ],
+        "case": {
+            "situation": "仿真中 98% 成功的策略，上真机只有 30%。",
+            "approach": "测量真机控制延迟并加入仿真，同时随机化摩擦系数范围。",
+            "result": "真机成功率提升到可用区间，换一批物料后也不需重训。",
+            "lesson": "先找出最大的那一项差距，而不是笼统地多加点随机。",
+        },
+        "practice": {
+            "task": "为你的任务列出三条最可能的 sim2real 差距。",
+            "steps": ["每条写清它如何影响结果", "标注该辨识还是该随机化", "排出优先级"],
+            "deliverable": "一份带优先级的现实差距清单。",
+        },
+        "quiz": {
+            "question": "域随机化的作用机理是什么？",
+            "options": [
+                "让仿真运行得更快",
+                "在训练中暴露参数变化，逼策略学习对这些参数不敏感的行为",
+                "自动修正真机的机械误差",
+                "替代所有真机测试",
+            ],
+            "correct_index": 1,
+            "explanation": "它把「真实参数未知」变成「训练分布已覆盖」，代价是策略趋于保守。",
+        },
+        "takeaway": "先量出差距在哪，再决定是调准仿真还是拓宽分布。",
+    },
+    {
+        "module": "落到真机",
+        "title": "评测与安全：怎么判断它真的可用",
+        "objective": "建立一套不靠「演示视频看起来不错」的验收标准。",
+        "knowledge": [
+            "成功率必须带条件说明：多少次试验、哪些初始条件、失败模式如何分布。单一数字没有意义。",
+            "要区分任务失败和不安全失败。打不开瓶盖是前者，甩飞物体是后者，后者的容忍度应该是零。",
+            "安全不能只靠策略学会：力矩限幅、工作空间围栏、急停这些硬约束必须在策略之外独立生效。",
+        ],
+        "case": {
+            "situation": "汇报里写抓取成功率 90%，落地后频繁出问题。",
+            "approach": "改为报告 50 次试验、5 种初始位姿，并单列失败模式；碰撞类失败单独统计。",
+            "result": "发现 90% 是在单一初始位姿下测的，换位姿后降到 60%，且有 2 次碰撞。",
+            "lesson": "不分条件的成功率会掩盖最该关注的失败。",
+        },
+        "practice": {
+            "task": "为你的任务写一份验收标准。",
+            "steps": ["定义试验次数与初始条件覆盖", "列出失败模式分类", "写出哪些失败零容忍，用什么硬约束兜底"],
+            "deliverable": "一份可执行的验收标准，含安全兜底措施。",
+        },
+        "quiz": {
+            "question": "为什么单独报告一个成功率数字不够？",
+            "options": [
+                "因为百分比不好理解",
+                "因为它掩盖了试验条件覆盖度和失败模式的严重性差异",
+                "因为成功率总是被高估",
+                "因为应该只看仿真结果",
+            ],
+            "correct_index": 1,
+            "explanation": "同样是 90%，在单一初始位姿下和在多样化条件下含义完全不同；碰撞类失败也不能和普通失败等价计数。",
+        },
+        "takeaway": "验收标准要写清条件、失败分类和零容忍项，否则数字不可信。",
+    },
+]
+
+
+LEARNING_TRACKS: dict[str, dict[str, Any]] = {
+    "ai-transformation": {
+        "id": "ai-transformation",
+        "title": "AI 转型学习",
+        "subtitle": "把真实工作改造成可被模型辅助、可验证、可复用的流程",
+        "curriculum": AI_LEARNING_CURRICULUM,
+        "phases": AI_LEARNING_PHASES,
+        "note_tag": "AI 转型",
+    },
+    "embodied": {
+        "id": "embodied",
+        "title": "具身智能学习",
+        "subtitle": "从感知表征到真机落地，理解有身体的智能为什么不同",
+        "curriculum": EMBODIED_CURRICULUM,
+        "phases": EMBODIED_PHASES,
+        "note_tag": "具身智能",
+    },
+}
+
+DEFAULT_LEARNING_TRACK = "ai-transformation"
+
+
+def learning_track(track: str = "") -> dict[str, Any]:
+    """按 id 取学习轨道；未知 id 一律回落到默认轨道而不是报错。"""
+    return LEARNING_TRACKS.get(str(track or "").strip() or DEFAULT_LEARNING_TRACK, LEARNING_TRACKS[DEFAULT_LEARNING_TRACK])
+
+
+def learning_track_id(track: str = "") -> str:
+    return str(learning_track(track)["id"])
+
+
 def ai_learning_today() -> str:
     return datetime.now().astimezone().date().isoformat()
 
@@ -14874,44 +15284,45 @@ def ai_learning_profile_row(row: sqlite3.Row) -> dict[str, Any]:
     return profile
 
 
-def get_ai_learning_profile() -> dict[str, Any]:
+def get_ai_learning_profile(track: str = "") -> dict[str, Any]:
+    """每个学习轨道有独立的学习档案（目标岗位、每日时长、推送时间都可能不同）。"""
+    track_id = learning_track_id(track)
     connection = db_connection()
     try:
-        row = connection.execute("SELECT * FROM ai_learning_profiles WHERE id = 1").fetchone()
+        row = connection.execute("SELECT * FROM ai_learning_profiles WHERE track = ?", (track_id,)).fetchone()
         if not row:
             timestamp = now_iso()
             connection.execute(
                 """INSERT INTO ai_learning_profiles
-                (id, current_role, target_role, experience, focus, goal, daily_minutes, push_time, daily_push_enabled, created_at, updated_at)
-                VALUES (1, '', '', 'beginner', 'work-efficiency', '', 25, '08:30', 1, ?, ?)""",
-                (timestamp, timestamp),
+                (track, current_role, target_role, experience, focus, goal, daily_minutes, push_time, daily_push_enabled, created_at, updated_at)
+                VALUES (?, '', '', 'beginner', 'work-efficiency', '', 25, '08:30', 1, ?, ?)""",
+                (track_id, timestamp, timestamp),
             )
             connection.commit()
-            row = connection.execute("SELECT * FROM ai_learning_profiles WHERE id = 1").fetchone()
+            row = connection.execute("SELECT * FROM ai_learning_profiles WHERE track = ?", (track_id,)).fetchone()
         return ai_learning_profile_row(row)
     finally:
         connection.close()
 
 
-def save_ai_learning_profile(request: AILearningProfileRequest) -> dict[str, Any]:
+def save_ai_learning_profile(request: AILearningProfileRequest, track: str = "") -> dict[str, Any]:
+    track_id = learning_track_id(track)
     timestamp = now_iso()
+    get_ai_learning_profile(track_id)  # 保证该轨道的档案行存在
     connection = db_connection()
     try:
         connection.execute(
-            """INSERT INTO ai_learning_profiles
-            (id, current_role, target_role, experience, focus, goal, daily_minutes, push_time, daily_push_enabled, created_at, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET current_role=excluded.current_role, target_role=excluded.target_role,
-            experience=excluded.experience, focus=excluded.focus, goal=excluded.goal,
-            daily_minutes=excluded.daily_minutes, push_time=excluded.push_time,
-            daily_push_enabled=excluded.daily_push_enabled, updated_at=excluded.updated_at""",
+            """UPDATE ai_learning_profiles SET current_role = ?, target_role = ?, experience = ?, focus = ?,
+            goal = ?, daily_minutes = ?, push_time = ?, daily_push_enabled = ?, updated_at = ?
+            WHERE track = ?""",
             (
                 request.current_role.strip(), request.target_role.strip(), request.experience, request.focus,
-                request.goal.strip(), request.daily_minutes, request.push_time, int(request.daily_push_enabled), timestamp, timestamp,
+                request.goal.strip(), request.daily_minutes, request.push_time, int(request.daily_push_enabled),
+                timestamp, track_id,
             ),
         )
         connection.commit()
-        row = connection.execute("SELECT * FROM ai_learning_profiles WHERE id = 1").fetchone()
+        row = connection.execute("SELECT * FROM ai_learning_profiles WHERE track = ?", (track_id,)).fetchone()
         return ai_learning_profile_row(row)
     finally:
         connection.close()
@@ -14926,32 +15337,37 @@ def ai_learning_lesson_row(row: sqlite3.Row) -> dict[str, Any]:
     return lesson
 
 
-def get_ai_learning_lesson(lesson_id: int = 0, lesson_date: str = "") -> dict[str, Any] | None:
+def get_ai_learning_lesson(lesson_id: int = 0, lesson_date: str = "", track: str = "") -> dict[str, Any] | None:
     connection = db_connection()
     try:
         if lesson_id:
+            # id 全局唯一，按 id 取时不需要再限定轨道。
             row = connection.execute("SELECT * FROM ai_learning_lessons WHERE id = ?", (lesson_id,)).fetchone()
         else:
-            row = connection.execute("SELECT * FROM ai_learning_lessons WHERE lesson_date = ?", (lesson_date or ai_learning_today(),)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM ai_learning_lessons WHERE track = ? AND lesson_date = ?",
+                (learning_track_id(track), lesson_date or ai_learning_today()),
+            ).fetchone()
         return ai_learning_lesson_row(row) if row else None
     finally:
         connection.close()
 
 
-def list_ai_learning_lessons(limit: int = 30) -> list[dict[str, Any]]:
+def list_ai_learning_lessons(limit: int = 30, track: str = "") -> list[dict[str, Any]]:
     connection = db_connection()
     try:
         rows = connection.execute(
-            "SELECT * FROM ai_learning_lessons ORDER BY lesson_date DESC, id DESC LIMIT ?",
-            (max(1, min(120, limit)),),
+            "SELECT * FROM ai_learning_lessons WHERE track = ? ORDER BY lesson_date DESC, id DESC LIMIT ?",
+            (learning_track_id(track), max(1, min(120, limit))),
         ).fetchall()
         return [ai_learning_lesson_row(row) for row in rows]
     finally:
         connection.close()
 
 
-def fallback_ai_learning_content(day_index: int, profile: dict[str, Any]) -> dict[str, Any]:
-    template = json.loads(json.dumps(AI_LEARNING_CURRICULUM[(max(1, day_index) - 1) % len(AI_LEARNING_CURRICULUM)], ensure_ascii=False))
+def fallback_ai_learning_content(day_index: int, profile: dict[str, Any], track: str = "") -> dict[str, Any]:
+    curriculum = learning_track(track)["curriculum"]
+    template = json.loads(json.dumps(curriculum[(max(1, day_index) - 1) % len(curriculum)], ensure_ascii=False))
     template["personalization"] = {
         "current_role": profile.get("current_role") or "当前工作",
         "target_role": profile.get("target_role") or "AI 相关岗位",
@@ -15015,24 +15431,27 @@ def parse_ai_learning_content(answer: str, fallback: dict[str, Any]) -> dict[str
     return content
 
 
-async def generate_ai_learning_lesson(*, lesson_date: str = "", force: bool = False, use_llm: bool = True) -> dict[str, Any]:
+async def generate_ai_learning_lesson(*, lesson_date: str = "", force: bool = False, use_llm: bool = True, track: str = "") -> dict[str, Any]:
+    track_id = learning_track_id(track)
     target_date = lesson_date or ai_learning_today()
-    existing = get_ai_learning_lesson(lesson_date=target_date)
+    existing = get_ai_learning_lesson(lesson_date=target_date, track=track_id)
     if existing and (not force or existing.get("completed")):
         return existing
-    profile = get_ai_learning_profile()
+    profile = get_ai_learning_profile(track_id)
     connection = db_connection()
     try:
         if existing:
             day_index = int(existing.get("day_index") or 1)
         else:
-            row = connection.execute("SELECT COUNT(*) AS count FROM ai_learning_lessons").fetchone()
+            row = connection.execute("SELECT COUNT(*) AS count FROM ai_learning_lessons WHERE track = ?", (track_id,)).fetchone()
             day_index = int(row["count"] or 0) + 1
-        recent_rows = connection.execute("SELECT title FROM ai_learning_lessons ORDER BY lesson_date DESC LIMIT 14").fetchall()
+        recent_rows = connection.execute(
+            "SELECT title FROM ai_learning_lessons WHERE track = ? ORDER BY lesson_date DESC LIMIT 14", (track_id,)
+        ).fetchall()
         recent_titles = [str(row["title"]) for row in recent_rows]
     finally:
         connection.close()
-    fallback = fallback_ai_learning_content(day_index, profile)
+    fallback = fallback_ai_learning_content(day_index, profile, track_id)
     content = fallback
     source = "curriculum"
     generation_warning = ""
@@ -15078,14 +15497,14 @@ async def generate_ai_learning_lesson(*, lesson_date: str = "", force: bool = Fa
         else:
             cursor = connection.execute(
                 """INSERT OR IGNORE INTO ai_learning_lessons
-                (lesson_date, day_index, module, title, content_json, source, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?)""",
-                (target_date, day_index, content.get("module", ""), content.get("title", "今日课程"), json.dumps(content, ensure_ascii=False), source, timestamp, timestamp),
+                (track, lesson_date, day_index, module, title, content_json, source, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)""",
+                (track_id, target_date, day_index, content.get("module", ""), content.get("title", "今日课程"), json.dumps(content, ensure_ascii=False), source, timestamp, timestamp),
             )
             lesson_id = int(cursor.lastrowid or 0)
         connection.commit()
         if not lesson_id:
-            row = connection.execute("SELECT id FROM ai_learning_lessons WHERE lesson_date = ?", (target_date,)).fetchone()
+            row = connection.execute("SELECT id FROM ai_learning_lessons WHERE track = ? AND lesson_date = ?", (track_id, target_date)).fetchone()
             lesson_id = int(row["id"])
     finally:
         connection.close()
@@ -15390,18 +15809,23 @@ def save_ai_learning_note(lesson_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/ai-learning/dashboard")
-async def get_ai_learning_dashboard() -> dict[str, Any]:
-    profile = await asyncio.to_thread(get_ai_learning_profile)
+async def get_ai_learning_dashboard(track: str = DEFAULT_LEARNING_TRACK) -> dict[str, Any]:
+    """学习看板。track 决定课程体系；缺省是 AI 转型轨道，保持原有行为不变。"""
+    meta = learning_track(track)
+    track_id = str(meta["id"])
+    profile = await asyncio.to_thread(get_ai_learning_profile, track_id)
     automation = await asyncio.to_thread(sync_ai_learning_automation, profile)
-    today = await generate_ai_learning_lesson(use_llm=False)
-    history = await asyncio.to_thread(list_ai_learning_lessons, 30)
+    today = await generate_ai_learning_lesson(use_llm=False, track=track_id)
+    history = await asyncio.to_thread(list_ai_learning_lessons, 30, track_id)
     push = await asyncio.to_thread(get_push_subscriptions)
     return {
         "profile": profile,
         "today": today,
         "history": history[:14],
         "stats": ai_learning_stats(history),
-        "phases": AI_LEARNING_PHASES,
+        "phases": meta["phases"],
+        "track": {"id": track_id, "title": meta["title"], "subtitle": meta["subtitle"], "lesson_count": len(meta["curriculum"])},
+        "tracks": [{"id": item["id"], "title": item["title"]} for item in LEARNING_TRACKS.values()],
         "automation": automation,
         "push": {"subscriptions": len(push.get("subscriptions") or []), "ready": bool(push.get("subscriptions"))},
         "llm": {"configured": bool(llm_settings().get("configured"))},
@@ -15409,15 +15833,16 @@ async def get_ai_learning_dashboard() -> dict[str, Any]:
 
 
 @app.put("/api/ai-learning/profile")
-def update_ai_learning_profile(request: AILearningProfileRequest) -> dict[str, Any]:
-    profile = save_ai_learning_profile(request)
+def update_ai_learning_profile(request: AILearningProfileRequest, track: str = DEFAULT_LEARNING_TRACK) -> dict[str, Any]:
+    profile = save_ai_learning_profile(request, track)
     return {"ok": True, "profile": profile, "automation": sync_ai_learning_automation(profile)}
 
 
 @app.post("/api/ai-learning/lessons/today/generate")
-async def post_ai_learning_lesson(request: AILearningGenerateRequest) -> dict[str, Any]:
-    lesson = await generate_ai_learning_lesson(force=request.refresh, use_llm=True)
-    return {"ok": True, "lesson": lesson, "stats": ai_learning_stats(), "llm": {"configured": bool(llm_settings().get("configured"))}}
+async def post_ai_learning_lesson(request: AILearningGenerateRequest, track: str = DEFAULT_LEARNING_TRACK) -> dict[str, Any]:
+    track_id = learning_track_id(track)
+    lesson = await generate_ai_learning_lesson(force=request.refresh, use_llm=True, track=track_id)
+    return {"ok": True, "lesson": lesson, "stats": ai_learning_stats(list_ai_learning_lessons(30, track_id)), "llm": {"configured": bool(llm_settings().get("configured"))}}
 
 
 @app.post("/api/ai-learning/lessons/{lesson_id}/complete")

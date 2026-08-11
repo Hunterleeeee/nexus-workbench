@@ -1,3 +1,8 @@
+// 学习轨道：同一套课程/自测/练习/批改机制服务多条轨道，
+// 由页面路径决定当前是哪一条（/projects/embodied vs /projects/ai-learning）。
+const LEARNING_TRACK = location.pathname.includes("/embodied") ? "embodied" : "ai-transformation";
+const trackQuery = (extra = "") => `track=${encodeURIComponent(LEARNING_TRACK)}${extra ? `&${extra}` : ""}`;
+
 const learnQuery = (selector, root = document) => root.querySelector(selector);
 const learnEscape = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null };
@@ -179,8 +184,19 @@ function renderLessonHistory(items = []) {
   host.innerHTML = items.slice(0, 8).map((item) => `<article class="history-item ${item.completed ? "completed" : item.status === "in_progress" ? "in-progress" : ""}"><span class="history-state" aria-hidden="true"></span><div class="history-copy"><strong>${learnEscape(item.title)}</strong><small>${learnEscape(item.module || "AI 转型")} · ${learnEscape(item.lesson_date)}</small></div><span>${item.completed ? (item.quiz_correct ? "答对" : "已学") : item.status === "in_progress" ? "进行中" : "待完成"}</span></article>`).join("");
 }
 
+function renderLearningTrack(track) {
+  // 标题随轨道走：同一个页面模板要能同时讲清"AI 转型"和"具身智能"。
+  if (!track || !track.title) return;
+  const title = learnQuery("#learning-title");
+  if (title) title.textContent = track.title;
+  const subtitle = learnQuery("#learning-subtitle");
+  if (subtitle && track.subtitle) subtitle.textContent = `${track.subtitle}（共 ${track.lesson_count || 0} 节）`;
+  document.title = `${track.title} · Workbench`;
+}
+
 function renderLearningDashboard(dashboard) {
   learningState.dashboard = dashboard;
+  renderLearningTrack(dashboard.track);
   renderLearningStats(dashboard.stats || {});
   renderLearningProfile(dashboard.profile || {});
   renderLearningPush(dashboard);
@@ -192,7 +208,7 @@ function renderLearningDashboard(dashboard) {
 async function loadLearningDashboard() {
   learningSetStatus("");
   try {
-    const dashboard = await requestJson("/api/ai-learning/dashboard");
+    const dashboard = await requestJson(`/api/ai-learning/dashboard?${trackQuery()}`);
     renderLearningDashboard(dashboard);
   } catch (error) {
     learningSetStatus(`读取学习项目失败：${error.message}`, "error");
@@ -212,7 +228,7 @@ async function regenerateTodayLesson(button) {
   learningBusy(button, true, "生成中…");
   learningSetStatus("正在重新生成今日课程…");
   try {
-    const body = await requestJson("/api/ai-learning/lessons/today/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh: true }) });
+    const body = await requestJson(`/api/ai-learning/lessons/today/generate?${trackQuery()}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh: true }) });
     learningState.dashboard.today = body.lesson;
     renderTodayLesson(body.lesson);
     learningSetStatus(body.lesson.generation_warning || (body.lesson.source === "personalized" ? "今日课程已按学习设置重新生成。" : "已换为内置课程。配置全局 LLM 后可按学习设置生成。"));
@@ -396,7 +412,7 @@ function setupLearningProfile() {
     learningBusy(button, true, "保存中…");
     message.textContent = "正在保存学习设置…";
     try {
-      const body = await requestJson("/api/ai-learning/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(currentProfilePayload()) });
+      const body = await requestJson(`/api/ai-learning/profile?${trackQuery()}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(currentProfilePayload()) });
       learningState.dashboard.profile = body.profile;
       learningState.dashboard.automation = body.automation;
       renderLearningProfile(body.profile);
@@ -454,7 +470,7 @@ function setupLearningPush() {
     const message = learnQuery("#push-message");
     learningBusy(button, true, "保存中…");
     try {
-      const body = await requestJson("/api/ai-learning/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(currentProfilePayload()) });
+      const body = await requestJson(`/api/ai-learning/profile?${trackQuery()}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(currentProfilePayload()) });
       learningState.dashboard.profile = body.profile;
       learningState.dashboard.automation = body.automation;
       renderLearningPush(learningState.dashboard);
