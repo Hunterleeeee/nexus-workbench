@@ -231,3 +231,183 @@ class AgentTuningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConnectionReuseTests(unittest.TestCase):
+    """Rendering the home page used to open 66 connections for 15 project cards."""
+
+    def test_db_scope_reuses_a_single_connection(self):
+        import sqlite3 as _sqlite3
+
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            app.db_connection().close()  # 先建好 schema
+            real_connect = _sqlite3.connect
+            opened = {"n": 0}
+
+            def counting(*args, **kwargs):
+                opened["n"] += 1
+                return real_connect(*args, **kwargs)
+
+            with patch.object(_sqlite3, "connect", counting):
+                with app.db_scope():
+                    for _ in range(10):
+                        connection = app.db_connection()
+                        connection.execute("SELECT 1").fetchall()
+                        connection.close()
+        self.assertEqual(opened["n"], 1)
+
+    def test_scoped_connection_survives_close_but_the_real_one_is_released(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            with app.db_scope():
+                connection = app.db_connection()
+                connection.close()  # 代理的 close 是空操作
+                self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
+            # 作用域结束后回到"每次新开"的行为
+            plain = app.db_connection()
+            self.assertNotIsInstance(plain, app._SharedConnection)
+            plain.close()
+
+    def test_nested_scopes_share_the_outermost_connection(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            with app.db_scope():
+                outer = app.db_connection()
+                with app.db_scope():
+                    inner = app.db_connection()
+                    self.assertIs(inner._real, outer._real)
+                # 内层退出不该关掉共享连接
+                self.assertEqual(app.db_connection().execute("SELECT 1").fetchone()[0], 1)
+
+    def test_wal_is_still_enabled_even_though_the_pragma_moved(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+            finally:
+                connection.close()
+        self.assertEqual(str(mode).lower(), "wal")
+
+
+class DispatchToolCacheTests(unittest.TestCase):
+    """总调度先跑一轮工具，子 Agent 又各跑一遍，只读工具被重复执行 N+1 次。"""
+
+    def test_read_only_tool_runs_once_per_dispatch(self):
+        calls = {"n": 0}
+
+        def handler(args):
+            calls["n"] += 1
+            return {"ok": True, "value": calls["n"]}
+
+        cache: dict = {}
+        with patch.dict(app.REACT_TOOLS, {"server_status": {"handler": handler}}):
+            first = app.execute_react_tool("server_status", {}, cache=cache)
+            second = app.execute_react_tool("server_status", {}, cache=cache)
+            third = app.execute_react_tool("server_status", {}, cache=cache)
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(first["value"], 1)
+        self.assertEqual(second["value"], 1)
+        self.assertTrue(third["_from_dispatch_cache"])
+
+    def test_different_arguments_are_cached_separately(self):
+        calls = []
+
+        def handler(args):
+            calls.append(args.get("q"))
+            return {"ok": True}
+
+        cache: dict = {}
+        with patch.dict(app.REACT_TOOLS, {"knowledge_search": {"handler": handler}}):
+            app.execute_react_tool("knowledge_search", {"q": "a"}, cache=cache)
+            app.execute_react_tool("knowledge_search", {"q": "b"}, cache=cache)
+            app.execute_react_tool("knowledge_search", {"q": "a"}, cache=cache)
+        self.assertEqual(calls, ["a", "b"])
+
+    def test_write_tools_are_never_cached(self):
+        calls = {"n": 0}
+
+        def handler(args):
+            calls["n"] += 1
+            return {"ok": True}
+
+        cache: dict = {}
+        with patch.dict(app.REACT_TOOLS, {"inbox_capture": {"handler": handler}}):
+            app.execute_react_tool("inbox_capture", {"content": "x"}, cache=cache)
+            app.execute_react_tool("inbox_capture", {"content": "x"}, cache=cache)
+        self.assertEqual(calls["n"], 2, "有副作用的工具被缓存了")
+        self.assertNotIn("inbox_capture", str(cache))
+
+    def test_failures_are_not_cached_so_the_next_agent_can_retry(self):
+        calls = {"n": 0}
+
+        def handler(args):
+            calls["n"] += 1
+            raise RuntimeError("transient")
+
+        cache: dict = {}
+        with patch.dict(app.REACT_TOOLS, {"market_read": {"handler": handler}}):
+            self.assertFalse(app.execute_react_tool("market_read", {}, cache=cache)["ok"])
+            self.assertFalse(app.execute_react_tool("market_read", {}, cache=cache)["ok"])
+        self.assertEqual(calls["n"], 2)
+
+    def test_every_cacheable_tool_is_a_known_read_only_tool(self):
+        known = set(app.REACT_TOOLS) | set(app.SUBAGENT_EXTRA_TOOLS)
+        self.assertTrue(app.READ_ONLY_REACT_TOOLS.issubset(known), "白名单里有不存在的工具名")
+        for mutating in ("inbox_capture", "knowledge_write", "notify", "inbox_triage", "cloud_dev_build", "aihot_feedback"):
+            self.assertNotIn(mutating, app.READ_ONLY_REACT_TOOLS)
+
+
+class CrawlRedirectTests(unittest.TestCase):
+    """入口 URL 是公网，不代表跳转目标也是。"""
+
+    def test_redirect_to_a_private_address_is_refused(self):
+        class Response:
+            status_code = 302
+            headers = {"location": "http://169.254.169.254/latest/meta-data/"}
+
+        class Client:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def get(self, url): return Response()
+
+        with patch("app.httpx.Client", lambda *a, **k: Client()):
+            result = app._react_crawl_fetch({"url": "https://example.com/start"})
+        self.assertFalse(result["ok"])
+        self.assertIn("跳转", result["error"])
+
+    def test_redirect_loop_is_bounded(self):
+        class Response:
+            status_code = 302
+            headers = {"location": "https://example.com/next"}
+
+        class Client:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def get(self, url): return Response()
+
+        with patch("app.httpx.Client", lambda *a, **k: Client()):
+            result = app._react_crawl_fetch({"url": "https://example.com/start"})
+        self.assertFalse(result["ok"])
+        self.assertIn("重定向次数过多", result["error"])
+
+    def test_private_entry_url_is_refused_before_any_request(self):
+        for url in ("http://127.0.0.1:18765/api/health", "http://169.254.169.254/", "http://10.0.0.5/", "http://localhost/x"):
+            self.assertFalse(app.valid_research_url(url), url)
+        self.assertTrue(app.valid_research_url("https://example.com/a?b=1"))
+
+
+class KnowledgeFileCacheTests(unittest.TestCase):
+    def test_list_is_cached_until_the_vault_changes(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        vault = Path(temp_dir.name)
+        (vault / "a.md").write_text("a", encoding="utf-8")
+        with temp_dir, patch.object(app, "KNOWLEDGE_DIR", vault), patch.dict(
+            app._knowledge_files_cache, {"signature": None, "files": []}
+        ):
+            first = app.knowledge_files()
+            self.assertEqual([p.name for p in first], ["a.md"])
+            (vault / "b.md").write_text("b", encoding="utf-8")
+            second = app.knowledge_files()
+            self.assertEqual({p.name for p in second}, {"a.md", "b.md"}, "新增笔记后缓存没有失效")
