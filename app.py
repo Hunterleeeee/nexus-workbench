@@ -2302,7 +2302,58 @@ def recover_stale_crawl_runs() -> int:
         connection.close()
     for run_id in recovered:
         add_agent_run_event(run_id, "requeued", "上一 Crawl Worker 未完成，任务已恢复到队列。", level="warning")
-    return len(recovered)
+    return len(recovered) + flag_orphaned_crawl_runs()
+
+
+def flag_orphaned_crawl_runs() -> int:
+    """把「没有任何 Worker 会来取」的排队任务标成失败，而不是让它永远转圈。
+
+    原来的回收逻辑只处理 status='running' 的任务，也就是"被某个 Worker 领走后
+    它死了"这一种情况。但如果 Crawl Worker 根本没启动，任务会一直停在
+    'queued'：页面上显示"排队等待"，用户以为在跑，实际上永远不会有人来取，
+    而且这个函数本身也只在 Crawl Worker 内部被调用——worker 不在，连回收都不会发生。
+
+    这里改为：排队时间远超正常等待窗口、且 crawl-worker 的租约已经过期（或从来
+    没有过租约）时，把任务标成失败并写明原因，让它在「最近活动」里变成一条可行动
+    的线索，而不是一条沉默的假进行中。
+    """
+    # 给正常排队留足余量：只处理超过 stale 窗口 4 倍时间还没被领走的。
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=WORKBENCH_CRAWL_STALE_SECONDS * 4)).isoformat()
+    now = datetime.now(timezone.utc)
+    flagged: list[str] = []
+    connection = db_connection()
+    try:
+        lease = connection.execute(
+            "SELECT lease_until FROM worker_leases WHERE worker_id = 'crawl-worker'"
+        ).fetchone()
+        lease_until = _audit_datetime(lease["lease_until"]) if lease and lease["lease_until"] else None
+        if lease_until and lease_until > now:
+            return 0  # Worker 还活着，排队是正常的，什么都不做。
+        rows = connection.execute(
+            """SELECT id FROM agent_runs
+            WHERE project_id = 'crawl4ai' AND kind = 'crawl' AND status = 'queued'
+              AND COALESCE(NULLIF(created_at, ''), updated_at) < ?""",
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            cursor = connection.execute(
+                """UPDATE agent_runs SET status = 'failed', error = ?, finished_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'queued'""",
+                (
+                    "抓取 Worker 未运行，这个任务一直没有被领取。请检查 workbench-crawl-worker 服务后重新发起。",
+                    now_iso(), now_iso(), str(row["id"]),
+                ),
+            )
+            if cursor.rowcount:
+                flagged.append(str(row["id"]))
+        connection.commit()
+    finally:
+        connection.close()
+    for run_id in flagged:
+        add_agent_run_event(run_id, "orphaned", "抓取 Worker 未运行，任务长时间无人领取，已标记为失败。", level="error")
+    if flagged:
+        log.warning("标记了 %d 个无人领取的抓取任务（Crawl Worker 可能未运行）", len(flagged))
+    return len(flagged)
 
 
 def claim_next_crawl_run() -> dict[str, Any] | None:
@@ -21927,13 +21978,20 @@ def collect_usage_stats(days: int = 30) -> dict[str, Any]:
             (since,),
         ).fetchone()
 
+        # 两处口径修正：
+        # 1) status 写入的是 'succeeded'（见 record_llm_usage_event），这里原本查
+        #    'ok'，于是"成功次数"恒为 0，页面上的 LLM 成功率永远是 0%。
+        # 2) 排除 purpose='test'：那是"测试连接"按钮产生的探活调用，不是真实用量。
+        #    llm_usage_metrics_payload 早就排除了，这里没排，导致两个页面对不上——
+        #    实测本机 249 条事件里有 244 条是 test，调用次数被放大了约 50 倍。
         llm_row = connection.execute(
             """SELECT COUNT(*) AS calls,
-                      SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok,
+                      SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS ok,
                       SUM(COALESCE(total_tokens, 0)) AS tokens,
                       SUM(COALESCE(cost_usd, 0)) AS cost,
                       AVG(COALESCE(latency_ms, 0)) AS latency
-               FROM llm_usage_events WHERE created_at >= ?""",
+               FROM llm_usage_events
+               WHERE created_at >= ? AND COALESCE(NULLIF(purpose, ''), 'agent') <> 'test'""",
             (since,),
         ).fetchone()
 
@@ -21945,7 +22003,8 @@ def collect_usage_stats(days: int = 30) -> dict[str, Any]:
             }
             for row in connection.execute(
                 """SELECT purpose, COUNT(*) AS calls, SUM(COALESCE(total_tokens, 0)) AS tokens
-                   FROM llm_usage_events WHERE created_at >= ?
+                   FROM llm_usage_events
+                   WHERE created_at >= ? AND COALESCE(NULLIF(purpose, ''), 'agent') <> 'test'
                    GROUP BY purpose ORDER BY calls DESC LIMIT 12""",
                 (since,),
             )
