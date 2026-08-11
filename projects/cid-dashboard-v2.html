@@ -1516,7 +1516,7 @@ function drawerBody(p){
     <div id="opportunity-box" class="opportunity-note">会保存当前看板快照，并把这个项目作为可追踪机会交给想法分析。</div>
 
     <div class="dsec">${I('git-merge','sm')} 竞品比较 <span class="mini">选择 1-3 个其他项目，与本项目对比</span></div>
-    <div class="compare-pick"><select id="compare-target"><option value="">选择比较对象…</option>${PROJECTS.filter((item) => item.key !== p.key).slice(0, 30).map((item) => `<option value="${esc(item.key)}">${esc(item.name)}</option>`).join("")}</select><button class="ai-btn" id="compare-btn" style="margin-top:6px">${I('git-merge','sm')}开始比较</button></div>
+    <div class="compare-pick"><select id="compare-target"><option value="">选择比较对象…</option>${ALL.filter((item) => item.key !== p.key).slice(0, 30).map((item) => `<option value="${esc(item.key)}">${esc(item.name)}</option>`).join("")}</select><button class="ai-btn" id="compare-btn" style="margin-top:6px">${I('git-merge','sm')}开始比较</button></div>
     <div id="compare-box" class="compare-note">选择另一个项目后点击「开始比较」，会在本地生成对比表并可作为研究任务交给爬虫与知识库。</div>
     <div id="compare-result"></div>
 

@@ -12,6 +12,7 @@ cannot silently undo it:
 """
 
 import asyncio
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -411,3 +412,125 @@ class KnowledgeFileCacheTests(unittest.TestCase):
             (vault / "b.md").write_text("b", encoding="utf-8")
             second = app.knowledge_files()
             self.assertEqual({p.name for p in second}, {"a.md", "b.md"}, "新增笔记后缓存没有失效")
+
+
+class CidDashboardStaticTests(unittest.TestCase):
+    """CID 看板是一整页内联 JS，没有构建步骤，也就没有任何工具会告诉你写错了变量名。
+
+    真实故障：drawerBody() 里引用了一个从未定义的 PROJECTS（真实数组叫 ALL）。
+    openDrawer 先渲染 drawer-body、后加 .show，于是 ReferenceError 在加 class 之前
+    抛出——结果是每张卡片的「详情」「问 AI」「获取」全部点了没反应，而且控制台之外
+    毫无提示。这个测试用最朴素的方式守住这一类错误。
+    """
+
+    @staticmethod
+    def dashboard_script() -> str:
+        """返回只含"可执行标识符"的脚本文本。
+
+        必须保留模板字符串里的 ${} 表达式（出问题的引用正写在那里），同时清掉
+        模板字符串的纯文本部分——否则 URL 里的 /README.md 会被误报成变量。
+        用栈跟踪嵌套：这个文件里有模板字符串套 ${} 再套模板字符串的写法，
+        单纯用布尔开关会失步，把整段代码当字符串吞掉。
+        """
+        source = (Path(__file__).resolve().parents[1] / "projects" / "cid-dashboard-v2.html").read_text(encoding="utf-8")
+        return CidDashboardStaticTests.strip_script_literals(source[source.find("<script>", source.find("</head>")):])
+
+    @staticmethod
+    def strip_script_literals(script: str) -> str:
+        out=[]; i=0; n=len(script)
+        stack=[]            # 'tpl' = 模板字符串文本; ('expr', brace_depth) = ${} 内
+        def in_tpl(): return bool(stack) and stack[-1]=='tpl'
+        while i<n:
+            ch=script[i]; nxt=script[i+1] if i+1<n else ''
+            if in_tpl():
+                if ch=='\\': out.append(' '); i+=2; continue
+                if ch=='`': stack.pop(); out.append(' '); i+=1; continue
+                if ch=='$' and nxt=='{': stack.append(['expr',0]); out.append(' '); i+=2; continue
+                out.append(' '); i+=1; continue
+            # ——以下为"代码"上下文（顶层或 ${} 内）——
+            if ch=='`': stack.append('tpl'); out.append(' '); i+=1; continue
+            if ch in '\'"':
+                q=ch; i+=1
+                while i<n and script[i]!=q: i+= 2 if script[i]=='\\' else 1
+                i+=1; out.append("''"); continue
+            if ch=='/' and nxt=='/':
+                while i<n and script[i]!='\n': i+=1
+                continue
+            if ch=='/' and nxt=='*':
+                j=script.find('*/',i); i = n if j<0 else j+2; continue
+            if stack and isinstance(stack[-1],list):
+                if ch=='{': stack[-1][1]+=1
+                elif ch=='}':
+                    if stack[-1][1]==0: stack.pop(); out.append(' '); i+=1; continue
+                    stack[-1][1]-=1
+            out.append(ch); i+=1
+        return ''.join(out)
+
+    @staticmethod
+    def declared_names(script: str) -> set:
+        names = set(re.findall(r"\b(?:function|class)\s+([A-Za-z_$][\w$]*)", script))
+        names |= set(re.findall(r"\bcatch\s*\(\s*([A-Za-z_$][\w$]*)", script))
+        for match in re.finditer(r"\b(?:let|const|var)\s+([^\n;]*)", script):
+            depth, current = 0, ""
+            for char in match.group(1):
+                if char in "([{":
+                    depth += 1
+                elif char in ")]}":
+                    depth = max(0, depth - 1)
+                if char == "," and depth == 0:
+                    candidate = current.strip().split("=")[0].strip()
+                    if re.fullmatch(r"[A-Za-z_$][\w$]*", candidate):
+                        names.add(candidate)
+                    current = ""
+                else:
+                    current += char
+            candidate = current.strip().split("=")[0].strip()
+            if re.fullmatch(r"[A-Za-z_$][\w$]*", candidate):
+                names.add(candidate)
+        return names
+
+    BUILTINS = {"JSON", "Math", "Object", "Array", "String", "Number", "Date", "Promise",
+                "Set", "Map", "RegExp", "URL", "Intl", "AbortController"}
+
+    @classmethod
+    def undefined_globals(cls, script: str) -> list:
+        declared = cls.declared_names(script)
+        used = set(re.findall(r"(?<![\w.$])([A-Z][A-Z0-9_]{2,})(?=\s*[.\[(])", script))
+        return sorted(used - declared - cls.BUILTINS)
+
+    def test_the_checker_actually_detects_an_undefined_global(self):
+        """先证明这把尺子是准的。
+
+        没有这个自检，上面那条全量扫描一旦因为词法器盲区而漏判，就会变成一条
+        永远是绿色的测试——比没有测试更糟，因为它给的是假的安全感。
+        """
+        broken = self.strip_script_literals(
+            "let ALL=[];\n"
+            "function render(p){ return `<select>${PROJECTS.filter(x=>x.k!==p.k)"
+            ".map(i=>`<option>${i.n}</option>`).join('')}</select>`; }\n"
+            "const u=`https://h/${o}/README.md`; // README\n"
+        )
+        self.assertIn("PROJECTS", self.undefined_globals(broken))
+        self.assertNotIn("README", self.undefined_globals(broken), "字符串/模板文本里的 README 不该被误报")
+
+    def test_no_undefined_module_level_globals(self):
+        """尽力而为的全量扫描：这是一个没有构建步骤的内联脚本，没别的工具会看它。
+
+        受限于手写词法器，个别构造（例如含引号的正则字面量）可能漏判，
+        所以它是补充而不是唯一防线——具体的 PROJECTS 回归由下一条测试守住。
+        """
+        missing = self.undefined_globals(self.dashboard_script())
+        self.assertEqual(missing, [], f"引用了未定义的全局：{missing}")
+
+    def test_project_list_global_is_named_all(self):
+        source = (Path(__file__).resolve().parents[1] / "projects" / "cid-dashboard-v2.html").read_text(encoding="utf-8")
+        # 用 bool 断言而不是 assertNotIn：后者失败时会把整个 60KB 的文件打进报告里。
+        self.assertFalse("PROJECTS" in source, "引用了从未定义的 PROJECTS，项目数组叫 ALL")
+        self.assertIn("let ALL=[]", source)
+
+    def test_open_drawer_shows_the_panel_after_rendering_body(self):
+        """顺序很重要：渲染在前、加 .show 在后，任何渲染异常都会静默吃掉整次点击。"""
+        source = (Path(__file__).resolve().parents[1] / "projects" / "cid-dashboard-v2.html").read_text(encoding="utf-8")
+        start = source.find("function openDrawer(")
+        body = source[start:start + 600]
+        self.assertLess(body.find("drawerBody(p)"), body.find("classList.add('show')"))
