@@ -16472,6 +16472,39 @@ async def get_knowledge(q: str = "", vector: int = 0) -> dict[str, Any]:
     return {"root": str(KNOWLEDGE_DIR), "notes": knowledge_search(q), "mode": "keyword"}
 
 
+def read_knowledge_note(relative_path: str) -> dict[str, Any]:
+    """读取一篇笔记的全文。
+
+    路径必须落在知识库目录内——这是唯一一个按用户给的路径读文件的接口，
+    不做限制就是任意文件读取。
+    """
+    candidate = str(relative_path or "").strip().lstrip("/")
+    if not candidate:
+        raise HTTPException(400, "缺少笔记路径")
+    root = KNOWLEDGE_DIR.resolve()
+    target = (root / candidate).resolve()
+    if not str(target).startswith(str(root)) or not target.is_file() or target.suffix.lower() != ".md":
+        log.warning("拒绝越界的知识库读取：%s", candidate)
+        raise HTTPException(404, "笔记不存在")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise HTTPException(500, f"读取失败：{clip(str(exc), 120)}") from exc
+    return {
+        "path": str(target.relative_to(root)),
+        "name": target.stem,
+        "title": next((line.lstrip("# ").strip() for line in content.splitlines() if line.strip()), target.stem),
+        "content": content,
+        "chars": len(content),
+        "updated_at": datetime.fromtimestamp(target.stat().st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/knowledge/note")
+def get_knowledge_note(path: str = "") -> dict[str, Any]:
+    return {"note": read_knowledge_note(path)}
+
+
 @app.get("/api/knowledge/evaluation")
 def knowledge_evaluation() -> dict[str, Any]:
     """检索命中率评估：用一组内置查询对比关键词与语义检索的覆盖。

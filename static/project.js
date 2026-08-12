@@ -526,6 +526,130 @@ function setupProjectAgent() {
   }
 }
 
+
+/* ---------------------------------------------------------------------------
+ * 知识库抽屉：每个项目页都能直接看和写知识库，不用先跳到 /projects/knowledge
+ * 再想办法找回来。项目页本来就是产生结论的地方，沉淀和查阅应该发生在原地。
+ * ------------------------------------------------------------------------- */
+function setupKnowledgeDrawer() {
+  const projectId = projectIdFromPage();
+  // 知识库自己那一页不需要再套一个抽屉。
+  if (!projectId || projectId === "knowledge" || document.getElementById("knowledge-drawer")) return;
+
+  const escape = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const host = document.createElement("div");
+  host.id = "knowledge-drawer";
+  host.className = "kb-drawer";
+  host.innerHTML = `
+    <button id="kb-toggle" class="kb-toggle" type="button" aria-expanded="false" title="本地知识库 (⌘/Ctrl + K 之外的快捷入口)">
+      <span class="kb-toggle-mark">K</span><span>知识库</span>
+    </button>
+    <section class="kb-panel" aria-label="本地知识库" hidden>
+      <header class="kb-head">
+        <div><strong>本地知识库</strong><small id="kb-count">读取中…</small></div>
+        <button id="kb-close" class="kb-icon" type="button" aria-label="收起">×</button>
+      </header>
+      <div class="kb-search">
+        <input id="kb-query" type="search" placeholder="搜索标题或正文…" autocomplete="off" />
+        <button id="kb-new" class="kb-icon" type="button" title="把当前项目的结论记下来">＋</button>
+      </div>
+      <div id="kb-list" class="kb-list" aria-live="polite"></div>
+      <article id="kb-reader" class="kb-reader" hidden>
+        <div class="kb-reader-head"><button id="kb-back" class="kb-text-button" type="button">← 返回列表</button><span id="kb-reader-meta"></span></div>
+        <h3 id="kb-reader-title"></h3>
+        <pre id="kb-reader-body"></pre>
+      </article>
+      <form id="kb-form" class="kb-form" hidden>
+        <input id="kb-title" maxlength="200" placeholder="标题" required />
+        <textarea id="kb-content" rows="6" maxlength="20000" placeholder="写下这个项目里值得留下的结论…" required></textarea>
+        <div class="kb-form-actions"><button class="kb-text-button" id="kb-cancel" type="button">取消</button><button class="kb-save" type="submit">保存到知识库</button></div>
+      </form>
+      <p id="kb-status" class="kb-status" role="status"></p>
+    </section>`;
+  document.body.appendChild(host);
+
+  const $$ = (id) => document.getElementById(id);
+  const panel = host.querySelector(".kb-panel");
+  let notes = [];
+
+  const setStatus = (text) => { $$("kb-status").textContent = text || ""; };
+  const showList = () => { $$("kb-reader").hidden = true; $$("kb-form").hidden = true; $$("kb-list").hidden = false; };
+
+  function renderList(items) {
+    notes = items;
+    $$("kb-count").textContent = `${items.length} 篇`;
+    $$("kb-list").innerHTML = items.length
+      ? items.map((item) => `<button class="kb-item" type="button" data-note-path="${escape(item.path)}">
+          <strong>${escape(item.title || item.name)}</strong>
+          <span>${escape((item.preview || "").replace(/\s+/g, " ").slice(0, 76))}</span>
+        </button>`).join("")
+      : '<div class="kb-empty">没有匹配的笔记。换个词，或把这个项目的结论记下来。</div>';
+  }
+
+  async function load(query = "") {
+    try {
+      const body = await requestJson(`/api/knowledge?q=${encodeURIComponent(query)}`);
+      renderList(body.notes || []);
+      showList();
+    } catch (error) {
+      $$("kb-list").innerHTML = `<div class="kb-empty">读取失败：${escape(error.message)}</div>`;
+    }
+  }
+
+  async function openNote(path) {
+    try {
+      const body = await requestJson(`/api/knowledge/note?path=${encodeURIComponent(path)}`);
+      const note = body.note || {};
+      $$("kb-reader-title").textContent = note.title || note.name || "";
+      $$("kb-reader-body").textContent = note.content || "";
+      $$("kb-reader-meta").textContent = `${note.chars || 0} 字`;
+      $$("kb-list").hidden = true;
+      $$("kb-reader").hidden = false;
+    } catch (error) { setStatus(`打开失败：${error.message}`); }
+  }
+
+  $$("kb-toggle").addEventListener("click", () => {
+    const open = panel.hidden;
+    panel.hidden = !open;
+    $$("kb-toggle").setAttribute("aria-expanded", String(open));
+    if (open && !notes.length) void load();
+  });
+  $$("kb-close").addEventListener("click", () => { panel.hidden = true; $$("kb-toggle").setAttribute("aria-expanded", "false"); });
+  $$("kb-back").addEventListener("click", showList);
+  $$("kb-list").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-note-path]");
+    if (item) void openNote(item.dataset.notePath);
+  });
+  let timer = 0;
+  $$("kb-query").addEventListener("input", (event) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => void load(event.target.value.trim()), 260);
+  });
+  $$("kb-new").addEventListener("click", () => {
+    $$("kb-list").hidden = true; $$("kb-reader").hidden = true; $$("kb-form").hidden = false;
+    $$("kb-title").focus();
+  });
+  $$("kb-cancel").addEventListener("click", () => { $$("kb-form").hidden = true; showList(); });
+  $$("kb-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setStatus("保存中…");
+    try {
+      await requestJson("/api/knowledge", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        // 带上来源项目：以后回看这条笔记时能知道它是在哪件事上得出的。
+        body: JSON.stringify({ content: $$("kb-content").value.trim(), kind: $$("kb-title").value.trim(), tags: projectId, source: projectId }),
+      });
+      $$("kb-title").value = ""; $$("kb-content").value = "";
+      $$("kb-form").hidden = true;
+      setStatus("已保存到知识库。");
+      await load($$("kb-query").value.trim());
+    } catch (error) { setStatus(`保存失败：${error.message}`); }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !panel.hidden) { panel.hidden = true; $$("kb-toggle").setAttribute("aria-expanded", "false"); }
+  });
+}
+
 function setupEnterToSend() {
   // 所有「问AI」输入框统一：Enter 发送，Shift+Enter 换行，输入法组词中不误触。
   const selectors = ["#project-agent-input", "#aihot-chat-input", "#idea-chat-input"];
@@ -542,4 +666,4 @@ function setupEnterToSend() {
   });
 }
 
-document.addEventListener("DOMContentLoaded", () => { setupThemeToggle(); ensureGlobalSettingsEntry(); setupGlobalSettings(); setupProjectAgent(); setupEnterToSend(); });
+document.addEventListener("DOMContentLoaded", () => { setupThemeToggle(); ensureGlobalSettingsEntry(); setupGlobalSettings(); setupProjectAgent(); setupEnterToSend(); setupKnowledgeDrawer(); });
