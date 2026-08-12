@@ -2695,6 +2695,23 @@ def _initialize_extended_schema(connection: sqlite3.Connection) -> None:
         )"""
     )
 
+    # 产品项目由用户自己定义，与工作台内置的 15 个项目无关——
+    # 你在这里管的是"我的产品"，不是"工作台有哪些功能模块"。
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS product_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            color TEXT NOT NULL DEFAULT '',
+            archived_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(name)
+        )"""
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_product_projects_status ON product_projects(status, updated_at DESC)")
+
     # 产品作战室原本只有一个扁平的需求池：没有项目维度，也没有缺陷这个概念。
     # 一个人同时维护十几个项目时，所有需求混在一张列表里等于没有优先级。
     requirement_columns = {row[1] for row in connection.execute("PRAGMA table_info(product_requirements)").fetchall()}
@@ -27591,14 +27608,26 @@ def product_manager_overview(limit: int = 200, project_id: str = "") -> dict[str
     open_defects = [item for item in active if item.get("item_type") == "defect"]
     summary = product_manager_summary()
 
-    # 按项目汇总：一个人同时维护十几个项目时，最需要先看"哪个项目在冒烟"。
-    by_project: dict[str, dict[str, Any]] = {}
-    project_titles = {str(item.get("id") or ""): str(item.get("title") or item.get("id") or "") for item in load_projects()}
+    # 按项目汇总：同时维护多个产品时，最需要先看"哪个项目在冒烟"。
+    projects = list_product_projects()
+    project_titles = {str(item["id"]): str(item["name"]) for item in projects}
+    by_project: dict[str, dict[str, Any]] = {
+        str(item["id"]): {
+            "project_id": str(item["id"]), "project_title": str(item["name"]),
+            "summary": str(item.get("summary") or ""),
+            "requirements": 0, "defects": 0, "blockers": 0, "needs_evidence": 0,
+        }
+        for item in projects
+    }
     for item in list_product_requirements(limit):
-        key = str(item.get("project_id") or "")
+        raw_key = str(item.get("project_id") or "")
+        # 已删除或从未存在的项目 id 全部并到同一个「未归属」桶，
+        # 否则每个失效 id 都会自成一行、显示成一堆同名的「未归属」。
+        key = raw_key if raw_key in project_titles else ""
         bucket = by_project.setdefault(key, {
             "project_id": key,
             "project_title": project_titles.get(key, "未归属"),
+            "summary": "",
             "requirements": 0, "defects": 0, "blockers": 0, "needs_evidence": 0,
         })
         if item.get("item_type") == "defect":
@@ -27619,7 +27648,7 @@ def product_manager_overview(limit: int = 200, project_id: str = "") -> dict[str
         "cowart": product_cowart_status(),
         "projects": {
             "selected": project_filter,
-            "options": [{"id": pid, "title": title} for pid, title in sorted(project_titles.items(), key=lambda kv: kv[1])],
+            "options": [{"id": str(item["id"]), "title": str(item["name"]), "summary": str(item.get("summary") or "")} for item in projects],
             "rollup": sorted(by_project.values(), key=lambda item: (-item["blockers"], -item["defects"], -item["requirements"])),
         },
         "item_types": [
@@ -27707,13 +27736,87 @@ def _product_work_item_status(status: str) -> str:
     return "open"
 
 
+def list_product_projects(include_archived: bool = False) -> list[dict[str, Any]]:
+    """用户自定义的产品项目列表。"""
+    connection = db_connection()
+    try:
+        where = "" if include_archived else "WHERE status = 'active'"
+        rows = connection.execute(
+            f"""SELECT product_projects.*,
+                (SELECT COUNT(*) FROM product_requirements
+                 WHERE product_requirements.project_id = CAST(product_projects.id AS TEXT)
+                   AND item_type = 'requirement') AS requirement_count,
+                (SELECT COUNT(*) FROM product_requirements
+                 WHERE product_requirements.project_id = CAST(product_projects.id AS TEXT)
+                   AND item_type = 'defect' AND status NOT IN ('shipped', 'paused')) AS open_defect_count,
+                (SELECT COUNT(*) FROM product_requirements
+                 WHERE product_requirements.project_id = CAST(product_projects.id AS TEXT)
+                   AND item_type = 'defect' AND severity = 'blocker' AND status NOT IN ('shipped', 'paused')) AS blocker_count
+            FROM product_projects {where} ORDER BY updated_at DESC, id DESC"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def create_product_project(name: str, summary: str = "", color: str = "") -> dict[str, Any]:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise HTTPException(400, "项目名称不能为空")
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        existing = connection.execute("SELECT id FROM product_projects WHERE name = ?", (clean_name,)).fetchone()
+        if existing:
+            raise HTTPException(409, f"已经有一个叫「{clean_name}」的项目")
+        cursor = connection.execute(
+            "INSERT INTO product_projects(name, summary, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (clean_name[:120], str(summary or "").strip()[:2000], str(color or "").strip()[:20], timestamp, timestamp),
+        )
+        connection.commit()
+        project_id = int(cursor.lastrowid)
+    finally:
+        connection.close()
+    return next((item for item in list_product_projects(True) if int(item["id"]) == project_id), {"id": project_id, "name": clean_name})
+
+
+def update_product_project(project_id: int, *, name: str | None = None, summary: str | None = None, status: str | None = None) -> dict[str, Any] | None:
+    fields: list[tuple[str, Any]] = []
+    if name is not None and str(name).strip():
+        fields.append(("name", str(name).strip()[:120]))
+    if summary is not None:
+        fields.append(("summary", str(summary).strip()[:2000]))
+    if status in {"active", "archived"}:
+        fields.append(("status", status))
+        fields.append(("archived_at", now_iso() if status == "archived" else ""))
+    if not fields:
+        return None
+    fields.append(("updated_at", now_iso()))
+    assignments = ", ".join(f"{key} = ?" for key, _ in fields)
+    connection = db_connection()
+    try:
+        connection.execute(f"UPDATE product_projects SET {assignments} WHERE id = ?", [value for _, value in fields] + [int(project_id)])
+        connection.commit()
+    finally:
+        connection.close()
+    return next((item for item in list_product_projects(True) if int(item["id"]) == int(project_id)), None)
+
+
 def valid_product_project_id(value: str) -> str:
-    """项目必须是工作台里真实存在的项目；未知一律落到未归属，不静默写脏数据。"""
+    """归属必须是用户自己建过的产品项目；未知一律落到未归属，不静默写脏数据。
+
+    这里刻意不复用工作台的 15 个内置项目——那是"工作台有哪些功能模块"，
+    而产品作战室要管的是"我在做哪些产品"，两者是不同的东西。
+    """
     candidate = str(value or "").strip()
     if not candidate:
         return ""
-    known = {str(item.get("id") or "") for item in load_projects()}
-    if candidate in known:
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT id FROM product_projects WHERE CAST(id AS TEXT) = ?", (candidate,)).fetchone()
+    finally:
+        connection.close()
+    if row:
         return candidate
     log.warning("忽略未知的产品项目归属：%s", candidate)
     return ""
@@ -27758,7 +27861,7 @@ def create_product_requirement(request: ProductRequirementRequest) -> dict[str, 
         status=_product_work_item_status(request.status),
         priority=_product_defect_priority(severity) if item_type == "defect" else _product_requirement_priority(score),
         source_project="product-manager",
-        target_project=project_id or "product-manager",
+        target_project="product-manager",
         metadata={
             "product_requirement_id": requirement_id, "product_status": request.status,
             "item_type": item_type, "project_id": project_id,
@@ -28415,6 +28518,36 @@ def get_product_cowart_page_asset(prototype_id: int, asset_path: str) -> FileRes
 @app.get("/projects/product-manager/prototypes/{prototype_id}/cowart/assets/{asset_path:path}")
 def get_product_cowart_global_asset(prototype_id: int, asset_path: str) -> FileResponse:
     return _cowart_asset_response(prototype_id, "global", asset_path)
+
+
+class ProductProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    summary: str = Field(default="", max_length=2_000)
+    color: str = Field(default="", max_length=20)
+
+
+class ProductProjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=2_000)
+    status: str | None = Field(default=None, pattern="^(active|archived)$")
+
+
+@app.get("/api/product-manager/projects")
+def get_product_projects(include_archived: bool = False) -> dict[str, Any]:
+    return {"projects": list_product_projects(include_archived)}
+
+
+@app.post("/api/product-manager/projects")
+def post_product_project(request: ProductProjectRequest) -> dict[str, Any]:
+    return {"ok": True, "project": create_product_project(request.name, request.summary, request.color)}
+
+
+@app.patch("/api/product-manager/projects/{project_id}")
+def patch_product_project(project_id: int, request: ProductProjectUpdateRequest) -> dict[str, Any]:
+    project = update_product_project(project_id, name=request.name, summary=request.summary, status=request.status)
+    if not project:
+        raise HTTPException(404, "项目不存在或没有可更新的字段")
+    return {"ok": True, "project": project}
 
 
 @app.get("/api/product-manager/overview")

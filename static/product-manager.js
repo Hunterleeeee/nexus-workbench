@@ -308,7 +308,15 @@ function syncRequirementTypeFields() {
   const isDefect = ($("#requirement-type")?.value || "requirement") === "defect";
   // 缺陷不做 RICE：拿"触达 x 影响 / 成本"给 bug 排序没有意义，优先级来自严重级别。
   const rice = $("#rice-details");
-  if (rice) { rice.hidden = isDefect; if (isDefect) rice.open = false; }
+  if (rice) {
+    rice.hidden = isDefect;
+    if (isDefect) rice.open = false;
+    // 隐藏还不够：被 display:none 的控件仍然参与表单校验，一旦它校验不通过，
+    // 浏览器既无法聚焦它、也不会提示，submit 就静默失败了
+    // （控制台只留一句 "An invalid form control ... is not focusable"）。
+    // 所以隐藏的同时必须 disabled，让它彻底退出校验。
+    rice.querySelectorAll("input, select").forEach((field) => { field.disabled = isDefect; });
+  }
   const severity = $("#requirement-severity-field");
   if (severity) severity.hidden = !isDefect;
   const titleField = $("#requirement-title-field");
@@ -324,33 +332,69 @@ function syncRequirementTypeFields() {
 function renderProjectOptions(projects = {}) {
   const select = $("#requirement-project");
   if (!select) return;
-  const current = select.value;
+  const previous = select.value;
   select.innerHTML = '<option value="">未归属</option>' + (projects.options || []).map((item) => `<option value="${escape(item.id)}">${escape(item.title)}</option>`).join("");
-  if (current) select.value = current;
+  // 正在看某个项目时，新建的条目默认就归到它——否则每次都要再选一次，
+  // 而且很容易忘了选，结果东西全落进「未归属」。
+  const preferred = projects.selected || previous;
+  if (preferred && select.querySelector(`option[value="${CSS.escape(preferred)}"]`)) select.value = preferred;
 }
 
 function renderProjectRollup(projects = {}) {
   const host = $("#project-rollup");
   if (!host) return;
   const rows = projects.rollup || [];
-  if (!rows.length) { host.innerHTML = ""; return; }
-  // 阻塞缺陷排最前：同时维护多个项目时，最该先知道"哪个项目在冒烟"。
-  host.innerHTML = `<div class="project-rollup-head"><strong>按项目</strong><small>点一行只看该项目</small></div>` + rows.map((row) => `
-    <button type="button" class="project-rollup-row ${projects.selected === row.project_id ? "active" : ""} ${row.blockers ? "smoking" : ""}" data-project-filter="${escape(row.project_id)}">
-      <span class="project-rollup-name">${escape(row.project_title)}</span>
-      <span class="project-rollup-counts">${row.requirements ? `<em>${row.requirements}</em> 需求` : ""}${row.defects ? ` · <em>${row.defects}</em> 缺陷` : ""}${row.blockers ? ` · <b>${row.blockers}</b> 阻塞` : ""}${row.needs_evidence ? ` · ${row.needs_evidence} 缺证据` : ""}</span>
-    </button>`).join("");
+  const selected = projects.selected || "";
+  // 「全部」在最前，然后是各项目；有阻塞缺陷的高亮，一眼看出哪个在冒烟。
+  const chips = [
+    `<button type="button" class="project-chip ${selected ? "" : "active"}" data-project-filter="">全部</button>`,
+    ...rows.map((row) => `<button type="button" class="project-chip ${selected === row.project_id ? "active" : ""} ${row.blockers ? "smoking" : ""}" data-project-filter="${escape(row.project_id)}" title="${escape(row.summary || row.project_title)}">
+        <span>${escape(row.project_title)}</span>
+        <em>${(row.requirements || 0) + (row.defects || 0)}</em>
+        ${row.blockers ? `<b title="${row.blockers} 个阻塞缺陷">!</b>` : ""}
+      </button>`),
+  ].join("");
+  const current = rows.find((row) => row.project_id === selected);
+  host.innerHTML = `
+    <div class="project-bar">
+      <div class="project-chips">${chips}</div>
+      <button type="button" id="add-project" class="project-add" title="新建产品项目">+ 新建项目</button>
+    </div>
+    ${current ? `<div class="project-context"><strong>${escape(current.project_title)}</strong>${current.summary ? `<span>${escape(current.summary)}</span>` : ""}<small>${current.requirements || 0} 需求 · ${current.defects || 0} 缺陷${current.blockers ? ` · <b>${current.blockers} 阻塞</b>` : ""}${current.needs_evidence ? ` · ${current.needs_evidence} 条缺证据` : ""}</small></div>` : ""}
+    <form id="project-form" class="project-form" hidden>
+      <input id="project-name" maxlength="120" placeholder="项目名称，例如：助理人 Workbench" required />
+      <input id="project-summary" maxlength="2000" placeholder="一句话说明这个项目是什么（可选）" />
+      <button class="primary-button" type="submit">创建</button>
+      <button type="button" id="project-cancel" class="text-button">取消</button>
+    </form>`;
 }
 
   $("#requirement-type")?.addEventListener("change", syncRequirementTypeFields);
   syncRequirementTypeFields();   // 初始渲染也要对齐，别只依赖 HTML 里的 hidden
-  $("#project-rollup")?.addEventListener("click", (event) => {
-    const row = event.target.closest("[data-project-filter]");
-    if (!row) return;
-    const next = row.dataset.projectFilter;
-    // 再点一次同一行取消筛选，避免用户被困在某个项目里出不来。
-    state.projectFilter = state.projectFilter === next ? "" : next;
-    loadOverview();
+  $("#project-rollup")?.addEventListener("click", async (event) => {
+    if (event.target.closest("#add-project")) {
+      const form = $("#project-form");
+      if (form) { form.hidden = false; $("#project-name")?.focus(); }
+      return;
+    }
+    if (event.target.closest("#project-cancel")) { const form = $("#project-form"); if (form) form.hidden = true; return; }
+    const chip = event.target.closest("[data-project-filter]");
+    if (!chip) return;
+    state.projectFilter = chip.dataset.projectFilter || "";
+    await loadOverview();
+  });
+  $("#project-rollup")?.addEventListener("submit", async (event) => {
+    if (!event.target.closest("#project-form")) return;
+    event.preventDefault();
+    const name = $("#project-name")?.value.trim();
+    if (!name) return;
+    try {
+      const body = await request("/api/product-manager/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, summary: $("#project-summary")?.value.trim() || "" }) });
+      // 建完直接切到这个项目，省得再点一次。
+      state.projectFilter = String(body.project?.id || "");
+      setStatus(`项目「${name}」已创建。`, "success");
+      await loadOverview();
+    } catch (error) { setStatus(`创建项目失败：${error.message}`, "error"); }
   });
   $("#requirement-form").addEventListener("submit", async (event) => {
     event.preventDefault();
