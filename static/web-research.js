@@ -216,7 +216,7 @@ function setView(mode) { viewMode = mode; const context = activeContext(); if (m
 
 function nativePageReady() { const browserState = state.nativeBrowserStates[activeNativeTabId()] || {}; return Boolean(nativeBrowserAvailable() && viewMode === "iframe" && activeContext()?.url && safeHttpUrl(browserState.url) && !browserState.error); }
 function researchAnswerReady() { const context = activeContext(); return Boolean(context?.runId && state.run?.id === context.runId && state.run?.status === "completed" && (state.run?.documents || []).length); }
-function syncCopilotAvailability(label = "") { const context = activeContext(); const answerReady = researchAnswerReady(); const pageReady = nativePageReady(); const mode = document.documentElement.dataset.assistantMode || "auto"; const canType = answerReady || (pageReady && mode !== "ask"); $("#chat-input").disabled = !canType; $("#chat-submit").disabled = !canType; $("#handoff-evidence").disabled = !Boolean(state.run?.artifact_id); $("#toggle-view").disabled = !context?.url; $("#shot-view").disabled = !context?.url; document.querySelectorAll("[data-copilot-quick]").forEach((button) => { button.disabled = !answerReady; }); document.querySelectorAll("[data-browser-command]").forEach((button) => { button.disabled = !pageReady; }); $("#selection-action").disabled = !answerReady; const pageState = label && /失败|取消/.test(label) ? `网页可操作 · ${label}` : mode === "ask" ? "页面问答准备中" : "网页可操作 · 问答准备中"; $("#copilot-state").textContent = answerReady ? "可以提问和操作" : pageReady ? pageState : (label || (context?.url ? "正在准备上下文" : "等待页面")); }
+function syncCopilotAvailability(label = "") { const context = activeContext(); const answerReady = researchAnswerReady(); const pageReady = nativePageReady(); const mode = document.documentElement.dataset.assistantMode || "auto"; const canType = answerReady || (pageReady && mode !== "ask"); $("#chat-input").disabled = !canType; $("#chat-submit").disabled = !canType; $("#handoff-evidence").disabled = !Boolean(state.run?.artifact_id); $("#toggle-view").disabled = !context?.url; $("#shot-view").disabled = !context?.url; document.querySelectorAll("[data-copilot-quick]").forEach((button) => { button.disabled = !answerReady; }); document.querySelectorAll("[data-browser-command]").forEach((button) => { button.disabled = !pageReady; }); const readable = state.contexts.filter((item) => item.runId).length; const crossButton = $("#cross-tab-ask"); if (crossButton) { crossButton.disabled = readable < 2; crossButton.title = readable < 2 ? "至少要有两个已读完的标签才谈得上对比" : `把 ${readable} 个已读完的标签放在一起比较`; } $("#selection-action").disabled = !answerReady; const pageState = label && /失败|取消/.test(label) ? `网页可操作 · ${label}` : mode === "ask" ? "页面问答准备中" : "网页可操作 · 问答准备中"; $("#copilot-state").textContent = answerReady ? "可以提问和操作" : pageReady ? pageState : (label || (context?.url ? "正在准备上下文" : "等待页面")); }
 function enableCopilot() { syncCopilotAvailability(); }
 function disableCopilot(label) { syncCopilotAvailability(label); }
 
@@ -258,6 +258,36 @@ function renderRun(run) { state.run = run; const context = activeContext(); cons
 /* ── Copilot ───────────────────────────────────────────────────────────── */
 const COPILOT_QUICK_PROMPTS = { bullets: "用 3-5 条要点总结当前网页的核心内容，每条一句话，只列要点。", risks: "指出当前网页内容里可能误导、过时或缺失的关键信息，逐条说明为什么，并给出核实建议。", translate: "把当前网页的核心内容翻译成简体中文，保留关键术语，翻译要自然通顺。", actions: "基于当前网页内容，给出 3 条可以立即执行的下一步建议，并说明每条的价值。" };
 async function copilotAsk(message) { const context = activeContext(); if (!message.trim() || !context) return; if (!researchAnswerReady()) { appendMessage("user", message, { kind: "chat" }); const input = $("#chat-input"); if (input) input.value = ""; appendMessage("assistant", "当前网页已经可以操作，但内容问答还在准备。你可以先让我点击、输入或滚动；页面读完后会自动开放总结和追问。", { kind: "notice" }); return; } const contextId = context.id; const runId = context.runId; appendMessage("user", message, { kind: "chat", runId }); const input = $("#chat-input"); if (input) input.value = ""; const thinking = appendThinking(); const submit = $("#chat-submit"); setBusy(submit, true, "…"); try { let liveContext = ""; if (nativeBrowserAvailable() && viewMode === "iframe") { const live = await nativeBrowser.snapshot(context.id); if (live?.ok && live.snapshot) liveContext = nativeSnapshotContext(live.snapshot); } const body = await window.requestJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run_id: runId, message, live_context: liveContext }) }); if (contextId === state.activeId && activeContext()?.runId === runId) { thinking.remove(); appendMessage("assistant", body.answer || "没有返回内容", { kind: "chat", runId }); } } catch (error) { if (contextId === state.activeId) { thinking.remove(); appendMessage("assistant", `追问失败：${error.message}`, { kind: "error", runId }); } } finally { setBusy(submit, false); } }
+// 「向下滚动」「回到顶部」这两个按钮删掉了：页面就在眼前，滚动自己拖更快，
+// 让 AI 代劳一次滚动没有任何价值。真正值得交给 AI 的是人做起来最费劲的那件事——
+// 把几个标签的内容放在一起对齐、比较、找矛盾。
+async function askAcrossTabs() {
+  const readable = state.contexts.filter((item) => item.runId);
+  if (readable.length < 2) return;
+  const question = ($("#chat-input")?.value || "").trim()
+    || "把这几个页面放在一起比较：它们在说同一件事吗？哪些地方一致、哪些地方互相矛盾？";
+  const button = $("#cross-tab-ask");
+  setBusy(button, true, "对比中…");
+  appendMessage("user", `【跨 ${readable.length} 个标签】${question}`, { kind: "chat" });
+  if ($("#chat-input")) $("#chat-input").value = "";
+  const thinking = appendThinking();
+  try {
+    const body = await window.requestJson("/api/research/cross-tab", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_ids: readable.slice(0, 6).map((item) => item.runId), question }),
+    });
+    thinking.remove();
+    const legend = (body.sources || []).map((item, index) => `标签 ${index + 1}：${item.title}`).join("\n");
+    appendMessage("assistant", `${body.answer}\n\n——\n${legend}`, { kind: "chat" });
+  } catch (error) {
+    thinking.remove();
+    appendMessage("assistant", `跨标签对比失败：${error.message}`, { kind: "error" });
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 function grabSelection() { const selection = window.getSelection(); state.selectedText = selection ? selection.toString().trim() : ""; $("#selection-action").disabled = !state.selectedText || !researchAnswerReady(); if (state.selectedText) { $("#selection-hint").textContent = `已选中 ${state.selectedText.length} 字 · 可以问这段`; } }
 async function askSelection() { if (!researchAnswerReady()) return; if (nativeBrowserAvailable() && viewMode === "iframe") { const live = await nativeBrowser.snapshot(activeNativeTabId()); if (live?.ok && live.snapshot?.selection) state.selectedText = String(live.snapshot.selection).slice(0, 3000); } if (!state.selectedText) { $("#selection-hint").textContent = "请先在网页里选中一段文字"; return; } await copilotAsk(`我选中了当前网页中的这段内容，请解释它说了什么、是否与全文一致，以及我还需要验证什么：\n\n“${state.selectedText.slice(0, 6000)}”`); state.selectedText = ""; $("#selection-action").disabled = false; }
 async function copySources() { const docs = state.run?.documents || []; const text = docs.map((doc, index) => `## 来源 ${index + 1}\n${doc.title || "未命名页面"}\n${doc.url || ""}\n\n${doc.markdown || ""}`).join("\n\n"); try { await navigator.clipboard.writeText(text); $("#browser-status").textContent = "来源已复制"; } catch (_) { $("#browser-status").textContent = "浏览器拒绝访问剪贴板"; } }
@@ -471,6 +501,7 @@ function init() {
   $("#shot-view").addEventListener("click", () => setView("shot"));
   $("#copilot-quick").addEventListener("click", (event) => { const button = event.target.closest("[data-copilot-quick]"); const prompt = button && COPILOT_QUICK_PROMPTS[button.dataset.copilotQuick]; if (prompt) void copilotAsk(prompt); });
   $("#selection-action").addEventListener("click", () => void askSelection());
+  $("#cross-tab-ask")?.addEventListener("click", () => void askAcrossTabs());
   $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); void copilotAsk($("#chat-input").value); });
   $("#chat-input").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#chat-form").requestSubmit(); } });
   $("#handoff-evidence").addEventListener("click", () => void handoff()); $("#reader-body").addEventListener("mouseup", grabSelection);

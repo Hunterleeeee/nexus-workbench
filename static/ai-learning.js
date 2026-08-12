@@ -544,7 +544,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.155", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.156", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 

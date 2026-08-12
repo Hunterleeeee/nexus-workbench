@@ -20,11 +20,29 @@
         -webkit-app-region: drag;
       }
       #tabbar button, #tabbar .tab { -webkit-app-region: no-drag; }
+      /* #tabs 之前没有任何样式，是个默认 display:block 的 div。里面的 .tab 是
+         inline-flex，于是标签一多就换行；而 #tabbar 是写死的 42px 高，换行出来
+         的那几行直接溢出到标签栏外面，压在下面的页面内容上——10 个标签时有 4 个
+         跑到栏外，16 个时有 10 个。
+         改成一行横向排列：标签先等比压缩，压到下限后整条横向滚动，永远不换行。 */
+      #tabs {
+        display: flex;
+        align-items: stretch;
+        flex: 1 1 auto;
+        gap: 4px;
+        min-width: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+      }
+      #tabs::-webkit-scrollbar { display: none; }
       .tab {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        min-width: 0;
+        flex: 0 1 auto;
+        /* 下限 76px：再窄标题就只剩一两个字，还不如让它横向滚动。 */
+        min-width: 76px;
         max-width: 220px;
         padding: 0 8px 0 12px;
         border: 1px solid transparent;
@@ -36,7 +54,7 @@
         white-space: nowrap;
       }
       .tab.active { background: #f7f9fb; color: #17202a; font-weight: 600; border-color: #cfd5dc; border-bottom-color: transparent; }
-      .tab .title { overflow: hidden; text-overflow: ellipsis; }
+      .tab .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
       .tab .close {
         flex: 0 0 auto;
         display: inline-flex;
@@ -56,6 +74,7 @@
       .tab.home .close { display: none; }
       #new-tab {
         flex: 0 0 auto;
+        margin-left: 4px;
         align-self: center;
         width: 22px;
         height: 22px;
@@ -68,7 +87,8 @@
         cursor: pointer;
       }
       #new-tab:hover { background: #cfd5dc; color: #17202a; }
-      .spacer { flex: 1 1 auto; }
+      /* 右侧留一段可拖拽的空白：标签占满时也要有地方能拖动窗口。 */
+      .spacer { flex: 0 0 56px; }
       @media (prefers-color-scheme: dark) {
         body { background: #161b22; }
         #tabbar { background: #1c2128; border-bottom-color: #30363d; }
@@ -117,8 +137,19 @@
             item.appendChild(close);
           }
           item.addEventListener("click", () => window.desktopShell.switchTab(tab.id));
+          // 中键关闭：所有浏览器都是这个习惯，标签被压窄之后 × 很难点，
+          // 中键就成了实际最好用的关法。
+          item.addEventListener("auxclick", (event) => {
+            if (event.button !== 1 || tab.isHome) return;
+            event.preventDefault();
+            window.desktopShell.closeTab(tab.id);
+          });
           tabsEl.appendChild(item);
         }
+        // 标签多到需要横向滚动时，当前标签可能正好在可视区外——切过去却看不到
+        // 自己切到了哪，等于没切。
+        const active = tabsEl.querySelector(".tab.active");
+        if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
       }
 
       if (window.desktopShell && window.desktopShell.onTabsChanged) {

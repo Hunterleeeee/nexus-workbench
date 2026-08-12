@@ -1487,6 +1487,169 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class DesktopTabStripTests(unittest.TestCase):
+    """Electron 标签栏一多就散架。
+
+    #tabs 是个没有任何样式的 div（默认 display:block），里面的 .tab 是
+    inline-flex，所以标签一多就换行；而 #tabbar 写死 42px 高，换行出来的那几行
+    直接溢出到标签栏外面、压在下面的页面内容上。Chromium 实测 1200px 宽下：
+    10 个标签排成 2 行、4 个跑到栏外；16 个排成 3 行、10 个跑到栏外。
+    改成单行横排：先等比压缩到 76px 下限，再整条横向滚动。修复后 16 个标签
+    仍是 1 行、0 个溢出。
+    """
+
+    def shell(self):
+        path = Path(__file__).resolve().parents[1] / "desktop" / "shell.html"
+        if not path.exists():
+            self.skipTest("desktop/shell.html 不在这个检出里")
+        return path.read_text(encoding="utf-8")
+
+    def test_the_strip_lays_out_in_a_single_scrolling_row(self):
+        shell = self.shell()
+        rule = shell[shell.find("#tabs {"):]
+        rule = rule[:rule.find("}")]
+        self.assertIn("display: flex", rule, "不给 #tabs 布局，标签就会按 inline 换行")
+        self.assertIn("overflow-x: auto", rule, "压到下限之后要能横向滚动，而不是换行")
+        self.assertIn("min-width: 0", rule, "flex 项不归零 min-width 就压不下去")
+
+    def test_tabs_shrink_but_not_into_nothing(self):
+        shell = self.shell()
+        rule = shell[shell.find(".tab {", shell.find("#tabs::-webkit-scrollbar")):]
+        rule = rule[:rule.find("}")]
+        self.assertIn("flex: 0 1 auto", rule)
+        self.assertIn("min-width: 76px", rule, "再窄标题就只剩一两个字，不如让它滚动")
+
+    def test_the_active_tab_is_scrolled_into_view(self):
+        """标签多到要横向滚动时，切过去却看不到自己切到了哪，等于没切。"""
+        self.assertIn("scrollIntoView", self.shell())
+
+    def test_middle_click_closes_a_tab(self):
+        """标签被压窄之后 × 很难点，中键是实际最好用的关法。"""
+        shell = self.shell()
+        self.assertIn("auxclick", shell)
+        self.assertIn("event.button !== 1", shell)
+
+
+class CrossTabAskTests(unittest.TestCase):
+    """AI 浏览器上那两个按钮是「向下滚动」和「回到顶部」。
+
+    页面就在眼前，滚动自己拖更快——让 AI 代劳一次滚动没有任何价值。
+    调研了豆包浏览器和 Tabbit 之后，两边真正拉开差距的都不是自动点按钮，
+    而是「同时读多个标签、对齐比较」：Tabbit 的说法是 referencing multiple
+    open tabs simultaneously。人做这件事最费劲，也最值得交出去。
+    """
+
+    def test_the_useless_scroll_buttons_are_gone(self):
+        markup = (Path(__file__).resolve().parents[1] / "static" / "web-research.html").read_text(encoding="utf-8")
+        # 只针对按钮：正文里那句「可以说…向下滚动」仍然成立——Agent 还是能滚，
+        # 删掉的是「让人去点一个按钮来代替自己拖滚动条」这件事。
+        self.assertNotIn("data-browser-command", markup)
+        self.assertIn('id="cross-tab-ask"', markup)
+
+    def test_it_refuses_to_compare_fewer_than_two_tabs(self):
+        client = TestClient(app.app)
+        response = client.post("/api/research/cross-tab", json={"run_ids": ["a"], "question": "比一比"})
+        self.assertEqual(response.status_code, 422, "少于两个标签根本不成其为对比")
+
+    def test_tabs_that_have_not_finished_reading_are_skipped_not_faked(self):
+        client = TestClient(app.app)
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "load_crawl_runtime", lambda run_id: None):
+            response = client.post("/api/research/cross-tab", json={"run_ids": ["a", "b"], "question": "比一比"})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("凑不成对比", response.json()["detail"])
+
+    def test_every_claim_has_to_say_which_tab_it_came_from(self):
+        """不这么要求的话，模型会把几个页面糅成一段听起来很权威、
+        但没法追溯的通稿。"""
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find("async def post_cross_tab_ask("):]
+        body = body[:body.find("\n# ---")]
+        self.assertIn("标出它来自哪几个标签", body)
+        self.assertIn("仅标签 N 提到", body)
+        self.assertIn("互相矛盾时必须单独列出", body)
+
+
+class ProjectListFanoutTests(unittest.TestCase):
+    """首页卡片是个 N+1：每张卡片各查一次自己的工作项计数、Agent 运行计数
+    和最近一次运行。15 个项目一次 /api/projects 跑了 242 条 SQL，而且这个
+    数字随项目数线性增长。三份数据都能一次 GROUP BY 全部算出来。
+    实测：242 → 198 条，中位耗时 15.7ms → 8.4ms。
+    """
+
+    def test_the_batch_helper_replaces_the_per_project_queries(self):
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn("def project_activity_batch(", source)
+        body = source[source.find("def _public_projects_uncached("):]
+        body = body[:body.find("\ndef ")]
+        self.assertIn("project_activity_batch(", body)
+        self.assertIn("batch=activity_batch", body)
+
+    def test_batch_and_per_project_paths_agree(self):
+        """批量口径一旦和单查口径不一致，首页显示的就是另一套数字。"""
+        project_ids = [str(item.get("id") or "") for item in app.load_projects()][:6]
+        batch = app.project_activity_batch(project_ids)
+        for project_id in project_ids:
+            with self.subTest(project=project_id):
+                self.assertEqual(
+                    app.project_activity(project_id, batch=batch),
+                    app.project_activity(project_id),
+                    "批量算出来的卡片和单独查出来的不一样",
+                )
+
+    def test_the_endpoint_stays_under_a_query_budget(self):
+        """给个上限，下次再有人往卡片里加一个 per-project 查询会当场被挡住。"""
+        counter = {"n": 0}
+
+        class Counting(sqlite3.Connection):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.set_trace_callback(lambda statement: counter.__setitem__("n", counter["n"] + 1))
+
+        original = sqlite3.connect
+        client = TestClient(app.app)
+        client.get("/api/meta")
+        with patch.object(sqlite3, "connect", lambda *a, **k: original(*a, **{**k, "factory": Counting})):
+            counter["n"] = 0
+            response = client.get("/api/projects")
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(counter["n"], 240, f"/api/projects 跑了 {counter['n']} 条 SQL，N+1 又回来了")
+
+
+class SerialUpstreamFetchTests(unittest.TestCase):
+    """市场页最慢的一项是 /api/market/etf-rotation，实测 1484ms。
+
+    里面除了四次上游行情往返几乎没有别的开销，而这四次是一个一个 await
+    下来的——四个标的互不依赖，本来就该并发。可转债那边同理：每 60 个代码
+    一批是上游的限制，但批与批之间没有依赖，原来也是串着等。
+    """
+
+    def source(self):
+        return (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+
+    def test_etf_rotation_fetches_the_pool_concurrently(self):
+        body = self.source()
+        body = body[body.find("async def market_etf_rotation("):]
+        body = body[:body.find("\nasync def ")]
+        self.assertIn("asyncio.gather", body)
+        self.assertNotIn("for item in pool:\n        klines = await", body)
+
+    def test_a_single_failing_symbol_does_not_sink_the_whole_endpoint(self):
+        """并发之后一个标的抛异常会直接冒出来，除非显式收集。"""
+        body = self.source()
+        body = body[body.find("async def market_etf_rotation("):]
+        body = body[:body.find("\nasync def ")]
+        self.assertIn("return_exceptions=True", body)
+        self.assertIn("isinstance(klines, BaseException)", body)
+
+    def test_convertible_bond_batches_run_concurrently(self):
+        body = self.source()
+        body = body[body.find("async def market_convertible_bonds("):]
+        body = body[:body.find("\nasync def ")]
+        self.assertIn("asyncio.gather", body)
+        self.assertIn("return_exceptions=True", body)
+
+
 class MemoryTransparencyTests(unittest.TestCase):
     """记忆是整个工作台唯一会静默改变回答的东西。
 

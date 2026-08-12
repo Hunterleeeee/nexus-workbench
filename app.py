@@ -369,29 +369,82 @@ def load_projects() -> list[dict[str, Any]]:
     return sorted(projects, key=lambda item: (order_index.get(str(item.get("id")), len(order_index)), values.index(item)))
 
 
-def project_activity(project_id: str) -> dict[str, Any]:
+# 首页卡片的 N+1：每张卡片各查一次自己的工作项计数、Agent 运行计数和最近一次
+# 运行，16 个项目就是 48 次查询。实测 /api/projects 一次请求跑了 242 条 SQL。
+# 这三份数据都可以一次 GROUP BY 全部算出来，所以先批量取好，再按项目分发。
+#
+# 用一个显式传下去的 dict 而不是全局缓存：调用方看得见自己在用批量数据，
+# 也不会出现「首页拿到的是三分钟前的快照」这种说不清的新鲜度问题。
+def project_activity_batch(project_ids: list[str]) -> dict[str, Any]:
+    ids = [str(item) for item in project_ids if str(item)]
+    if not ids:
+        return {"work_items": {}, "runs": {}, "latest": {}}
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    work_items: dict[str, dict[str, int]] = {}
+    runs: dict[str, dict[str, int]] = {}
+    latest: dict[str, Any] = {}
+    connection = db_connection()
+    try:
+        # 一个工作项可能既属于来源项目也属于目标项目，所以按两个方向各聚合一次
+        # 再合并——这和原来「WHERE source = ? OR target = ?」的口径一致。
+        for column in ("source_project", "target_project"):
+            for row in connection.execute(
+                f"""SELECT {column} AS project, status, COUNT(*) AS count FROM work_items
+                WHERE NOT (status = 'failed' AND updated_at < ?)
+                GROUP BY {column}, status""",
+                (since,),
+            ).fetchall():
+                project = str(row["project"] or "")
+                if not project:
+                    continue
+                work_items.setdefault(project, {})
+                work_items[project][str(row["status"])] = work_items[project].get(str(row["status"]), 0) + int(row["count"])
+        for row in connection.execute(
+            "SELECT project_id, status, COUNT(*) AS count FROM agent_runs GROUP BY project_id, status"
+        ).fetchall():
+            project = str(row["project_id"] or "")
+            if project:
+                runs.setdefault(project, {})[str(row["status"])] = int(row["count"])
+        # 每个项目最近一次运行：按 (project_id, created_at DESC) 排一遍，取每组第一条。
+        seen: set[str] = set()
+        for row in connection.execute(
+            "SELECT * FROM agent_runs ORDER BY project_id, created_at DESC"
+        ).fetchall():
+            project = str(row["project_id"] or "")
+            if project and project not in seen:
+                seen.add(project)
+                latest[project] = agent_run_row(row)
+    finally:
+        connection.close()
+    return {"work_items": work_items, "runs": runs, "latest": latest}
+
+
+def project_activity(project_id: str, batch: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the small, actionable status summary used by the home cards.
 
     The project card must reflect what needs attention now, not just whether a
     route exists. Keep this payload deliberately small: no run request/result
     bodies leave the server, only counts and a safe latest-run title.
     """
-    connection = db_connection()
-    try:
-        # "failed" 工作项只统计最近 7 天内仍有动作的，避免历史失败永远占据卡片。
-        since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        rows = connection.execute(
-            """SELECT status, COUNT(*) AS count FROM work_items
-            WHERE (source_project = ? OR target_project = ?)
-              AND NOT (status = 'failed' AND updated_at < ?)
-            GROUP BY status""",
-            (project_id, project_id, since),
-        ).fetchall()
-        work_items = {str(row["status"]): int(row["count"]) for row in rows}
-    finally:
-        connection.close()
+    if batch is not None:
+        work_items = dict(batch.get("work_items", {}).get(project_id, {}))
+    else:
+        connection = db_connection()
+        try:
+            # "failed" 工作项只统计最近 7 天内仍有动作的，避免历史失败永远占据卡片。
+            since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            rows = connection.execute(
+                """SELECT status, COUNT(*) AS count FROM work_items
+                WHERE (source_project = ? OR target_project = ?)
+                  AND NOT (status = 'failed' AND updated_at < ?)
+                GROUP BY status""",
+                (project_id, project_id, since),
+            ).fetchall()
+            work_items = {str(row["status"]): int(row["count"]) for row in rows}
+        finally:
+            connection.close()
 
-    runs = agent_run_summary(project_id)
+    runs = agent_run_summary(project_id, batch=batch)
     latest = runs.get("latest") or {}
     open_count = work_items.get("open", 0)
     running_count = work_items.get("running", 0)
@@ -466,18 +519,21 @@ def _public_projects_uncached() -> list[dict[str, Any]]:
         crawl_available = True
     except Exception:
         log.debug("忽略异常（_public_projects_uncached）", exc_info=True)
-    for project in load_projects():
+    all_projects = load_projects()
+    # 一次把所有项目的计数取齐，替代每张卡片各查一遍。
+    activity_batch = project_activity_batch([str(item.get("id") or "") for item in all_projects] + ["crawl4ai"])
+    for project in all_projects:
         public = {key: value for key, value in project.items() if key not in {"source_path", "source_env"}}
         project_id = project.get("id")
         agent = AGENT_REGISTRY.get(project_id, {})
         public["agent_name"] = agent_display_name(project_id)
         public["agent_status"] = agent.get("status", "planned")
         public["agent_status_label"] = agent_status_label(public["agent_status"])
-        activity = project_activity(project_id)
+        activity = project_activity(project_id, batch=activity_batch)
         # 网页研究浏览器首版复用同一套 Crawl Worker/SQLite 队列，避免再维护
         # 一份并发、取消、重试和 Artifact 状态；页面层仍作为独立 Workbench 项目呈现。
         if project_id == "web-research":
-            activity = project_activity("crawl4ai")
+            activity = project_activity("crawl4ai", batch=activity_batch)
         public["activity"] = activity
         freshness = project_data_freshness(project_id)
         if project_id == "web-research":
@@ -8446,7 +8502,16 @@ def agent_run_timeline(run_id: str) -> dict[str, Any] | None:
     }
 
 
-def agent_run_summary(project_id: str) -> dict[str, Any]:
+def agent_run_summary(project_id: str, batch: dict[str, Any] | None = None) -> dict[str, Any]:
+    if batch is not None:
+        counts = dict(batch.get("runs", {}).get(project_id, {}))
+        return {
+            "total": sum(counts.values()),
+            "counts": counts,
+            "active": sum(counts.get(status, 0) for status in ("queued", "running")),
+            "failed": counts.get("failed", 0),
+            "latest": batch.get("latest", {}).get(project_id),
+        }
     connection = db_connection()
     try:
         rows = connection.execute(
@@ -22508,6 +22573,77 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
     return await run_crawl_chat_turn(durable_run=durable, crawl_run=run, message=request.message, live_context=request.live_context)
 
 
+class CrossTabAskRequest(BaseModel):
+    run_ids: list[str] = Field(min_length=2, max_length=6)
+    question: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/api/research/cross-tab")
+async def post_cross_tab_ask(request: CrossTabAskRequest) -> dict[str, Any]:
+    """把几个已打开的标签一起问。
+
+    这是「AI 浏览器」真正比「能自动点按钮」值钱的地方：一次读完的几个页面
+    放在一起比较、对齐、找矛盾。原来页面上只能一个标签一个标签地问，得到几段
+    互不相干的总结，再由人自己在脑子里拼——而拼这一步恰恰是最费劲的。
+
+    刻意的约束：每条结论都必须标出它来自哪个标签，只有一个来源支持的说法要
+    标成「仅 X 提到」。不这么要求的话，模型会把几个页面糅成一段听起来很权威、
+    但没法追溯的通稿。
+    """
+    if not llm_settings()["configured"]:
+        raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
+    ids = list(dict.fromkeys(item.strip() for item in request.run_ids if item.strip()))
+    if len(ids) < 2:
+        raise HTTPException(400, "至少要选两个标签才谈得上对比")
+    sources: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for index, run_id in enumerate(ids):
+        run = await asyncio.to_thread(load_crawl_runtime, run_id)
+        if not run or run.get("status") != "completed":
+            missing.append(run_id)
+            continue
+        documents = run.get("documents") or []
+        primary = documents[0] if documents else {}
+        sources.append({
+            "label": f"标签 {index + 1}",
+            "title": clip(str(primary.get("title") or run.get("title") or "未命名页面"), 120),
+            "url": str(primary.get("url") or ""),
+            "data_as_of": str(primary.get("data_as_of") or run.get("finished_at") or ""),
+            "content": clip_for_llm(str(primary.get("markdown") or run.get("initial_analysis") or ""), 9_000),
+        })
+    if len(sources) < 2:
+        raise HTTPException(
+            409,
+            f"只有 {len(sources)} 个标签读完了内容，凑不成对比。等这些标签的 AI 阅读跑完再试。",
+        )
+    prompt = "\n\n".join(
+        f"【{item['label']}】{item['title']}\n来源：{item['url'] or '（无链接）'}\n数据时间：{item['data_as_of'] or '未知'}\n{item['content']}"
+        for item in sources
+    )
+    answer = await call_llm(
+        [
+            {"role": "system", "content": (
+                "你在同时阅读用户打开的多个网页，回答要建立在这些页面的真实内容上。规则："
+                "① 每一条结论后面标出它来自哪几个标签，例如「（标签 1、标签 3）」；"
+                "② 只有一个来源支持的说法，标成「仅标签 N 提到」；"
+                "③ 各来源互相矛盾时必须单独列出矛盾点，不要挑一个当作事实；"
+                "④ 页面里没有的内容就说没有，不要用常识补全；"
+                "⑤ 注意数据时间，旧页面的结论不要当成现状。"
+                "输出顺序：一句话结论 → 共识 → 分歧与矛盾 → 只有单一来源支持的 → 还缺什么。"
+            )},
+            {"role": "user", "content": f"我的问题：{request.question}\n\n以下是这些标签的内容：\n\n{prompt}"},
+        ],
+        max_tokens=2_200,
+        temperature=0.2,
+        purpose="cross_tab_ask",
+    )
+    return {
+        "answer": answer,
+        "sources": [{k: v for k, v in item.items() if k != "content"} for item in sources],
+        "skipped": missing,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Platform round: orchestration, automation, local Git, backups, delivery
 # and verifiable evidence.  These endpoints are intentionally additive: they
@@ -28003,11 +28139,18 @@ async def market_etf_rotation() -> dict[str, Any]:
         {"symbol": "sz159915", "name": "创业板ETF"},
         {"symbol": "sh588000", "name": "科创50ETF"},
     ]
+    # 四个标的的行情互不依赖，原来是一个一个 await 下来的：实测这个接口 1484ms，
+    # 是整个市场页最慢的一项，而里面除了四次串行的上游往返几乎没有别的开销。
+    # 并发之后耗时取决于最慢的那一次，而不是四次之和。
+    klines_list = await asyncio.gather(
+        *(_tencent_kline(item["symbol"], 30) for item in pool),
+        return_exceptions=True,
+    )
     results = []
-    for item in pool:
-        klines = await _tencent_kline(item["symbol"], 30)
-        if len(klines) < 2:
-            results.append({**item, "momentum_20d": None, "latest": None, "ok": False, "note": "行情不足"})
+    for item, klines in zip(pool, klines_list):
+        if isinstance(klines, BaseException) or len(klines) < 2:
+            note = "行情不足" if not isinstance(klines, BaseException) else f"行情读取失败：{clip(str(klines), 80)}"
+            results.append({**item, "momentum_20d": None, "latest": None, "ok": False, "note": note})
             continue
         latest = klines[-1]["close"]
         base = klines[0]["close"]
@@ -28087,14 +28230,25 @@ async def market_convertible_bonds(limit: int = 30) -> dict[str, Any]:
         # 腾讯行情批量补实时价（一次最多 60 个代码）
         premium_available = False
         bonds: list[dict[str, Any]] = []
-        for i in range(0, len(rows), 60):
-            chunk = rows[i : i + 60]
-            code_prefix = {
+        # 每批 60 个代码是上游的限制，但批与批之间没有依赖关系——原来一批一批
+        # 串着等，200 只债就是 4 次串行往返。
+        chunks = [rows[i : i + 60] for i in range(0, len(rows), 60)]
+        chunk_prefixes = [
+            {
                 str(item.get("SECURITY_CODE") or "").strip(): ("sh" if str(item.get("SECUCODE") or "").endswith(".SH") else "sz")
                 for item in chunk
             }
-            tencent_codes = [prefix + code for code, prefix in code_prefix.items() if code]
-            quotes = await _tencent_convertible_quotes(tencent_codes)
+            for chunk in chunks
+        ]
+        quote_batches = await asyncio.gather(
+            *(_tencent_convertible_quotes([prefix + code for code, prefix in mapping.items() if code])
+              for mapping in chunk_prefixes),
+            return_exceptions=True,
+        )
+        for chunk, code_prefix, quotes in zip(chunks, chunk_prefixes, quote_batches):
+            if isinstance(quotes, BaseException):
+                log.warning("可转债实时价批量读取失败：%s", quotes)
+                continue
             for item in chunk:
                 code = str(item.get("SECURITY_CODE") or "").strip()
                 quote = quotes.get(code_prefix.get(code, "") + code) if code else None
