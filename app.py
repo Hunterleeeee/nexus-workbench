@@ -16432,6 +16432,37 @@ def patch_ai_learning_progress(lesson_id: int, request: AILearningProgressReques
     return {"ok": True, **save_ai_learning_progress(lesson_id, request)}
 
 
+@app.post("/api/ai-learning/lessons/{lesson_id}/reset-practice")
+def post_ai_learning_reset_practice(lesson_id: int) -> dict[str, Any]:
+    """清空某一节课的练习产出、复盘和 AI 批改。
+
+    需要这个接口，是因为上一个 bug 留下的烂摊子：在历史课页面上写的练习和
+    点的批改，实际都被写到了「今天那节」的行上。修好之后新的写入不会再串，
+    但已经串进去的内容还躺在库里——打开今天的课，看到的是自己在第一课写的
+    东西，而且没有任何办法清掉。
+
+    只清这一节的作答痕迹，不动课程内容本身（题目、案例、知识点都保留），
+    所以清完这一节还能正常做。
+    """
+    lesson = get_ai_learning_lesson(lesson_id=lesson_id)
+    if not lesson:
+        raise HTTPException(404, "学习课程不存在")
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        connection.execute(
+            """UPDATE ai_learning_lessons
+            SET practice_output = '', reflection = '', confidence = 0, quiz_answer = -1,
+                quiz_correct = 0, feedback_json = '{}', status = 'ready', completed_at = '', updated_at = ?
+            WHERE id = ?""",
+            (timestamp, lesson_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return {"ok": True, "lesson": get_ai_learning_lesson(lesson_id=lesson_id)}
+
+
 @app.post("/api/ai-learning/lessons/{lesson_id}/review")
 async def review_ai_learning_practice(lesson_id: int) -> dict[str, Any]:
     """让 AI 批改这节课的练习产出与自测选择。

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<script src="/static/theme.js?v=0.3.156"></script>
+<script src="/static/theme.js?v=0.3.157"></script>
 <title>中国独立开发者 · 实时看板</title>
 <meta name="theme-color" content="#2563eb">
 <meta name="description" content="中国独立开发者项目实时看板，支持趋势分析、筛选、收藏与 AI 对话">
@@ -137,12 +137,6 @@
   .trend-stat strong{font-size:14px;color:var(--text);font-variant-numeric:tabular-nums}
   .trend-stat.accent strong{color:var(--accent)}
   .trend-stat.peak strong{color:var(--new)}
-  .trend-svg{overflow:visible}
-  .trend-grid{stroke:var(--line-2);stroke-width:1}
-  .trend-area{fill:url(#trend-fill);opacity:.38}
-  .trend-line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
-  .trend-dot{fill:var(--card);stroke:var(--accent);stroke-width:2.5}
-  .trend-dot.peak{fill:var(--accent);stroke:var(--card);stroke-width:3}
   .panel h2{margin:0 0 13px;font-size:13px;color:var(--text-2);font-weight:700;letter-spacing:.1px;
     display:flex;align-items:center;gap:8px}
   .panel h2 .ph-actions{margin-left:auto;display:flex;gap:6px}
@@ -484,9 +478,8 @@
   <div id="errbox" role="alert"></div>
 
   <div class="panel" id="overview">
-    <h2>近 30 天新增趋势 · 热门标签<span style="text-transform:none;letter-spacing:0;font-weight:400">（关键词多标签统计，仅供参考）</span></h2>
+    <h2>近 30 天新增 · 热门标签<span style="text-transform:none;letter-spacing:0;font-weight:400">（关键词多标签统计，仅供参考）</span></h2>
     <div class="trend-summary" id="trend-summary"></div>
-    <div id="chart"></div>
     <div class="catlist" id="catlist"></div>
   </div>
 
@@ -924,13 +917,12 @@ function renderOverview(){
     top.map(([c,n])=>`<button type="button" class="ci" data-cat="${esc(c)}" aria-pressed="${F.cats.has(c)}">${esc(c)} <b>${n}</b></button>`).join('')
     ||'<span class="ci">暂无分类数据</span>';
 
-  // 趋势图
-  const box=document.getElementById('chart');
+  // 近 30 天新增：只留三个数。原来这里还画一条 30 点的折线，
+  // 但每天新增就是 0~2 个项目，折线基本贴着底走，看不出任何东西。
   const summary=document.getElementById('trend-summary');
   const dated=ALL.filter(p=>p.dateObj);
   if(!dated.length){
-    summary.innerHTML='';
-    box.innerHTML='<div class="mini" style="text-align:center;color:var(--muted);padding:26px 0">该数据源没有日期字段，无法生成趋势图</div>';
+    summary.innerHTML='<span class="trend-stat"><span>该数据源没有日期字段，无法统计新增</span></span>';
     return;
   }
   const dateKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -949,25 +941,6 @@ function renderOverview(){
     <span class="trend-stat peak"><strong>${max}</strong><span>单日峰值 · ${fmtDay(peakDay)}</span></span>
     <span class="trend-stat"><strong>${(total30/30).toFixed(1)}</strong><span>日均</span></span>`;
 
-  const W=760,H=220,padL=38,padR=16,padTop=20,padBot=34;
-  const plotW=W-padL-padR, plotH=H-padTop-padBot, y0=H-padBot;
-  const xAt=i=>padL+(i/(ds.length-1))*plotW;
-  const yAt=v=>padTop+plotH-(v/max)*plotH;
-  const points=values.map((v,i)=>({x:xAt(i),y:yAt(v),v,d:ds[i]}));
-  const line=points.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const area=`M ${points[0].x.toFixed(1)} ${y0} L ${line.replace(/,/g,' ')} L ${points[points.length-1].x.toFixed(1)} ${y0} Z`;
-  const guides=[max,Math.round(max/2),0].filter((v,i,a)=>a.indexOf(v)===i);
-  let chart=`<defs><linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="var(--accent)" stop-opacity=".38"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
-    </linearGradient></defs>`;
-  chart+=guides.map(v=>{ const y=yAt(v); return `<line class="trend-grid" x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"/><text x="5" y="${(y+3).toFixed(1)}" font-size="10" fill="var(--muted)">${v}</text>`; }).join('');
-  chart+=`<path class="trend-area" d="${area}"/><polyline class="trend-line" points="${line}"/>`;
-  ds.forEach((d,i)=>{
-    const p=points[i], showLbl=i%5===0||i===ds.length-1;
-    chart+=`<circle class="trend-dot${i===peakIndex?' peak':''}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${i===peakIndex?5:3}"><title>${esc(d)}：${p.v} 个</title></circle>`
-      +(showLbl?`<text x="${p.x.toFixed(1)}" y="${H-8}" font-size="10" fill="var(--muted)" text-anchor="middle">${fmtDay(d)}</text>`:'');
-  });
-  box.innerHTML=`<svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 30 天每日新增趋势">${chart}</svg>`;
 }
 function renderChips(){
   const cnt={}; for(const p of ALL) for(const t of p.tags) cnt[t]=(cnt[t]||0)+1;

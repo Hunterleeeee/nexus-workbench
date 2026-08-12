@@ -411,7 +411,17 @@
     const params = new URLSearchParams(window.location.search);
     const goal = String(params.get("agent_goal") || "").trim().slice(0, 2000);
     if (!goal) return;
-    const startUrl = String(params.get("agent_start") || "").trim().slice(0, 2000);
+    let startUrl = String(params.get("agent_start") || "").trim().slice(0, 2000);
+    // 兜底：调用方忘了带起始页面时，用目标里的关键词凑一个搜索页，而不是留空。
+    // 留空的后果是「问题填好了，但不知道从哪开始查」——这正是这个入口要解决的事。
+    let startIsGuess = false;
+    if (!startUrl) {
+      const keywords = goal.replace(/[（(）)：:，,。.、；;？?]/g, " ").split(/\s+/).filter((word) => word.length > 1).slice(0, 6).join(" ");
+      if (keywords) {
+        startUrl = `https://www.bing.com/search?q=${encodeURIComponent(keywords)}`;
+        startIsGuess = true;
+      }
+    }
     const drawer = q("#agent-drawer");
     const goalInput = q("#agent-goal");
     const startInput = q("#agent-start");
@@ -424,7 +434,13 @@
     const status = q("#agent-status");
     // Deliberately not auto-submitted: the user picks the starting page and
     // confirms before the agent spends time crawling.
-    if (status) status.textContent = startUrl ? "已填好目标，确认起始页面后点「开始」。" : "已填好目标，填一个起始页面（例如该股在财经站的页面）后点「开始」。";
+    if (status) {
+      status.textContent = !startUrl
+        ? "已填好目标，填一个起始页面（例如该股在财经站的页面）后点「开始」。"
+        : startIsGuess
+          ? "已填好目标；起始页面是按关键词猜的一个搜索页，可以改成更合适的来源再点「开始」。"
+          : "已填好目标和起始页面，确认后点「开始」。";
+    }
   })();
 
   setAssistantMode("auto");

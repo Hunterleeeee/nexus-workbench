@@ -6,7 +6,7 @@ const trackQuery = (extra = "") => `track=${encodeURIComponent(LEARNING_TRACK)}$
 const learnQuery = (selector, root = document) => root.querySelector(selector);
 const learnQueryAll = (selector, root = document) => [...root.querySelectorAll(selector)];
 const learnEscape = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0, openingLessonId: 0, explorations: [], exploreKind: "term", exercise: null };
+const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0, openingLessonId: 0, draftLessonId: 0, draftText: null, explorations: [], exploreKind: "term", exercise: null };
 
 function learningSetStatus(message = "", tone = "") {
   const node = learnQuery("#learning-page-status");
@@ -139,7 +139,7 @@ function renderTodayLesson(lesson = {}) {
           <div class="exercise-intro"><div><strong>手上没有现成的工作场景？</strong><p>让 AI 按这节课出一道题，背景给全，你只需要思考和作答，答完再对参考答案。</p></div><button type="button" id="exercise-new" class="secondary-button">出一道题</button></div>
           <div id="exercise-host" class="exercise-host"></div>
         </div>
-        <label class="practice-output-field" for="practice-output"><span class="practice-output-head"><span>练习成果 <small>必填</small></span><span id="draft-status" class="draft-status ${completed || lesson.status === "in_progress" ? "saved" : ""}" role="status" aria-live="polite">${completed ? "已完成" : lesson.status === "in_progress" ? "已保存" : "自动保存"}</span></span><textarea id="practice-output" rows="5" maxlength="8000" placeholder="粘贴结果、写下方案，或记录你实际完成了什么" ${completed ? "readonly" : ""}>${learnEscape(lesson.practice_output || "")}</textarea></label>
+        <label class="practice-output-field" for="practice-output"><span class="practice-output-head"><span>练习成果 <small>必填</small>${completed ? "" : `<button type="button" id="reset-practice" class="practice-reset" title="清空这一节的练习、复盘和 AI 批改">清空这一节</button>`}</span><span id="draft-status" class="draft-status ${completed || lesson.status === "in_progress" ? "saved" : ""}" role="status" aria-live="polite">${completed ? "已完成" : lesson.status === "in_progress" ? "已保存" : "自动保存"}</span></span><textarea id="practice-output" rows="5" maxlength="8000" placeholder="粘贴结果、写下方案，或记录你实际完成了什么" ${completed ? "readonly" : ""}>${learnEscape(lesson.practice_output || "")}</textarea></label>
       </section>
       <section class="lesson-section" aria-labelledby="quiz-title">
         <div class="lesson-section-head"><span class="lesson-step">4</span><div><h3 id="quiz-title">自测与复盘</h3><p>选择答案并记录复盘</p></div></div>
@@ -217,6 +217,7 @@ async function openHistoryLesson(lessonId) {
   if (learningState.openedLessonId === id) { closeHistoryLesson(); return; }
   if (learningState.openingLessonId) return;   // 连点两下不该发两个请求
   learningState.openingLessonId = id;
+  await flushPendingDraft();
   // 先把这一行标成加载中：点击到内容替换之间有一段网络时间，这段时间里
   // 页面上任何地方都不动，看起来就是「点了没反应」。
   const row = learnQuery(`#lesson-history [data-lesson-id="${id}"]`);
@@ -381,12 +382,17 @@ function setLessonDraftStatus(message, tone = "") {
 }
 
 async function saveCurrentLessonDraft() {
-  const lesson = currentLesson();
+  const pendingId = learningState.draftLessonId;
+  const lesson = pendingId && Number(currentLesson().id || 0) !== pendingId
+    ? { id: pendingId, completed: false }
+    : currentLesson();
+  const payload = pendingId && Number(currentLesson().id || 0) !== pendingId
+    ? learningState.draftText || currentLessonDraftPayload()
+    : currentLessonDraftPayload();
   if (!lesson.id || lesson.completed) return null;
   window.clearTimeout(learningState.draftTimer);
   learningState.draftTimer = 0;
   const revision = learningState.draftRevision;
-  const payload = currentLessonDraftPayload();
   setLessonDraftStatus("保存中…", "saving");
   const previous = learningState.draftPromise;
   const operation = (previous ? previous.catch(() => {}) : Promise.resolve()).then(() => requestJson(`/api/ai-learning/lessons/${encodeURIComponent(lesson.id)}/progress`, {
@@ -412,9 +418,22 @@ async function saveCurrentLessonDraft() {
 
 function scheduleLessonDraftSave() {
   learningState.draftRevision += 1;
+  // 记下「你是在哪一节里敲的键」。700ms 的防抖窗口内切换课程时，
+  // 定时器回调看到的 currentLesson() 已经是新的那一节了。
+  learningState.draftLessonId = Number(currentLesson().id || 0);
+  learningState.draftText = currentLessonDraftPayload();
   setLessonDraftStatus("未保存");
   window.clearTimeout(learningState.draftTimer);
   learningState.draftTimer = window.setTimeout(() => saveCurrentLessonDraft().catch(() => {}), 700);
+}
+
+async function flushPendingDraft() {
+  // 切换课程之前先把待写入的草稿落盘。renderTodayLesson 会 clearTimeout，
+  // 不先冲一次的话，700ms 内敲的内容会被静默丢掉。
+  if (!learningState.draftTimer) return;
+  window.clearTimeout(learningState.draftTimer);
+  learningState.draftTimer = 0;
+  try { await saveCurrentLessonDraft(); } catch (_error) { /* 冲不掉也不该挡住切换 */ }
 }
 
 async function requestAiReview(button, lessonId) {
@@ -448,6 +467,25 @@ function bindLessonActions() {
   [learnQuery("#practice-output"), learnQuery("#lesson-reflection")].forEach((field) => field?.addEventListener("input", scheduleLessonDraftSave));
   learnQuery("#lesson-confidence")?.addEventListener("change", scheduleLessonDraftSave);
   learnQuery("#request-ai-review")?.addEventListener("click", (event) => requestAiReview(event.currentTarget, lesson.id));
+  learnQuery("#reset-practice")?.addEventListener("click", async (event) => {
+    if (!window.confirm("清空这一节的练习成果、复盘和 AI 批改？课程内容（知识点、案例、题目）会保留。")) return;
+    const button = event.currentTarget;
+    learningBusy(button, true, "清空中…");
+    try {
+      // 先取消待写入的草稿，否则 700ms 后它会把刚清掉的内容原样写回去。
+      window.clearTimeout(learningState.draftTimer);
+      learningState.draftTimer = 0;
+      learningState.draftLessonId = 0;
+      learningState.draftText = null;
+      const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(lesson.id)}/reset-practice`, { method: "POST" });
+      if (body.lesson) { syncLessonEverywhere(body.lesson); renderTodayLesson(body.lesson); }
+      learningSetStatus("已清空这一节的作答记录。");
+    } catch (error) {
+      learningSetStatus(`清空失败：${error.message}`, "error");
+    } finally {
+      learningBusy(button, false);
+    }
+  });
   learnQuery("#lesson-complete-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -544,7 +582,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.156", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.157", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 

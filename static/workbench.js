@@ -6,7 +6,7 @@ const workbenchRequestJson = window.WorkbenchUX?.requestJson || (async (url, opt
   return body;
 });
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.156"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.157"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
   const topbar = document.querySelector(".topbar-right, .top-actions");
   if (!topbar || topbar.querySelector("[data-theme-toggle]")) return;
   const theme = window.WorkbenchTheme;
@@ -24,7 +24,7 @@ setupThemeToggle();
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistrations()
     .then((registrations) => Promise.all(registrations.filter((registration) => registration.scope === `${location.origin}/static/`).map((registration) => registration.unregister())))
-    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.156", { scope: "/" }))
+    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.157", { scope: "/" }))
     .catch(() => {});
 }
 const icons = {

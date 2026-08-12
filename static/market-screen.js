@@ -88,6 +88,14 @@
     return `<div class="screen-bar"><span>${esc(label)}</span><i><b style="width:${width}%"></b></i><em>${width}</em></div>`;
   }
 
+  function newsUrl(row) {
+    // 起始页面必须一起带过去。只传目标的话，跳过去是一个填好了问题、
+    // 但不知道从哪开始查的表单——而「去哪查」恰恰是这个按钮本来要替你解决的。
+    const query = `${row.name} ${row.symbol} 最新公告 减持 商誉 诉讼 ST`;
+    const start = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+    return `/projects/web-research?agent_goal=${encodeURIComponent(newsGoal(row))}&agent_start=${encodeURIComponent(start)}`;
+  }
+
   function newsGoal(row) {
     // 消息面只用于人工排除，不参与打分：让研究 Agent 去查「它凭什么涨」，
     // 查到减持/重组传闻/商誉/诉讼/ST 风险，就自己把它从候选里划掉。
@@ -138,7 +146,7 @@
           ${warnings ? `<details class="screen-risk" open><summary>哪里可能错（${(row.warnings || []).length}）</summary><ul>${warnings}</ul></details>` : ""}
           <div class="screen-item-actions">
             <button type="button" class="screen-plan-button" data-plan-symbol="${esc(row.symbol)}" data-plan-name="${esc(row.name)}">加入自选并设计划</button>
-            <a class="screen-news" href="/projects/web-research?agent_goal=${encodeURIComponent(newsGoal(row))}" target="_blank" rel="noopener">查最近消息 ↗</a>
+            <a class="screen-news" href="${newsUrl(row)}" target="_blank" rel="noopener">查最近消息 ↗</a>
             <span class="screen-news-note">消息只用来排除，不进分数</span>
           </div>
         </article>`;

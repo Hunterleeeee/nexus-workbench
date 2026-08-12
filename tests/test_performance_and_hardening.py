@@ -1487,6 +1487,114 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class LessonDraftIsolationTests(unittest.TestCase):
+    """上一个 bug 把在历史课里写的练习写进了「今天那节」的行里。
+
+    代码已经修好了（Chromium 实测：在第一课写练习 → 落在第一课那行，
+    第二课那行仍为空），但已经串进库里的内容还躺在那儿——打开今天的课，
+    看到的是自己在第一课写的东西，而且没有任何办法清掉。
+    """
+
+    def script(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
+
+    def test_a_pending_draft_remembers_which_lesson_it_was_typed_in(self):
+        """700ms 的防抖窗口内切换课程时，定时器回调看到的
+        currentLesson() 已经是新的那一节了。"""
+        script = self.script()
+        self.assertIn("learningState.draftLessonId = Number(currentLesson().id || 0)", script)
+        body = script[script.find("async function saveCurrentLessonDraft("):]
+        body = body[:body.find("\n}")]
+        self.assertIn("const pendingId = learningState.draftLessonId", body)
+
+    def test_switching_lessons_flushes_instead_of_dropping_the_draft(self):
+        """renderTodayLesson 会 clearTimeout，不先冲一次的话，
+        700ms 内敲的内容会被静默丢掉。"""
+        script = self.script()
+        self.assertIn("async function flushPendingDraft(", script)
+        body = script[script.find("async function openHistoryLesson("):]
+        body = body[:body.find("\nfunction closeHistoryLesson(")]
+        self.assertIn("await flushPendingDraft()", body)
+
+    def test_there_is_a_way_to_clear_a_lesson_that_already_holds_the_wrong_answer(self):
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn('/api/ai-learning/lessons/{lesson_id}/reset-practice', source)
+        body = source[source.find("def post_ai_learning_reset_practice("):]
+        body = body[:body.find("\n@app.")]
+        # 只清作答痕迹，课程内容要留着，否则清完这一节就没法做了。
+        self.assertIn("practice_output = ''", body)
+        self.assertIn("feedback_json = '{}'", body)
+        self.assertNotIn("content_json", body)
+        self.assertIn('id="reset-practice"', self.script())
+
+    def test_clearing_cancels_the_pending_draft_first(self):
+        """否则 700ms 后那份草稿会把刚清掉的内容原样写回去。"""
+        body = self.script()
+        body = body[body.find('learnQuery("#reset-practice")'):]
+        body = body[:body.find("\n  });")]
+        self.assertIn("clearTimeout(learningState.draftTimer)", body)
+        self.assertIn("learningState.draftLessonId = 0", body)
+
+
+class ResearchHandoffPrefillTests(unittest.TestCase):
+    """量化候选股上的「查最近消息 ↗」只带了研究目标，没带起始页面。
+
+    跳过去看到的是一个问题填好了、但不知道从哪开始查的表单——
+    而「去哪查」恰恰是这个按钮本来要替你解决的事。
+    """
+
+    def test_the_screening_link_carries_a_starting_page(self):
+        script = (Path(__file__).resolve().parents[1] / "static" / "market-screen.js").read_text(encoding="utf-8")
+        self.assertIn("function newsUrl(", script)
+        body = script[script.find("function newsUrl("):]
+        body = body[:body.find("\n  }")]
+        self.assertIn("agent_goal=", body)
+        self.assertIn("agent_start=", body)
+
+    def test_every_handoff_into_web_research_sends_both(self):
+        """两个入口各写一份 URL，早晚会有一个漏掉参数。"""
+        root = Path(__file__).resolve().parents[1] / "static"
+        offenders = []
+        for path in root.glob("market*.js"):
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"/projects/web-research\?[^\"'`]+", text):
+                if "agent_goal" in match.group(0) and "agent_start" not in match.group(0):
+                    offenders.append(f"{path.name}: {match.group(0)[:60]}")
+        self.assertEqual(offenders, [], "跳转链接带了目标却没带起始页面")
+
+    def test_the_receiving_page_guesses_a_start_rather_than_leaving_it_blank(self):
+        """兜底：以后谁再忘了传，也不该把人晾在原地。"""
+        script = (Path(__file__).resolve().parents[1] / "static" / "web-research-plus.js").read_text(encoding="utf-8")
+        self.assertIn("startIsGuess", script)
+        self.assertIn("按关键词猜的一个搜索页", script, "猜出来的要说明是猜的，让人知道可以改")
+
+
+class CidDashboardChartTests(unittest.TestCase):
+    """每天新增就是 0~2 个项目，30 点的折线基本贴着底走，看不出任何东西。"""
+
+    def markup(self):
+        path = Path(__file__).resolve().parents[1] / "projects" / "cid-dashboard-v2.html"
+        if not path.exists():
+            self.skipTest("看板文件不在这个检出里")
+        return path.read_text(encoding="utf-8")
+
+    def test_the_line_chart_and_its_dead_styles_are_gone(self):
+        markup = self.markup()
+        for leftover in ('id="chart"', "trend-svg", "trend-line", "trend-dot", "trend-area", "trend-grid"):
+            with self.subTest(leftover=leftover):
+                self.assertNotIn(leftover, markup, "删了图却留下只服务于它的代码/样式")
+
+    def test_the_three_numbers_that_were_actually_useful_stay(self):
+        markup = self.markup()
+        self.assertIn("近 30 天新增", markup)
+        self.assertIn("单日峰值", markup)
+        self.assertIn("日均", markup)
+
+    def test_the_no_date_case_still_says_something(self):
+        """原来这句话写在图容器里，图删了不能把提示一起删掉。"""
+        self.assertIn("没有日期字段", self.markup())
+
+
 class CrawlJanitorTests(unittest.TestCase):
     """flag_orphaned_crawl_runs() 在它唯一该生效的场景里从来不会跑。
 
