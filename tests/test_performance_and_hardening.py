@@ -1245,3 +1245,72 @@ class LearningHistoryTests(unittest.TestCase):
         script = (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
         self.assertIn("function setupLearningHistory", script)
         self.assertIn("setupLearningHistory();", script.split("function setupAILearning")[1][:400])
+
+
+class BrowserSessionSecurityTests(unittest.TestCase):
+    """AI 浏览器是整个工作台权限最大的一块：一个跑在服务器上、由 LLM 决定
+    下一步点哪里的真实浏览器。边界必须被钉死。"""
+
+    def test_navigation_targets_are_restricted(self):
+        blocked = [
+            "http://127.0.0.1:18765/api/health",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.5/",
+            "http://192.168.1.1/",
+            "http://localhost/x",
+            "file:///etc/passwd",
+            "",
+        ]
+        for url in blocked:
+            self.assertTrue(app._browser_blocked_reason(url), f"{url} 应该被拒绝")
+        self.assertEqual(app._browser_blocked_reason("https://example.com/a?b=1"), "")
+
+    def test_workbench_itself_is_never_a_target(self):
+        """让浏览器访问工作台自身，等于把内部 API 交给模型去点。"""
+        self.assertIn("工作台自身", app._browser_blocked_reason("https://workbench.example.dev/api/work-items"))
+        with patch.dict("os.environ", {"WORKBENCH_PUBLIC_HOST": "my-bench.example"}):
+            self.assertIn("工作台自身", app._browser_blocked_reason("https://my-bench.example/api/x"))
+
+    def test_only_whitelisted_actions_are_accepted(self):
+        with patch.dict(app._browser_sessions, {"s1": {"id": "s1", "process": None, "steps": 0, "touched_at": 0, "url": "", "history": []}}):
+            with self.assertRaises(app.HTTPException) as ctx:
+                app.browser_session_act("s1", "evaluate", {"script": "fetch('/api')"})
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("不支持的动作", ctx.exception.detail)
+
+    def test_unknown_session_is_rejected(self):
+        with self.assertRaises(app.HTTPException) as ctx:
+            app.browser_session_act("nope", "snapshot", {})
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_upload_paths_cannot_escape_the_session_directory(self):
+        """模型只能引用用户显式上传过的文件，不能点名服务器上的任意路径。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = Path(tmp) / "s1"
+            session_dir.mkdir()
+            (session_dir / "ok.txt").write_text("hi", encoding="utf-8")
+            session = {"id": "s1", "process": None, "steps": 0, "touched_at": 0, "url": "", "history": []}
+            with patch.object(app, "BROWSER_SESSION_DIR", Path(tmp)), patch.dict(app._browser_sessions, {"s1": session}):
+                for escape_path in ("/etc/passwd", "../../../etc/passwd", "缺失的文件.txt"):
+                    with self.assertRaises(app.HTTPException) as ctx:
+                        app.browser_session_act("s1", "upload", {"index": 0, "paths": [escape_path]})
+                    self.assertEqual(ctx.exception.status_code, 400, escape_path)
+                with self.assertRaises(app.HTTPException) as ctx:
+                    app.browser_session_act("s1", "upload", {"index": 0, "paths": []})
+                self.assertIn("请先上传", ctx.exception.detail)
+
+    def test_worker_locates_elements_by_dom_marker_not_a_second_filter(self):
+        """两套过滤规则一旦有差异，序号就会错位——表现为 AI 点了另一个按钮。"""
+        worker = (Path(__file__).resolve().parents[1] / "browser_session_worker.py").read_text(encoding="utf-8")
+        self.assertIn("data-wb-idx", worker)
+        self.assertIn("node.setAttribute('data-wb-idx'", worker)
+        self.assertIn("removeAttribute('data-wb-idx')", worker, "每次快照前要清掉旧标记，否则局部刷新后会残留")
+        action_block = worker[worker.find('if action in {"click", "type", "upload"}'):]
+        action_block = action_block[:action_block.find('if action == "scroll"')]
+        self.assertIn('query_selector(f\'[data-wb-idx="{index}"]\')', action_block)
+
+    def test_limits_are_bounded(self):
+        self.assertGreaterEqual(app.BROWSER_MAX_SESSIONS, 1)
+        self.assertLessEqual(app.BROWSER_MAX_SESSIONS, 6)
+        self.assertGreaterEqual(app.BROWSER_IDLE_SECONDS, 60)
+        self.assertGreaterEqual(app.BROWSER_MAX_AGENT_STEPS, 1)
