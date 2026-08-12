@@ -1558,3 +1558,102 @@ class KnowledgeDrawerTests(unittest.TestCase):
         block = block[:block.find("\nfunction setupEnterToSend")]
         self.assertIn("source: projectId", block)
         self.assertIn("tags: projectId", block)
+
+
+class MarketStyleScreenTests(unittest.TestCase):
+    """选股风格库。
+
+    最重要的约束不是「算得准」，而是「数据不够时不许给结论」——一个建立在 3 个
+    样本点上、看起来很专业的推荐，比没有推荐危险得多。
+    """
+
+    def points(self, prices, volumes=None):
+        return [{"price": price, "volume": (volumes[i] if volumes else 1000)} for i, price in enumerate(prices)]
+
+    def test_insufficient_samples_never_produce_a_score(self):
+        result = app.evaluate_market_style("trend-following", "sh600000", self.points([10, 11, 12]))
+        self.assertEqual(result["status"], "insufficient")
+        self.assertNotIn("score", result)
+        self.assertNotIn("hit", result)
+        self.assertIn("需要至少", result["reason"])
+        self.assertEqual(result["have"], 3)
+
+    def test_styles_needing_fundamentals_are_marked_unsupported(self):
+        """当前行情源只有价格和成交量，不能拿价格硬凑估值。"""
+        for style_id in ("deep-value", "quality-growth"):
+            result = app.evaluate_market_style(style_id, "sh600000", self.points([10] * 30))
+            self.assertEqual(result["status"], "unsupported", style_id)
+            self.assertNotIn("score", result)
+            self.assertTrue(result["missing"])
+
+    def test_trend_style_judges_by_pace_not_raw_percentage(self):
+        """后段基数更高，直接比百分比会系统性冤枉稳定上涨的标的。"""
+        steady = app.evaluate_market_style("trend-following", "x", self.points([10 + i * 0.3 for i in range(30)]))
+        self.assertTrue(steady["hit"], "稳定线性上涨应当命中趋势跟随")
+        stalled = app.evaluate_market_style("trend-following", "x", self.points([10 + i * 0.5 for i in range(20)] + [20] * 10))
+        self.assertFalse(stalled["hit"], "后段横盘不该算趋势")
+        reversed_trend = app.evaluate_market_style("trend-following", "x", self.points([10 + i * 0.5 for i in range(20)] + [20 - i * 0.6 for i in range(10)]))
+        self.assertFalse(reversed_trend["hit"])
+
+    def test_choppy_and_falling_series_do_not_hit_trend(self):
+        choppy = app.evaluate_market_style("trend-following", "x", self.points([10 + ((-1) ** i) * 0.8 for i in range(30)]))
+        falling = app.evaluate_market_style("trend-following", "x", self.points([20 - i * 0.3 for i in range(30)]))
+        self.assertFalse(choppy["hit"])
+        self.assertFalse(falling["hit"])
+        self.assertEqual(choppy["score"], 0.0)
+
+    def test_volume_breakout_needs_both_price_and_volume(self):
+        prices = [10] * 25 + [10.2, 10.5, 11, 11.5, 12]
+        volumes = [1000] * 25 + [1200, 1500, 2000, 3000, 4000]
+        hit = app.evaluate_market_style("volume-breakout", "x", self.points(prices, volumes))
+        self.assertTrue(hit["hit"])
+        self.assertGreater(hit["metrics"]["volume_ratio"], 1.5)
+        quiet = app.evaluate_market_style("volume-breakout", "x", self.points(prices, [1000] * 30))
+        self.assertFalse(quiet["hit"], "缩量新高不该算放量突破")
+
+    def test_every_style_declares_when_it_fails(self):
+        """只说什么时候管用、不说什么时候会亏的策略是有害的。"""
+        for style in app.MARKET_STYLES:
+            self.assertTrue(style.get("works_when"), style["id"])
+            self.assertTrue(style.get("fails_when"), f"{style['id']} 没有写失效场景")
+            self.assertGreater(len(style["fails_when"]), 20, f"{style['id']} 的失效场景过于敷衍")
+            self.assertTrue(style.get("requires"))
+            self.assertTrue(style.get("rules"))
+
+    def test_no_style_is_named_after_a_real_person(self):
+        """把在世投资人的名字挂在自动选股结果上，既不准确，亏了也说不清。"""
+        blob = json.dumps(app.MARKET_STYLES, ensure_ascii=False)
+        for name in ("巴菲特", "芒格", "索罗斯", "彼得林奇", "西蒙斯", "达利欧", "buffett", "munger", "soros"):
+            self.assertNotIn(name, blob, f"风格库里不该出现真人姓名：{name}")
+
+    def test_unknown_style_returns_404(self):
+        with self.assertRaises(app.HTTPException) as ctx:
+            app.evaluate_market_style("secret-sauce", "x", self.points([10] * 30))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_screen_refuses_to_rank_when_data_is_thin(self):
+        """这正是用户当前的处境：3 个快照、几乎没有报价。"""
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False), \
+             patch.object(app, "load_market_watchlist", lambda: [{"symbol": "sh600000"}, {"symbol": "sz000001"}]), \
+             patch.object(app, "load_market_snapshot", lambda: {"quotes": []}), \
+             patch.object(app, "list_market_history", lambda limit=30: []):
+            result = app.run_market_style_screen("trend-following")
+        self.assertEqual(result["picks"], [], "数据不足时不该给出任何推荐")
+        self.assertFalse(result["data_ready"])
+        self.assertEqual(len(result["blocked"]), 2)
+        self.assertIn("数据不足", result["summary"])
+
+    def test_screen_requires_a_watchlist(self):
+        with patch.object(app, "load_market_watchlist", lambda: []):
+            with self.assertRaises(app.HTTPException) as ctx:
+                app.run_market_style_screen("trend-following")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_catalog_exposes_data_requirements(self):
+        catalog = app.market_style_catalog()
+        self.assertTrue(catalog)
+        for style in catalog:
+            self.assertTrue(all("label" in item for item in style["requires"]))
+        value = next(item for item in catalog if item["id"] == "deep-value")
+        self.assertIn("市盈率", [item["label"] for item in value["requires"]])
