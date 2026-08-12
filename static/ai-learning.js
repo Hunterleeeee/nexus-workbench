@@ -72,7 +72,23 @@ function lessonFeedbackMarkup(lesson, quiz) {
   return `<div id="quiz-feedback" class="quiz-feedback visible ${correct ? "correct" : "review"}" role="status"><strong>${correct ? "回答正确" : "这题值得再看一遍"}</strong><br>${learnEscape(quiz.explanation || "课程已完成，重点是把方法用进自己的工作。")}</div>`;
 }
 
+// 「当前屏幕上是哪一节课」的唯一事实来源。
+//
+// 之前所有动作处理器都直接读 learningState.dashboard.today，可屏幕上显示的
+// 未必是今天那节——从学习记录点开第一课时，显示的是第一课，而批改、存草稿、
+// 保存笔记全都打在今天那节上：批改批的是另一节，批完还把页面刷成今天那节。
+// 这不只是跳页，是写错了对象。
+function currentLesson() {
+  return learningState.currentLesson || learningState.dashboard?.today || {};
+}
+
+function isViewingToday() {
+  const todayId = Number(learningState.dashboard?.today?.id || 0);
+  return !todayId || Number(currentLesson().id || 0) === todayId;
+}
+
 function renderTodayLesson(lesson = {}) {
+  learningState.currentLesson = lesson || {};
   window.clearTimeout(learningState.draftTimer);
   learningState.draftTimer = 0;
   learningState.draftRevision += 1;
@@ -133,7 +149,7 @@ function renderTodayLesson(lesson = {}) {
           ${completed ? `<div class="lesson-complete-summary"><strong>今日课程已完成</strong><p>${learnEscape(lesson.reflection || "没有填写复盘。")}</p></div>` : `<div class="reflection-grid"><label for="lesson-reflection">复盘<textarea id="lesson-reflection" rows="3" maxlength="4000" placeholder="这节课对你的工作有什么用？">${learnEscape(lesson.reflection || "")}</textarea></label><label class="confidence-field" for="lesson-confidence">掌握程度<select id="lesson-confidence">${[1, 2, 3, 4, 5].map((value) => `<option value="${value}" ${Number(lesson.confidence || 3) === value ? "selected" : ""}>${value} · ${["还没懂", "有点模糊", "基本理解", "能用起来", "能教别人"][value - 1]}</option>`).join("")}</select></label></div>`}
           ${lessonFeedbackMarkup(lesson, quiz)}
           ${aiReviewMarkup(lesson)}
-          <div class="quiz-actions"><span class="takeaway"><strong>本课要点：</strong>${learnEscape(content.takeaway || "把方法用到真实任务里。")}</span>${completed ? "" : '<button class="primary-button" type="submit">完成今日学习</button>'}</div>
+          <div class="quiz-actions"><span class="takeaway"><strong>本课要点：</strong>${learnEscape(content.takeaway || "把方法用到真实任务里。")}</span>${completed ? "" : `<button class="primary-button" type="submit">${Number(learningState.dashboard?.today?.id || 0) === Number(lesson.id) ? "完成今日学习" : "记录这一节"}</button>`}</div>
         </form>
       </section>
     </div>`;
@@ -290,6 +306,13 @@ async function regenerateTodayLesson(button) {
   if (learningState.draftPromise) {
     try { await learningState.draftPromise; } catch (_error) { /* confirmed replacement can continue */ }
   }
+  if (!isViewingToday()) {
+    // 「换一节」换的永远是今天那节。在看历史课时点它，今天那节会被悄悄换掉，
+    // 而屏幕上显示的还是历史课——看起来像什么都没发生。
+    learningSetStatus("「换一节」只对今天的课程生效。先点右侧「学习记录」里今天那一节回到今日课程，再换。", "error");
+    learningBusy(button, false);
+    return;
+  }
   learningBusy(button, true, "生成中…");
   learningSetStatus("正在重新生成今日课程…");
   try {
@@ -310,7 +333,7 @@ async function saveLessonNote(button, lessonId) {
     const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(lessonId)}/note`, { method: "POST" });
     learningSetStatus(body.created ? "课程和学习记录已保存到知识库。" : "这节课已经保存过了。", "");
     if (body.lesson) {
-      learningState.dashboard.today = body.lesson;
+      syncLessonEverywhere(body.lesson);
       renderTodayLesson(body.lesson);
     }
   } catch (error) {
@@ -328,8 +351,24 @@ function currentLessonDraftPayload() {
   };
 }
 
+// 一节课被批改或存草稿之后，它可能同时出现在三个地方：当前视图、今日课程、
+// 历史列表。只更新其中一个，另外两个就会显示过期状态。
+function syncLessonEverywhere(lesson) {
+  if (!lesson?.id) return;
+  if (Number(currentLesson().id || 0) === Number(lesson.id)) learningState.currentLesson = lesson;
+  if (learningState.dashboard && Number(learningState.dashboard.today?.id || 0) === Number(lesson.id)) {
+    learningState.dashboard.today = lesson;
+  }
+  const history = learningState.dashboard?.history || learningState.history || [];
+  const index = history.findIndex((item) => Number(item.id) === Number(lesson.id));
+  if (index >= 0) {
+    history[index] = lesson;
+    renderLessonHistory(history);
+  }
+}
+
 function hasCurrentLessonDraft() {
-  const lesson = learningState.dashboard?.today || {};
+  const lesson = currentLesson();
   const draft = currentLessonDraftPayload();
   return lesson.status === "in_progress" || Boolean(draft.practice_output || draft.reflection);
 }
@@ -342,7 +381,7 @@ function setLessonDraftStatus(message, tone = "") {
 }
 
 async function saveCurrentLessonDraft() {
-  const lesson = learningState.dashboard?.today || {};
+  const lesson = currentLesson();
   if (!lesson.id || lesson.completed) return null;
   window.clearTimeout(learningState.draftTimer);
   learningState.draftTimer = 0;
@@ -358,11 +397,8 @@ async function saveCurrentLessonDraft() {
   learningState.draftPromise = operation;
   try {
     const body = await operation;
-    if (body.lesson && learningState.dashboard?.today?.id === body.lesson.id) {
-      learningState.dashboard.today = body.lesson;
-      const index = (learningState.dashboard.history || []).findIndex((item) => item.id === body.lesson.id);
-      if (index >= 0) learningState.dashboard.history[index] = body.lesson;
-      renderLessonHistory(learningState.dashboard.history || []);
+    if (body.lesson) {
+      syncLessonEverywhere(body.lesson);
     }
     if (revision === learningState.draftRevision) setLessonDraftStatus("已保存", "saved");
     return body;
@@ -394,8 +430,9 @@ async function requestAiReview(button, lessonId) {
     await saveCurrentLessonDraft();
     // 批改要跑一次 LLM，用写入类默认超时（120s），不要用读取的 15s。
     const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(lessonId)}/review`, { method: "POST" });
-    if (learningState.dashboard?.today && body.lesson) learningState.dashboard.today = body.lesson;
-    renderTodayLesson(learningState.dashboard?.today || body.lesson);
+    // 渲染刚批改的那一节，而不是今天那节——两者不一定是同一节。
+    if (body.lesson) syncLessonEverywhere(body.lesson);
+    renderTodayLesson(body.lesson || currentLesson());
     learnQuery("#ai-review")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (error) {
     learningSetStatus(error.message || "批改失败，请稍后重试。");
@@ -405,7 +442,7 @@ async function requestAiReview(button, lessonId) {
 }
 
 function bindLessonActions() {
-  const lesson = learningState.dashboard?.today || {};
+  const lesson = currentLesson();
   learnQuery("#regenerate-lesson")?.addEventListener("click", (event) => regenerateTodayLesson(event.currentTarget));
   learnQuery("#save-lesson-note")?.addEventListener("click", (event) => saveLessonNote(event.currentTarget, lesson.id));
   [learnQuery("#practice-output"), learnQuery("#lesson-reflection")].forEach((field) => field?.addEventListener("input", scheduleLessonDraftSave));
@@ -436,9 +473,17 @@ function bindLessonActions() {
     learningState.draftRevision += 1;
     learningBusy(button, true, "记录中…");
     try {
-      const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(form.dataset.lessonId)}/complete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quiz_answer: Number(selected.value), ...draft }) });
-      learningSetStatus(body.quiz.correct ? "回答正确，今天的学习已记录。" : "今天的学习已记录；答案解释已经展开，建议再读一遍。", "");
+      const completedId = Number(form.dataset.lessonId);
+      const wasToday = Number(learningState.dashboard?.today?.id || 0) === completedId;
+      const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(completedId)}/complete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quiz_answer: Number(selected.value), ...draft }) });
+      learningSetStatus(body.quiz.correct ? "回答正确，这一节已记录。" : "这一节已记录；答案解释已经展开，建议再读一遍。", "");
+      // loadLearningDashboard 会把视图重置回今天那节。补完一节旧课之后被弹回
+      // 今天，看起来就像刚才那一节没保存上——所以只在补的就是今天那节时才跳。
       await loadLearningDashboard();
+      if (!wasToday) {
+        learningState.openedLessonId = 0;
+        await openHistoryLesson(completedId);
+      }
       learnQuery("#today-lesson")?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       learningSetStatus(`记录学习失败：${error.message}`, "error");

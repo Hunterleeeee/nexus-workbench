@@ -1487,6 +1487,75 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class LessonActionTargetTests(unittest.TestCase):
+    """从学习记录打开第一课、点批改，结果跳到了第二课。
+
+    根因是页面上有两个「当前这节课」：屏幕上渲染的那一节，和
+    learningState.dashboard.today。所有动作处理器读的都是后者，于是打开历史课
+    之后：
+      · 批改请求发到今天那节 —— 批的是另一节课；
+      · 批完 renderTodayLesson(dashboard.today) —— 页面刷成今天那节；
+      · 练习草稿 PATCH 到今天那节 —— 你在第一课写的东西存进了今天那节；
+      · 保存笔记同理。
+    也就是说不只是跳页，是写错了对象。Chromium 实测修复后：打开第 4 节点批改，
+    请求是 /ai-learning/lessons/4/review，页面仍停在第 4 节。
+    """
+
+    def script(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
+
+    def test_there_is_one_source_of_truth_for_the_rendered_lesson(self):
+        script = self.script()
+        self.assertIn("function currentLesson()", script)
+        self.assertIn("learningState.currentLesson = lesson", script,
+                      "渲染时不记下来的话，currentLesson() 永远只能回退到今天那节")
+
+    def test_no_action_handler_takes_today_as_its_target(self):
+        """动作处理器只要还把 dashboard.today 当作操作对象，这个 bug 就会
+        以另一种形式回来。（拿它做「这是不是今天那节」的比较是可以的。）"""
+        script = self.script()
+        self.assertNotIn("const lesson = learningState.dashboard?.today", script,
+                         "又把今天那节当成了当前这节")
+        for name in ("bindLessonActions", "saveCurrentLessonDraft", "hasCurrentLessonDraft"):
+            body = script[script.find(f"function {name}("):]
+            body = body[:body.find("\n}")]
+            with self.subTest(function=name):
+                self.assertIn("currentLesson()", body)
+
+    def test_grading_renders_the_lesson_that_was_graded(self):
+        script = self.script()
+        body = script[script.find("async function requestAiReview("):]
+        body = body[:body.find("\nfunction bindLessonActions(")]
+        self.assertIn("renderTodayLesson(body.lesson || currentLesson())", body)
+        self.assertNotIn("renderTodayLesson(learningState.dashboard?.today", body)
+
+    def test_an_updated_lesson_is_written_back_everywhere_it_appears(self):
+        """同一节课可能同时在当前视图、今日课程和历史列表里；
+        只更新一处，另外两处就会显示过期状态。"""
+        script = self.script()
+        self.assertIn("function syncLessonEverywhere(", script)
+        for caller in ("saveCurrentLessonDraft", "requestAiReview", "saveLessonNote"):
+            body = script[script.find(f"function {caller}("):]
+            body = body[:body.find("\n}")]
+            with self.subTest(function=caller):
+                self.assertIn("syncLessonEverywhere(", body)
+
+    def test_regenerate_refuses_to_run_while_a_past_lesson_is_open(self):
+        """「换一节」换的永远是今天那节。看历史课时点它，今天那节会被悄悄换掉，
+        而屏幕上显示的还是历史课——看起来像什么都没发生。"""
+        script = self.script()
+        body = script[script.find("async function regenerateTodayLesson("):]
+        body = body[:body.find("\nasync function saveLessonNote(")]
+        self.assertIn("isViewingToday()", body)
+        self.assertIn("只对今天的课程生效", body)
+
+    def test_completing_a_past_lesson_does_not_bounce_back_to_today(self):
+        script = self.script()
+        self.assertIn("const wasToday =", script)
+        self.assertIn("if (!wasToday)", script)
+        self.assertIn('"完成今日学习" : "记录这一节"', script, "按钮文案要说清楚记的是哪一节")
+
+
 class LearningHistoryOpenTests(unittest.TestCase):
     """「点击学习记录没反应」和「第一次打开失败」。
 
