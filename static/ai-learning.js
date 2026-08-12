@@ -5,7 +5,7 @@ const trackQuery = (extra = "") => `track=${encodeURIComponent(LEARNING_TRACK)}$
 
 const learnQuery = (selector, root = document) => root.querySelector(selector);
 const learnEscape = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null };
+const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0 };
 
 function learningSetStatus(message = "", tone = "") {
   const node = learnQuery("#learning-page-status");
@@ -133,8 +133,18 @@ function renderTodayLesson(lesson = {}) {
       </section>
     </div>`;
   const sourceNode = learnQuery("#learning-source-status");
-  sourceNode.textContent = completed ? "今日课程已完成" : `${lessonSourceLabel(lesson)} · 约 ${learningState.dashboard?.profile?.daily_minutes || 25} 分钟`;
+  const viewingHistory = learningState.openedLessonId && learningState.openedLessonId === lesson.id;
+  sourceNode.textContent = viewingHistory
+    ? `正在回看 ${lesson.lesson_date} 的课程`
+    : completed ? "今日课程已完成" : `${lessonSourceLabel(lesson)} · 约 ${learningState.dashboard?.profile?.daily_minutes || 25} 分钟`;
   sourceNode.className = "learning-status-chip";
+  if (viewingHistory) {
+    const back = document.createElement("button");
+    back.type = "button"; back.id = "back-to-today"; back.className = "secondary-button back-to-today";
+    back.textContent = "← 回到今日课程";
+    learnQuery("#today-lesson")?.prepend(back);
+    back.addEventListener("click", closeHistoryLesson);
+  }
   if (lesson.generation_warning) learningSetStatus(lesson.generation_warning);
   bindLessonActions();
 }
@@ -175,13 +185,35 @@ function renderLearningPhases(phases = [], today = {}) {
   learnQuery("#learning-phases").innerHTML = phases.map((phase, index) => `<li class="learning-phase ${index === activeIndex ? "active" : ""}"><span class="phase-index">${index + 1}</span><div><strong>${learnEscape(phase.title)}</strong><small>${learnEscape(phase.description)}</small><span>${learnEscape(phase.days)}</span></div></li>`).join("");
 }
 
+async function openHistoryLesson(lessonId) {
+  const id = Number(lessonId || 0);
+  if (!id) return;
+  if (learningState.openedLessonId === id) { closeHistoryLesson(); return; }
+  try {
+    const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(id)}`);
+    learningState.openedLessonId = id;
+    renderTodayLesson(body.lesson || {});
+    renderLessonHistory(learningState.history);
+    learnQuery("#today-lesson")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    learningSetStatus(`打开这节课失败：${error.message}`, "error");
+  }
+}
+
+function closeHistoryLesson() {
+  learningState.openedLessonId = 0;
+  renderTodayLesson(learningState.dashboard?.today || {});
+  renderLessonHistory(learningState.history);
+}
+
 function renderLessonHistory(items = []) {
   const host = learnQuery("#lesson-history");
+  learningState.history = items;
   if (!items.length) {
     host.innerHTML = '<div class="history-empty">完成第一节课后，这里会留下学习记录。</div>';
     return;
   }
-  host.innerHTML = items.slice(0, 8).map((item) => `<article class="history-item ${item.completed ? "completed" : item.status === "in_progress" ? "in-progress" : ""}"><span class="history-state" aria-hidden="true"></span><div class="history-copy"><strong>${learnEscape(item.title)}</strong><small>${learnEscape(item.module || "AI 转型")} · ${learnEscape(item.lesson_date)}</small></div><span>${item.completed ? (item.quiz_correct ? "答对" : "已学") : item.status === "in_progress" ? "进行中" : "待完成"}</span></article>`).join("");
+  host.innerHTML = items.slice(0, learningState.historyExpanded ? 60 : 8).map((item) => `<article class="history-item ${item.completed ? "completed" : item.status === "in_progress" ? "in-progress" : ""} ${learningState.openedLessonId === item.id ? "opened" : ""}" role="button" tabindex="0" data-lesson-id="${learnEscape(item.id)}" title="打开这节课"><span class="history-state" aria-hidden="true"></span><div class="history-copy"><strong>${learnEscape(item.title)}</strong><small>${learnEscape(item.module || "AI 转型")} · ${learnEscape(item.lesson_date)}</small></div><span>${item.completed ? (item.quiz_correct ? "答对" : "已学") : item.status === "in_progress" ? "进行中" : "待完成"}</span></article>`).join("") + (items.length > 8 ? `<button type="button" id="toggle-history" class="history-toggle">${learningState.historyExpanded ? "收起" : `查看全部 ${items.length} 条记录`}</button>` : "");
 }
 
 function renderLearningTrack(track) {
@@ -484,9 +516,32 @@ function setupLearningPush() {
   learnQuery("#subscribe-push")?.addEventListener("click", (event) => subscribeLearningPush(event.currentTarget));
 }
 
+function setupLearningHistory() {
+  // 委托绑定在容器上：条目本身每次渲染都会重建，绑在条目上会随之丢失。
+  const host = learnQuery("#lesson-history");
+  if (!host) return;
+  host.addEventListener("click", (event) => {
+    if (event.target.closest("#toggle-history")) {
+      learningState.historyExpanded = !learningState.historyExpanded;
+      renderLessonHistory(learningState.history);
+      return;
+    }
+    const item = event.target.closest("[data-lesson-id]");
+    if (item) openHistoryLesson(item.dataset.lessonId);
+  });
+  host.addEventListener("keydown", (event) => {
+    const item = event.target.closest("[data-lesson-id]");
+    if (item && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      openHistoryLesson(item.dataset.lessonId);
+    }
+  });
+}
+
 function setupAILearning() {
   setupLearningProfile();
   setupLearningPush();
+  setupLearningHistory();
   loadLearningDashboard();
 }
 

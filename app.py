@@ -15940,7 +15940,7 @@ async def get_ai_learning_dashboard(track: str = DEFAULT_LEARNING_TRACK) -> dict
     return {
         "profile": profile,
         "today": today,
-        "history": history[:14],
+        "history": history[:60],
         "stats": ai_learning_stats(history),
         "phases": meta["phases"],
         "track": {"id": track_id, "title": meta["title"], "subtitle": meta["subtitle"], "lesson_count": len(meta["curriculum"])},
@@ -15955,6 +15955,19 @@ async def get_ai_learning_dashboard(track: str = DEFAULT_LEARNING_TRACK) -> dict
 def update_ai_learning_profile(request: AILearningProfileRequest, track: str = DEFAULT_LEARNING_TRACK) -> dict[str, Any]:
     profile = save_ai_learning_profile(request, track)
     return {"ok": True, "profile": profile, "automation": sync_ai_learning_automation(profile)}
+
+
+@app.get("/api/ai-learning/lessons/{lesson_id}")
+def get_ai_learning_lesson_detail(lesson_id: int) -> dict[str, Any]:
+    """打开一节历史课程：包含当时写的练习、自测选择和 AI 批改。
+
+    学习记录此前只是一行标题，点不开——学过什么、当时怎么答的、批改说了什么，
+    全都看不到，等于没有留下记录。
+    """
+    lesson = get_ai_learning_lesson(lesson_id=lesson_id)
+    if not lesson:
+        raise HTTPException(404, "学习课程不存在")
+    return {"lesson": lesson}
 
 
 @app.post("/api/ai-learning/lessons/today/generate")

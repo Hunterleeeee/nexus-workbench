@@ -245,3 +245,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .ai-review-list.gaps li::marker { content: "→ "; color: #b45309; }
 .ai-review-rewrite { margin: 6px 0 0; padding: 10px; max-height: 320px; overflow: auto; border-radius: 8px; background: var(--card-2, #f4f7fb); font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 .ai-review-policy { margin: 10px 0 8px; color: var(--muted, #748196); font-size: 11px; line-height: 1.6; }
+
+/* 学习记录：此前只是一行标题，点不开——学过什么、当时怎么答的、批改说了什么全看不到。 */
+.history-item[data-lesson-id] { cursor: pointer; transition: background .16s ease, border-color .16s ease; }
+.history-item[data-lesson-id]:hover { background: var(--surface, #f4f7fb); }
+.history-item.opened { background: var(--accent-soft, #edf4ff); border-color: var(--accent-line, #c5d8ff); }
+.history-toggle { width: 100%; margin-top: 8px; padding: 7px; border: 1px dashed var(--line-strong, #c9d3e0); border-radius: 8px; background: transparent; color: var(--muted, #748196); font-size: 12px; cursor: pointer; }
+.history-toggle:hover { color: var(--accent, #2563eb); border-color: var(--accent, #2563eb); }
+.back-to-today { margin-bottom: 12px; }
