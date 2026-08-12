@@ -1485,3 +1485,76 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn("function bindTabStrip", script)
         self.assertIn("bindTabStrip();", script)
         self.assertIn('id="tab-strip-new"', self.markup())
+
+
+class KnowledgeNoteReadTests(unittest.TestCase):
+    """项目页要能直接看知识库，就需要一个按路径读全文的接口——
+    而这是整个工作台唯一一个按用户给的路径读文件的地方，不做限制就是任意文件读取。"""
+
+    def vault(self, tmp):
+        root = Path(tmp)
+        (root / "子目录").mkdir()
+        (root / "笔记.md").write_text("# 我的笔记\n\n正文内容", encoding="utf-8")
+        (root / "子目录" / "深层.md").write_text("# 深层笔记\n正文", encoding="utf-8")
+        (root / "机密.txt").write_text("不该被读到", encoding="utf-8")
+        return root
+
+    def test_reads_a_note_inside_the_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.vault(tmp)
+            with patch.object(app, "KNOWLEDGE_DIR", root):
+                note = app.read_knowledge_note("笔记.md")
+                nested = app.read_knowledge_note("子目录/深层.md")
+        self.assertEqual(note["title"], "我的笔记")
+        self.assertIn("正文内容", note["content"])
+        self.assertEqual(nested["title"], "深层笔记")
+
+    def test_paths_cannot_escape_the_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.vault(tmp)
+            with patch.object(app, "KNOWLEDGE_DIR", root):
+                for bad in ("../../../etc/passwd", "/etc/passwd", "子目录/../../外面.md"):
+                    with self.assertRaises(app.HTTPException) as ctx:
+                        app.read_knowledge_note(bad)
+                    self.assertEqual(ctx.exception.status_code, 404, bad)
+
+    def test_only_markdown_is_readable(self):
+        """限定后缀，避免顺手把 .env 之类的东西读出来。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.vault(tmp)
+            with patch.object(app, "KNOWLEDGE_DIR", root):
+                with self.assertRaises(app.HTTPException) as ctx:
+                    app.read_knowledge_note("机密.txt")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_empty_path_is_rejected(self):
+        with self.assertRaises(app.HTTPException) as ctx:
+            app.read_knowledge_note("")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
+class KnowledgeDrawerTests(unittest.TestCase):
+    """抽屉挂在公共的 project.js 上，所有项目页自动获得。"""
+
+    def script(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "project.js").read_text(encoding="utf-8")
+
+    def test_drawer_is_wired_into_the_shared_shell(self):
+        script = self.script()
+        self.assertIn("function setupKnowledgeDrawer", script)
+        self.assertIn("setupKnowledgeDrawer();", script.split("DOMContentLoaded")[1][:300])
+
+    def test_knowledge_page_itself_does_not_get_a_drawer(self):
+        block = self.script()
+        block = block[block.find("function setupKnowledgeDrawer"):]
+        block = block[:block.find("\nfunction ")]
+        self.assertIn('projectId === "knowledge"', block, "知识库自己那页不该再套一个抽屉")
+        self.assertIn('document.getElementById("knowledge-drawer")', block, "重复初始化会挂出两个抽屉")
+
+    def test_new_note_carries_the_source_project(self):
+        """回看笔记时要能知道它是在哪件事上得出的。"""
+        block = self.script()
+        block = block[block.find("function setupKnowledgeDrawer"):]
+        block = block[:block.find("\nfunction setupEnterToSend")]
+        self.assertIn("source: projectId", block)
+        self.assertIn("tags: projectId", block)
