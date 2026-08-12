@@ -16,6 +16,7 @@ import json
 import sqlite3
 import re
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 import unittest
 from pathlib import Path
@@ -1314,3 +1315,173 @@ class BrowserSessionSecurityTests(unittest.TestCase):
         self.assertLessEqual(app.BROWSER_MAX_SESSIONS, 6)
         self.assertGreaterEqual(app.BROWSER_IDLE_SECONDS, 60)
         self.assertGreaterEqual(app.BROWSER_MAX_AGENT_STEPS, 1)
+
+
+class BrowserAgentLoopTests(unittest.TestCase):
+    """给一个目标让模型自己连续操作。每一步都要可解释，否则这就是个黑盒——
+    出了问题既不知道哪步错了，也不知道该不该信它的结论。"""
+
+    def decisions(self, *items):
+        import itertools
+        stream = itertools.chain([json.dumps(item, ensure_ascii=False) for item in items],
+                                 itertools.repeat(json.dumps({"action": "scroll", "delta": 100})))
+
+        async def fake_llm(messages, *args, **kwargs):
+            return next(stream)
+        return fake_llm
+
+    def fake_session(self, results):
+        """不启动真实浏览器：这里验证的是循环与安全策略，不是 Chromium。"""
+        session = {"id": "s1", "process": None, "steps": 0, "touched_at": time.time(), "url": "", "history": []}
+        calls = []
+
+        def act(session_id, action, payload=None):
+            calls.append((action, dict(payload or {})))
+            if action == "goto":
+                reason = app._browser_blocked_reason(str((payload or {}).get("url") or ""))
+                if reason:
+                    raise app.HTTPException(400, reason)
+            return results(action, payload) if callable(results) else dict(results)
+        return session, act, calls
+
+    def test_blocked_navigation_does_not_abort_the_whole_run(self):
+        """被安全策略拦下时要把理由回给模型让它换路子，而不是整个任务失败。"""
+        session, act, calls = self.fake_session(lambda a, p: {"ok": True, "url": "https://example.com", "title": "T", "elements": [], "text": "内容", "scroll": {}})
+        llm = self.decisions(
+            {"thought": "试试内网", "action": "goto", "url": "http://169.254.169.254/"},
+            {"thought": "改走公网", "action": "goto", "url": "https://example.com"},
+            {"thought": "够了", "action": "finish", "answer": "结论"},
+        )
+        with patch.dict(app._browser_sessions, {"s1": session}), patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", llm), patch.object(app, "browser_session_act", act):
+            result = asyncio.run(app.browser_agent_run("s1", "找点东西"))
+        self.assertEqual(result["stop_reason"], "finished")
+        self.assertFalse(result["steps"][0]["ok"])
+        self.assertIn("私网", result["steps"][0]["error"])
+        self.assertTrue(result["steps"][1]["ok"])
+        self.assertEqual(result["answer"], "结论")
+
+    def test_step_budget_is_enforced(self):
+        session, act, calls = self.fake_session(lambda a, p: {"ok": True, "url": "https://example.com", "title": "T", "elements": [], "text": "", "scroll": {}})
+        llm = self.decisions({"action": "scroll", "delta": 100})
+        with patch.dict(app._browser_sessions, {"s1": session}), patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", llm), patch.object(app, "browser_session_act", act):
+            result = asyncio.run(app.browser_agent_run("s1", "永不结束", max_steps=3))
+        self.assertEqual(result["stop_reason"], "step_limit")
+        self.assertEqual(len(result["steps"]), 3)
+        self.assertFalse(result["ok"])
+
+    def test_budget_cannot_exceed_the_global_cap(self):
+        session, act, _ = self.fake_session(lambda a, p: {"ok": True, "url": "", "title": "", "elements": [], "text": "", "scroll": {}})
+        llm = self.decisions({"action": "scroll", "delta": 100})
+        with patch.dict(app._browser_sessions, {"s1": session}), patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", llm), patch.object(app, "browser_session_act", act):
+            result = asyncio.run(app.browser_agent_run("s1", "试图超额", max_steps=999))
+        self.assertLessEqual(len(result["steps"]), app.BROWSER_MAX_AGENT_STEPS)
+
+    def test_non_json_model_output_stops_cleanly(self):
+        session, act, _ = self.fake_session(lambda a, p: {"ok": True, "url": "", "title": "", "elements": [], "text": "", "scroll": {}})
+
+        async def chatty(messages, *args, **kwargs):
+            return "我觉得应该点那个蓝色按钮"
+        with patch.dict(app._browser_sessions, {"s1": session}), patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", chatty), patch.object(app, "browser_session_act", act):
+            result = asyncio.run(app.browser_agent_run("s1", "随便"))
+        self.assertEqual(result["stop_reason"], "bad_decision")
+        self.assertFalse(result["ok"])
+
+    def test_disallowed_action_is_refused_without_touching_the_browser(self):
+        """模型要求执行任意脚本时，连浏览器都不该碰。"""
+        session, act, calls = self.fake_session(lambda a, p: {"ok": True, "url": "", "title": "", "elements": [], "text": "", "scroll": {}})
+        llm = self.decisions(
+            {"action": "evaluate", "text": "fetch('/api/work-items')"},
+            {"action": "finish", "answer": "放弃"},
+        )
+        with patch.dict(app._browser_sessions, {"s1": session}), patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", llm), patch.object(app, "browser_session_act", act):
+            result = asyncio.run(app.browser_agent_run("s1", "读内部接口"))
+        self.assertFalse(result["steps"][0]["ok"])
+        self.assertIn("不支持的动作", result["steps"][0]["error"])
+        self.assertNotIn("evaluate", [action for action, _ in calls])
+
+    def test_every_step_records_why(self):
+        session, act, _ = self.fake_session(lambda a, p: {"ok": True, "url": "https://example.com", "title": "T", "elements": [], "text": "", "scroll": {}})
+        llm = self.decisions(
+            {"thought": "先看看首页", "action": "goto", "url": "https://example.com"},
+            {"thought": "拿到了", "action": "finish", "answer": "好"},
+        )
+        with patch.dict(app._browser_sessions, {"s1": session}), patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", llm), patch.object(app, "browser_session_act", act):
+            result = asyncio.run(app.browser_agent_run("s1", "看首页"))
+        self.assertEqual(result["steps"][0]["thought"], "先看看首页")
+        self.assertTrue(all("thought" in step for step in result["steps"]))
+
+    def test_unconfigured_llm_returns_503(self):
+        with patch.object(app, "llm_settings", lambda: {"configured": False}):
+            with self.assertRaises(app.HTTPException) as ctx:
+                asyncio.run(app.browser_agent_run("s1", "做点什么"))
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_observation_lists_elements_by_index_and_omits_screenshot(self):
+        """截图不进提示词——太贵，元素清单足够定位。"""
+        text = app._browser_agent_observation({
+            "url": "https://example.com", "title": "示例", "scroll": {"y": 0, "height": 900},
+            "elements": [
+                {"index": 0, "tag": "a", "label": "下一页"},
+                {"index": 1, "tag": "input", "label": "搜索", "editable": True},
+                {"index": 2, "tag": "input", "label": "", "file_input": True},
+            ],
+            "text": "正文内容", "screenshot": "AAAA" * 5000,
+        })
+        self.assertIn("[0] 链接：下一页", text)
+        self.assertIn("[1] 输入框：搜索", text)
+        self.assertIn("[2] 文件上传框", text)
+        self.assertNotIn("AAAA", text, "截图不该进提示词")
+
+
+class BrowserTabStripTests(unittest.TestCase):
+    """标签从左侧竖排改到顶部横排。
+
+    竖排在侧栏里能读，但它占掉正文最宝贵的横向空间，而且和所有人对
+    「浏览器标签」的肌肉记忆都不一样——标签本来就该在页面上方。
+    """
+
+    def markup(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "web-research.html").read_text(encoding="utf-8")
+
+    def styles(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "web-research.css").read_text(encoding="utf-8")
+
+    def test_tab_list_lives_in_the_main_area_not_the_sidebar(self):
+        markup = self.markup()
+        main_index = markup.find('<main class="browser-main">')
+        tabs_index = markup.find('id="context-tabs"')
+        sidebar_index = markup.find('<aside class="workspace-sidebar"')
+        self.assertGreater(tabs_index, main_index, "标签条应在主区之内")
+        self.assertLess(sidebar_index, main_index)
+        self.assertNotIn('id="sidebar-tabs-pane"', markup, "侧栏里的标签面板应已移除")
+
+    def test_strip_spans_both_grid_columns(self):
+        """browser-main 是两列网格，不跨列的话标签条会和浏览区并排。"""
+        styles = self.styles()
+        strip = styles[styles.find(".tab-strip {"):]
+        strip = strip[:strip.find("\n.")]
+        self.assertIn("grid-column: 1 / -1", strip)
+        self.assertIn("flex: 0 0 auto", strip, "不锁定高度会被 flex/grid 拉伸")
+        main = styles[styles.find(".browser-main {"):]
+        main = main[:main.find("\n")]
+        self.assertIn("grid-template-rows", main, "需要显式行定义，标签条才有自己的一行")
+
+    def test_tabs_render_flat_not_grouped_by_host(self):
+        """按域名分组的标题在横向排布下会把标签挤成一团。"""
+        script = (Path(__file__).resolve().parents[1] / "static" / "web-research.js").read_text(encoding="utf-8")
+        render = script[script.find("function renderTabs()"):]
+        render = render[:render.find("\nfunction ")]
+        self.assertIn("browser-tab", render)
+        self.assertNotIn("sidebar-group", render, "横向标签条不该再有域名分组")
+
+    def test_new_tab_button_is_bound_once_at_init(self):
+        script = (Path(__file__).resolve().parents[1] / "static" / "web-research.js").read_text(encoding="utf-8")
+        self.assertIn("function bindTabStrip", script)
+        self.assertIn("bindTabStrip();", script)
+        self.assertIn('id="tab-strip-new"', self.markup())
