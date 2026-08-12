@@ -220,12 +220,17 @@ html[data-theme="light"] .note-icon { border-color: var(--line-strong, #c8d2da);
 .settings-config-summary[data-tone="warning"] { color: #c8974e; }
 .settings-config-summary[data-tone="error"] { color: var(--danger); }
 .global-providers { display: grid; gap: 10px; max-height: 46vh; overflow-y: auto; padding-right: 2px; }
+/* --panel-1 从来没有被定义过（theme.css 里只有 --panel / --panel-2 / --panel-3）。
+   查不到的自定义属性会静默落回 transparent，于是这几处输入框和面板根本没有
+   底色：字直接压在卡片上，看不出哪里是可输入的区域。按命名意图，-1 指的是
+   基础面板色，也就是 --panel——白色输入框配 --panel-2 的灰底分组，和项目里
+   其它表单一致。 */
 .llm-provider { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); }
 .llm-provider[data-role="primary"] { border-color: rgba(230, 126, 49, .5); }
 .llm-provider-top { display: grid; grid-template-columns: 1fr 118px auto auto; gap: 7px; align-items: end; }
 .llm-provider label { display: grid; gap: 5px; color: #cad4da; font-size: 11px; font-weight: 600; }
 .llm-provider-help { color: var(--faint); font-size: 9px; font-weight: 400; line-height: 1.35; }
-.llm-provider input, .llm-provider select { width: 100%; height: 34px; padding: 0 9px; color: var(--text); background: var(--panel-1); border: 1px solid var(--line); border-radius: 7px; outline: none; font-size: 12px; }
+.llm-provider input, .llm-provider select { width: 100%; height: 34px; padding: 0 9px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; outline: none; font-size: 12px; }
 .llm-provider input:focus, .llm-provider select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(230, 126, 49, .12); }
 .llm-provider-test { height: 34px; padding: 0 11px; color: var(--accent-soft); background: transparent; border: 1px solid #3b5f8a; border-radius: 7px; font-size: 11px; white-space: nowrap; }
 .llm-provider-test:hover { background: #251910; border-color: var(--accent); }
@@ -251,7 +256,7 @@ html[data-theme="light"] .note-icon { border-color: var(--line-strong, #c8d2da);
 .llm-metrics-head strong { color: var(--text); font-size: 11px; }
 .llm-metrics-head small { color: var(--faint); }
 .llm-metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
-.llm-metrics-grid span { min-width: 0; padding: 6px; background: var(--panel-1); border-radius: 6px; }
+.llm-metrics-grid span { min-width: 0; padding: 6px; background: var(--panel); border-radius: 6px; }
 .llm-metrics-grid b, .llm-metrics-grid small { display: block; }
 .llm-metrics-grid b { color: var(--accent-soft); font-size: 12px; }
 .llm-metrics-grid small { margin-top: 2px; color: var(--faint); font-size: 9px; }
@@ -361,12 +366,12 @@ html[data-theme="light"] .note-icon { border-color: var(--line-strong, #c8d2da);
 .research-plan-details { border-top: 1px solid var(--line); padding-top: 8px; }
 .research-plan-details summary { color: var(--accent-soft); cursor: pointer; font-size: 10px; }
 .research-plan-form { display: grid; gap: 7px; margin-top: 8px; }
-.research-plan-form input, .research-plan-form textarea { width: 100%; padding: 8px 9px; color: var(--text); background: var(--panel-1); border: 1px solid var(--line); border-radius: 7px; outline: none; font: inherit; font-size: 10px; resize: vertical; }
+.research-plan-form input, .research-plan-form textarea { width: 100%; padding: 8px 9px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; outline: none; font: inherit; font-size: 10px; resize: vertical; }
 .research-plan-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .research-plan-actions span { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 
 /* 本机 Gemini 桥（来财 Companion）设置区块 */
-.companion-settings { padding: 13px 14px; background: var(--panel-1); border: 1px solid var(--line); border-radius: 10px; }
+.companion-settings { padding: 13px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 .companion-settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .companion-settings-head strong { color: var(--text); font-size: 12px; }
 .companion-settings-head small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; }

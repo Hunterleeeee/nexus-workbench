@@ -1,26 +1,26 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.154"></script>
+  <script src="/static/theme.js?v=0.3.155"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>量化选股 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.154" />
-  <link rel="stylesheet" href="/static/market.css?v=0.3.154" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.155" />
+  <link rel="stylesheet" href="/static/market.css?v=0.3.155" />
 </head>
 <body data-project-id="market">
   <div class="page-shell">
     <header class="page-topbar">
       <a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>MARKET RESEARCH</small></span></a>
-      <div class="page-actions"><span class="ver-badge" title="当前加载的版本">v0.3.154</span><a class="back-link" href="/">← 返回工作台</a></div>
+      <div class="page-actions"><span class="ver-badge" title="当前加载的版本">v0.3.155</span><a class="back-link" href="/">← 返回工作台</a></div>
     </header>
     <main class="page-main">
       <section class="market-hero">
         <div class="market-hero-copy">
           <div class="eyebrow">独立项目 · 量化选股</div>
           <h1>今天该看什么，一页说清楚</h1>
-          <p class="lede">这个项目只做三件事：按条件找候选、跟踪你加入的自选、价格碰到你写的买点 / 卖点 / 止损时提醒。它不是固定股票榜，也不会替你下单。</p>
+          <p class="lede">这个项目做四件事：按条件找候选、按不同流派的标准把同一批股票再判一遍、跟踪你加入的自选、价格碰到你写的买点 / 卖点 / 止损时提醒。它不是固定股票榜，不预测涨跌，也不会替你下单。</p>
           <div class="market-hero-note"><span class="status-dot"></span><span>不自动下单 · 每个结论都带数据时间和风险提示</span></div>
         </div>
         <div class="market-hero-actions">
@@ -33,7 +33,8 @@
         <a class="market-flow-step active" href="#decision-center"><span>01</span><strong>看今日待办</strong><small>有没有触到计划线</small></a>
         <a class="market-flow-step" href="#watch-section"><span>02</span><strong>管理我的自选</strong><small>只显示你留下的股票</small></a>
         <a class="market-flow-step" href="#screen-card"><span>03</span><strong>按条件找候选</strong><small>筛选，不直接推荐</small></a>
-        <a class="market-flow-step" href="#research-section"><span>04</span><strong>核对理由和风险</strong><small>把依据留住再决定</small></a>
+        <a class="market-flow-step" href="#style-card"><span>04</span><strong>按流派看一遍</strong><small>换个标准再判断</small></a>
+        <a class="market-flow-step" href="#research-section"><span>05</span><strong>核对理由和风险</strong><small>把依据留住再决定</small></a>
       </nav>
 
       <section class="market-signal-strip" aria-label="今日信号概览">
@@ -136,8 +137,18 @@
             <details class="screen-limits"><summary>这套规则的限制</summary><ul id="screen-limitations"></ul></details>
           </section>
 
+          <section class="style-card market-section" id="style-card" aria-labelledby="style-title">
+            <div class="today-head">
+              <div><span class="card-kicker">04 · 按流派看</span><h2 id="style-title">同一批股票，换一种思路看</h2><p class="section-subtitle">每种流派有它自己的判断标准，也有它明确会亏钱的时候。这里只对你的自选池按固定规则跑，不替你决定买。</p></div>
+              <div class="screen-head-actions"><button id="style-scan" class="m2-button primary" type="button" title="用全部流派跑一遍自选池，看现在哪种有信号">一键跑全部流派</button></div>
+            </div>
+            <div id="style-status" class="screen-status" role="status" aria-live="polite"></div>
+            <div id="style-list" class="style-list"><div class="today-empty">正在读取流派清单…</div></div>
+            <div id="style-result" class="style-result" hidden></div>
+          </section>
+
           <section class="market-research-section market-section" id="research-section" aria-labelledby="research-section-title">
-            <div class="section-heading-row"><div><span class="card-kicker">04 · 研究记录</span><h2 id="research-section-title">把“为什么看它”留住</h2><p class="section-subtitle">AI 可以帮你整理事实，但每个结论都要能追溯到数据。</p></div></div>
+            <div class="section-heading-row"><div><span class="card-kicker">05 · 研究记录</span><h2 id="research-section-title">把“为什么看它”留住</h2><p class="section-subtitle">AI 可以帮你整理事实，但每个结论都要能追溯到数据。</p></div></div>
             <div class="research-grid">
               <section class="m2-card m2-ai" aria-labelledby="ai-scan-title">
                 <div class="m2-card-head"><div><span class="card-kicker">AI 整理</span><h3 id="ai-scan-title">今天自选发生了什么</h3></div><span id="ai-scan-state" class="m2-state">等待行情</span></div>
@@ -237,11 +248,12 @@
       <p id="rule-message" class="modal-message" role="status"></p>
     </form>
   </div>
-  <script src="/static/request.js?v=0.3.154"></script>
-  <script src="/static/project.js?v=0.3.154"></script>
-  <script src="/static/market.js?v=0.3.154"></script>
-  <script src="/static/market-today.js?v=0.3.154"></script>
-  <script src="/static/market-decision.js?v=0.3.154"></script>
-  <script src="/static/market-screen.js?v=0.3.154"></script>
+  <script src="/static/request.js?v=0.3.155"></script>
+  <script src="/static/project.js?v=0.3.155"></script>
+  <script src="/static/market.js?v=0.3.155"></script>
+  <script src="/static/market-today.js?v=0.3.155"></script>
+  <script src="/static/market-decision.js?v=0.3.155"></script>
+  <script src="/static/market-screen.js?v=0.3.155"></script>
+  <script src="/static/market-style.js?v=0.3.155"></script>
 </body>
 </html>

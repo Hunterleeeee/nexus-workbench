@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
-@import url('/static/project-agent.css?v=0.3.154');
+@import url('/static/project-agent.css?v=0.3.155');
 
 :root {
   --bg: #f4f6f8;
@@ -579,10 +579,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
    Agent 面板打开时本来就锁了整页滚动，按模态处理，隐藏其他悬浮入口最干净；
    位移躲让在窄屏上会把按钮推出视口，反而更糟。 */
 body[data-agent-panel-open] .kb-drawer { opacity: 0; pointer-events: none; visibility: hidden; }
-.kb-toggle { display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px 9px 10px; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-right: none; border-radius: 10px 0 0 10px; box-shadow: -4px 4px 16px rgba(25,44,72,.08); font-size: 12px; cursor: pointer; }
+/* --card 这个变量整个项目里没有任何地方定义过（theme.css 用的是 --surface/--panel）。
+   CSS 自定义属性查不到就当没写，background 直接落回 transparent——抽屉整块透明，
+   正文压在页面内容上。这类错只能靠实跑看出来，不会报任何错。 */
+.kb-toggle { display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px 9px 10px; color: var(--muted); background: var(--surface, var(--panel, #fff)); border: 1px solid var(--line); border-right: none; border-radius: 10px 0 0 10px; box-shadow: -4px 4px 16px rgba(25,44,72,.08); font-size: 12px; cursor: pointer; }
 .kb-toggle:hover { color: var(--ink); border-color: var(--accent); }
 .kb-toggle-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: var(--accent-soft, #edf4ff); color: var(--accent); font: 700 10px/1 ui-monospace, monospace; }
-.kb-panel { display: flex; flex-direction: column; width: min(380px, 92vw); max-height: min(72vh, 640px); background: var(--card); border: 1px solid var(--line); border-radius: 12px 0 0 12px; box-shadow: -10px 10px 34px rgba(25,44,72,.14); overflow: hidden; }
+.kb-panel { display: flex; flex-direction: column; width: min(380px, 92vw); max-height: min(72vh, 640px); background: var(--surface, var(--panel, #fff)); border: 1px solid var(--line); border-radius: 12px 0 0 12px; box-shadow: -10px 10px 34px rgba(25,44,72,.14); overflow: hidden; }
 .kb-panel[hidden] { display: none; }
 .kb-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--line-2, #edf1f6); }
 .kb-head strong { display: block; font-size: 13px; }

@@ -163,12 +163,17 @@ html[data-theme="dark"] .learning-page-status.error { background: #2b1819; borde
 .learning-phase:last-child { padding-bottom: 0; }
 .learning-phase::before { position: absolute; top: 23px; bottom: 0; left: 11px; width: 1px; background: var(--line); content: ""; }
 .learning-phase:last-child::before { display: none; }
-.phase-index { display: grid; place-items: center; width: 24px; height: 24px; color: var(--muted); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 50%; font-size: 9px; font-weight: 700; }
+.phase-index { display: grid; place-items: center; width: 24px; height: 24px; color: var(--muted); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 50%; font-size: 10px; font-weight: 700; }
 .learning-phase.active .phase-index { color: #fff; background: var(--learn-accent); border-color: var(--learn-accent); }
-.learning-phase strong, .learning-phase small, .learning-phase span { display: block; }
+/* 序号本身就是一个 <span>，所以下面这三条 .learning-phase span 的通用规则会
+   连它一起改：display:block 覆盖掉 .phase-index 的 display:grid（place-items
+   随之失效，数字贴到圆圈左上角），font-size:8px 和 color:--faint 也一并盖住
+   ——两边都作用在同一个元素上，而 .learning-phase span 的优先级(0,1,1)高于
+   .phase-index(0,1,0)。用 :not(.phase-index) 把序号排除在外。 */
+.learning-phase strong, .learning-phase small, .learning-phase span:not(.phase-index) { display: block; }
 .learning-phase strong { color: var(--ink); font-size: 10px; }
 .learning-phase small { margin-top: 2px; color: var(--muted); font-size: 9px; line-height: 1.45; }
-.learning-phase span { margin-top: 3px; color: var(--faint); font-size: 8px; }
+.learning-phase span:not(.phase-index) { margin-top: 3px; color: var(--faint); font-size: 8px; }
 .phase-placeholder, .history-empty { color: var(--faint); font-size: 10px; }
 
 .lesson-history { display: grid; gap: 6px; margin-top: 12px; }
@@ -253,3 +258,66 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .history-toggle { width: 100%; margin-top: 8px; padding: 7px; border: 1px dashed var(--line-strong, #c9d3e0); border-radius: 8px; background: transparent; color: var(--muted, #748196); font-size: 12px; cursor: pointer; }
 .history-toggle:hover { color: var(--accent, #2563eb); border-color: var(--accent, #2563eb); }
 .back-to-today { margin-bottom: 12px; }
+
+/* ── 主动学习 ────────────────────────────────────────────────
+   刻意把「什么时候不适用 / 常见误解 / 被高估的地方」做成同一种警示样式：
+   一份只讲好处的解释，学完只会让人更自信而不是更准确。 */
+.explore-kinds { display: flex; gap: 5px; margin: 11px 0 9px; }
+.explore-kind { flex: 1; min-height: 27px; padding: 0 8px; color: var(--muted); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 10px; cursor: pointer; }
+.explore-kind.active { color: #fff; background: var(--learn-accent); border-color: var(--learn-accent); font-weight: 700; }
+.explore-form { display: flex; gap: 6px; }
+.explore-form input { flex: 1; min-width: 0; height: 31px; padding: 0 9px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
+.explore-form button { flex: 0 0 auto; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.explore-result { margin-top: 11px; padding: 12px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 10px; }
+.explore-result[hidden] { display: none; }
+.explore-result-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.explore-result-head strong { color: var(--ink); font-size: 12px; line-height: 1.4; }
+.explore-field { margin-top: 9px; }
+.explore-field strong { display: block; margin-bottom: 3px; color: var(--learn-accent); font-size: 9px; font-weight: 750; letter-spacing: .05em; }
+.explore-field p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.explore-field ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.explore-field.caution strong { color: var(--learn-warm); }
+.explore-foot { margin-top: 11px; padding-top: 9px; border-top: 1px dashed var(--line); }
+.explore-history { margin-top: 10px; }
+.explore-history-head { margin-bottom: 5px; color: var(--faint); font-size: 9px; }
+.explore-history-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 6px 8px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 10px; text-align: left; cursor: pointer; }
+.explore-history-item + .explore-history-item { margin-top: 4px; }
+.explore-history-item:hover { border-color: var(--learn-accent); }
+.explore-history-item span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explore-history-item small { flex: 0 0 auto; color: var(--faint); font-size: 9px; }
+
+/* ── AI 出题 ─────────────────────────────────────────────── */
+.case-answer { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--learn-warm-line); }
+.case-answer summary { color: var(--learn-warm); cursor: pointer; font-size: 11px; font-weight: 650; }
+.case-answer p { margin: 8px 0 0; color: var(--ink); font-size: 11px; line-height: 1.7; }
+.exercise-block { margin-top: 14px; padding: 14px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 11px; }
+.exercise-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.exercise-intro strong { display: block; color: var(--ink); font-size: 12px; }
+.exercise-intro p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.exercise-intro button { flex: 0 0 auto; }
+.exercise-host:not(:empty) { margin-top: 12px; }
+.exercise-card { display: grid; gap: 11px; padding: 13px; background: var(--surface); border: 1px solid var(--learn-line); border-radius: 10px; }
+.exercise-question span, .exercise-context span { display: block; margin-bottom: 4px; color: var(--learn-accent); font-size: 9px; font-weight: 750; letter-spacing: .06em; }
+.exercise-question p { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.65; font-weight: 600; }
+.exercise-context p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.7; white-space: pre-wrap; }
+.exercise-criteria summary { color: var(--learn-accent); cursor: pointer; font-size: 10px; }
+.exercise-criteria ul { margin: 7px 0 0; padding-left: 17px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.exercise-answer-field { display: grid; gap: 5px; }
+.exercise-answer-field span { color: var(--muted); font-size: 10px; font-weight: 650; }
+.exercise-answer-field textarea { width: 100%; padding: 9px 10px; color: var(--ink); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 12px; line-height: 1.65; resize: vertical; }
+.exercise-answer-field textarea[readonly] { opacity: .8; }
+.exercise-actions { display: flex; justify-content: flex-end; }
+.exercise-feedback { display: grid; gap: 10px; padding-top: 11px; border-top: 1px solid var(--line); }
+.exercise-score { display: flex; align-items: baseline; gap: 9px; }
+.exercise-score strong { color: var(--learn-accent); font: 750 18px var(--display); }
+.exercise-score span { color: var(--ink); font-size: 12px; line-height: 1.6; }
+.exercise-feedback strong { color: var(--ink); font-size: 11px; }
+.exercise-feedback ul { margin: 5px 0 0; padding-left: 17px; font-size: 11px; line-height: 1.7; }
+.exercise-hits ul { color: var(--green, #238b72); }
+.exercise-misses ul { color: var(--learn-warm); }
+.exercise-rewrite p { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.7; white-space: pre-wrap; }
+.exercise-reference summary { color: var(--learn-accent); cursor: pointer; font-size: 11px; }
+.exercise-reference p { margin: 7px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.7; white-space: pre-wrap; }
+.exercise-next { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.form-note.error { color: var(--danger, #bf5a4f); }

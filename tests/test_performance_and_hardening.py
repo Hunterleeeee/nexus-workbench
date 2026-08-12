@@ -1487,6 +1487,274 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class UndefinedCssVariableTests(unittest.TestCase):
+    """知识库抽屉背景是透明的。
+
+    .kb-panel 写的是 background: var(--card)，而 --card 这个变量整个项目里
+    没有任何地方定义过（theme.css 用的是 --surface / --panel）。自定义属性
+    查不到就当没写，background 直接落回 transparent——抽屉整块透明，正文压在
+    页面内容上。Chromium 实测 backgroundColor 是 rgba(0, 0, 0, 0)。
+    这类错不报任何异常，只能靠实跑看出来。
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def defined_variables(self):
+        names = set()
+        for path in (self.ROOT / "static").glob("*.css"):
+            names.update(re.findall(r"(--[a-z0-9-]+)\s*:", path.read_text(encoding="utf-8")))
+        return names
+
+    def test_every_variable_used_without_a_fallback_is_defined_somewhere(self):
+        defined = self.defined_variables()
+        offenders = []
+        for path in sorted((self.ROOT / "static").glob("*.css")):
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"var\((--[a-z0-9-]+)\s*\)", text):
+                if match.group(1) not in defined:
+                    offenders.append(f"{path.name}:{match.group(1)}")
+        self.assertEqual(sorted(set(offenders)), [], "用了没有定义、也没有兜底值的 CSS 变量——会静默变成空值")
+
+    def test_the_knowledge_drawer_has_a_real_background(self):
+        text = (self.ROOT / "static" / "project.css").read_text(encoding="utf-8")
+        for selector in (".kb-panel", ".kb-toggle"):
+            rule = text[text.find(selector + " {"):]
+            rule = rule[:rule.find("}")]
+            self.assertIn("background: var(--surface, var(--panel, #fff))", rule, f"{selector} 没有可解析的背景色")
+
+
+class PhaseIndexSpecificityTests(unittest.TestCase):
+    """14 天学习路线的序号贴在圆圈左上角，还小得看不清。
+
+    序号本身是一个 <span>，而 `.learning-phase span` 这三条通用规则会连它一起
+    改：display:block 覆盖掉 .phase-index 的 display:grid（place-items 随之
+    失效），font-size 和 color 也一并盖住。两条规则作用在同一个元素上，
+    `.learning-phase span` 的优先级 (0,1,1) 高于 `.phase-index` (0,1,0)，
+    所以后者全线失守。Chromium 实测修复前 display 是 block，修复后是 grid、
+    文本中心与圆心的水平偏移为 0。
+    """
+
+    def styles(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "ai-learning.css").read_text(encoding="utf-8")
+
+    def test_the_generic_span_rules_exclude_the_index(self):
+        styles = self.styles()
+        self.assertNotIn(".learning-phase span {", styles, "通用 span 规则会把序号一起改掉")
+        self.assertIn(".learning-phase span:not(.phase-index)", styles)
+
+    def test_the_index_is_still_a_centred_grid(self):
+        rule = self.styles()
+        rule = rule[rule.find(".phase-index {"):]
+        rule = rule[:rule.find("}")]
+        self.assertIn("display: grid", rule)
+        self.assertIn("place-items: center", rule)
+
+    def test_the_markup_still_renders_the_index_as_a_span(self):
+        """哪天序号换成 <b>，上面那条 :not() 就白写了。"""
+        script = (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
+        self.assertIn('<span class="phase-index">', script)
+
+
+class MarketStyleScreenUiTests(unittest.TestCase):
+    """七个流派、每个流派的适用与失效条件、逐条规则的通过情况，
+    后端全都写好了，页面上却一直没有任何入口——只能 curl 才看得到。"""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_the_page_loads_the_style_module(self):
+        markup = (self.ROOT / "static" / "market.html").read_text(encoding="utf-8")
+        self.assertIn("market-style.js", markup)
+        self.assertIn('id="style-list"', markup)
+        self.assertIn('id="style-scan"', markup)
+
+    def test_it_shows_when_each_style_loses_money_next_to_when_it_works(self):
+        """一张只写自己什么时候管用的策略卡片，读起来像广告。"""
+        script = (self.ROOT / "static" / "market-style.js").read_text(encoding="utf-8")
+        self.assertIn("fails_when", script)
+        self.assertIn("works_when", script)
+        for style in app.MARKET_STYLES:
+            with self.subTest(style=style["id"]):
+                self.assertTrue(str(style.get("fails_when") or "").strip(), "风格没有登记失效条件")
+
+    def test_rule_results_show_the_actual_numbers(self):
+        """只写「通过 / 不通过」等于让人相信一个黑盒。"""
+        script = (self.ROOT / "static" / "market-style.js").read_text(encoding="utf-8")
+        self.assertIn("check.detail", script)
+        self.assertIn("check.passed", script, "后端字段是 passed，写成 pass 会全部渲染成不通过")
+
+    def test_a_precondition_failure_is_reported_once_not_seven_times(self):
+        """自选池是空的时候，七个流派会给出七条一模一样的失败。"""
+        script = (self.ROOT / "static" / "market-style.js").read_text(encoding="utf-8")
+        self.assertIn("precondition", script)
+        self.assertIn("break", script)
+
+    def test_the_market_agent_can_run_the_same_screen(self):
+        """Agent 自己「讲」一套选股逻辑，和页面上按固定规则跑的是两回事。"""
+        self.assertIn("market_style_screen", app.SUBAGENT_TOOL_MAP["market"])
+        result = app.execute_react_tool("market_style_screen", {})
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            {item["id"] for item in result["styles"]},
+            {style["id"] for style in app.MARKET_STYLES},
+            "不给 style_id 时应返回完整的可选清单",
+        )
+
+
+class ActiveLearningTests(unittest.IsolatedAsyncioTestCase):
+    """学习此前只有一条被动通道：每天推一节，学完为止。
+
+    临时想弄懂一个名词、想知道最近哪条热点值得学、想把一个理论讲透，都没有
+    入口，只能等课程哪天刚好排到。练习那一环还有个更硬的前提问题：它假设
+    「你手上正好有一个真实场景可以拿来练」，没有的时候练习框就空着，
+    AI 批改也就无从批起。
+    """
+
+    def setUp(self):
+        # 必须换掉 DATABASE_FILE 而不是 DATA_DIR：连接是直接拿 DATABASE_FILE
+        # 开的，只改目录的话测试会写进开发库。
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for name, value in (("DATA_DIR", Path(self.tmp.name)),
+                            ("DATABASE_FILE", Path(self.tmp.name) / "workbench.db"),
+                            ("_DB_SCHEMA_READY", False)):
+            patcher = patch.object(app, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def llm(payload):
+        async def fake(*args, **kwargs):
+            return json.dumps(payload, ensure_ascii=False)
+        return fake
+
+    def test_a_topic_is_required_for_terms_and_theory(self):
+        """空题目生成出来的只能是泛泛而谈，不如直接拒绝。"""
+        with patch.object(app, "llm_settings", lambda: {"configured": True}):
+            for kind in ("term", "theory"):
+                with self.subTest(kind=kind):
+                    with self.assertRaises(app.HTTPException) as ctx:
+                        asyncio.run(app.create_ai_learning_exploration(kind, "  "))
+                    self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_an_unknown_kind_is_refused(self):
+        with patch.object(app, "llm_settings", lambda: {"configured": True}):
+            with self.assertRaises(app.HTTPException) as ctx:
+                asyncio.run(app.create_ai_learning_exploration("astrology", "水逆"))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_hotspots_refuse_to_run_without_real_items(self):
+        """让模型自由发挥「最近的 AI 热点」，它只会把训练数据里的旧闻
+        说得像刚发生一样——这比不给更糟。没有真实条目就不生成。"""
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "load_aihot_snapshot", lambda: {}), \
+             patch.object(app, "select_aihot_items", lambda *a, **k: []):
+            with self.assertRaises(app.HTTPException) as ctx:
+                asyncio.run(app.create_ai_learning_exploration("hotspot", ""))
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("AI 热点", str(ctx.exception.detail))
+
+    def test_hotspot_prompt_carries_the_real_items_and_forbids_invention(self):
+        captured = {}
+
+        async def fake(messages, **kwargs):
+            captured["messages"] = messages
+            return json.dumps({"title": "T", "whats_new": "x"}, ensure_ascii=False)
+
+        items = [{"title": "某模型发布", "source": "官方博客", "url": "https://example.com/a"}]
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "load_aihot_snapshot", lambda: {"items": items}), \
+             patch.object(app, "select_aihot_items", lambda *a, **k: items), \
+             patch.object(app, "call_llm", fake):
+            asyncio.run(app.create_ai_learning_exploration("hotspot", ""))
+        system = captured["messages"][0]["content"]
+        user = captured["messages"][1]["content"]
+        self.assertIn("real_items", system)
+        self.assertIn("不要编造", system)
+        self.assertIn("某模型发布", user)
+
+    def test_an_unparseable_generation_is_not_stored(self):
+        """把一段散文当成结构化内容存进去，下次打开就是一堆空字段。"""
+        async def fake(*args, **kwargs):
+            return "抱歉，我无法完成。"
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", fake):
+            with self.assertRaises(app.HTTPException) as ctx:
+                asyncio.run(app.create_ai_learning_exploration("term", "RAG"))
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertEqual(app.list_ai_learning_explorations(), [])
+
+    def test_a_generated_exploration_round_trips(self):
+        payload = {"title": "RAG", "definition": "检索后再作答", "boundary": "资料本身错时无解"}
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", self.llm(payload)):
+            created = asyncio.run(app.create_ai_learning_exploration("term", "RAG"))
+        self.assertEqual(created["content"]["definition"], "检索后再作答")
+        listed = app.list_ai_learning_explorations()
+        self.assertEqual([item["id"] for item in listed], [created["id"]])
+
+    def test_the_reference_answer_is_withheld_until_the_answer_is_in(self):
+        """参考答案跟着题目一起发到前端，打开开发者工具就能看到；
+        真想抄的人一定会抄，而抄完这道题就废了。"""
+        payload = {"question": "该不该做？", "context": "背景", "criteria": ["A", "B"], "reference_answer": "标准答案正文"}
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", self.llm(payload)):
+            exercise = asyncio.run(app.create_ai_learning_exercise(topic="提示工程"))
+        self.assertEqual(exercise["reference_answer"], "", "没作答就把参考答案发出去了")
+        self.assertEqual(exercise["criteria"], ["A", "B"], "评分标准应该先给，才知道往哪答")
+        stored = app.get_ai_learning_exercise(exercise["id"])
+        self.assertEqual(stored["reference_answer"], "标准答案正文", "参考答案本身要存下来")
+
+        graded = {"score": 72, "verdict": "方向对", "misses": ["少了验收标准"]}
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", self.llm(graded)):
+            result = asyncio.run(app.grade_ai_learning_exercise(exercise["id"], "我的答案"))
+        self.assertEqual(result["score"], 72)
+        self.assertEqual(result["reference_answer"], "标准答案正文", "交卷之后才谈得上对照")
+        self.assertTrue(result["answered"])
+
+    def test_an_empty_answer_is_refused_before_spending_a_call(self):
+        payload = {"question": "Q", "reference_answer": "A"}
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", self.llm(payload)):
+            exercise = asyncio.run(app.create_ai_learning_exercise(topic="X"))
+        with self.assertRaises(app.HTTPException) as ctx:
+            asyncio.run(app.grade_ai_learning_exercise(exercise["id"], "   "))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_a_non_json_grade_still_keeps_the_answer(self):
+        """评判解析失败也不能把用户写的东西丢了。"""
+        payload = {"question": "Q", "reference_answer": "A"}
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", self.llm(payload)):
+            exercise = asyncio.run(app.create_ai_learning_exercise(topic="X"))
+
+        async def prose(*args, **kwargs):
+            return "你答得还行。"
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", prose):
+            result = asyncio.run(app.grade_ai_learning_exercise(exercise["id"], "我写的答案"))
+        self.assertEqual(result["user_answer"], "我写的答案")
+        self.assertIn("你答得还行", result["feedback"]["verdict"])
+        self.assertEqual(result["score"], -1, "解析不出分数时不该编一个分数")
+
+    def test_the_exercise_prompt_asks_for_a_self_contained_scenario(self):
+        """题目要能靠思考回答——这正是原来的练习做不到的地方。"""
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find("async def create_ai_learning_exercise("):]
+        body = body[:body.find("\nasync def grade_ai_learning_exercise(")]
+        self.assertIn("不需要用户手上有现成的工作材料", body)
+        self.assertIn("不要冒充真实公司", body)
+        self.assertIn("avoid_questions", body, "不去重的话连出几道会是同一题")
+
+    def test_the_lesson_case_now_has_to_carry_an_answer(self):
+        """案例只讲「他怎么做的」，读的人无从判断自己想的对不对。"""
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn('"case": ("situation", "approach", "result", "lesson", "answer")', source)
+        self.assertIn("answer 写「在这个情境下正确的做法是什么、为什么」", source)
+        script = (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
+        self.assertIn("先自己想", script, "答案直接摊开就没有思考环节了")
+
+
 class FloatingSurfaceCollisionTests(unittest.TestCase):
     """两个悬浮入口都钉在右下角，谁也不知道对方存在。
 

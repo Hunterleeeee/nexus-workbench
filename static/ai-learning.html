@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.154"></script>
+  <script src="/static/theme.js?v=0.3.155"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>AI 转型学习 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.154" />
-  <link rel="stylesheet" href="/static/ai-learning.css?v=0.3.154" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.155" />
+  <link rel="stylesheet" href="/static/ai-learning.css?v=0.3.155" />
 </head>
 <body data-project-id="ai-learning">
   <div class="page-shell learning-shell">
@@ -77,6 +77,24 @@
             </form>
           </section>
 
+          <section class="card rail-card explore-card">
+            <div class="rail-head"><div><span class="rail-kicker">想学就学</span><h2>主动学习</h2></div></div>
+            <p class="rail-copy">不用等每日课程排到。想弄懂一个名词、想知道最近哪条热点值得学、想把一个理论讲透，现在就问。</p>
+            <div class="explore-kinds" role="tablist" aria-label="主动学习类型">
+              <button type="button" class="explore-kind active" data-explore-kind="term" role="tab" aria-selected="true">名词</button>
+              <button type="button" class="explore-kind" data-explore-kind="hotspot" role="tab" aria-selected="false">最近热点</button>
+              <button type="button" class="explore-kind" data-explore-kind="theory" role="tab" aria-selected="false">理论</button>
+            </div>
+            <form id="explore-form" class="explore-form">
+              <label for="explore-topic" class="sr-only">想学什么</label>
+              <input id="explore-topic" placeholder="例如：RAG 到底解决了什么" autocomplete="off" />
+              <button class="primary-button" type="submit">讲给我听</button>
+            </form>
+            <p id="explore-message" class="form-note" role="status" aria-live="polite"></p>
+            <div id="explore-result" class="explore-result" hidden></div>
+            <div id="explore-history" class="explore-history"></div>
+          </section>
+
           <section class="card rail-card roadmap-card">
             <div class="rail-head"><div><span class="rail-kicker">14 天</span><h2>学习路线</h2></div></div>
             <ol id="learning-phases" class="learning-phases"><li class="phase-placeholder">正在读取学习路线…</li></ol>
@@ -91,9 +109,9 @@
     </main>
   </div>
 
-  <script src="/static/request.js?v=0.3.154"></script>
-  <script src="/static/llm-settings.js?v=0.3.154"></script>
-  <script src="/static/project.js?v=0.3.154"></script>
-  <script src="/static/ai-learning.js?v=0.3.154"></script>
+  <script src="/static/request.js?v=0.3.155"></script>
+  <script src="/static/llm-settings.js?v=0.3.155"></script>
+  <script src="/static/project.js?v=0.3.155"></script>
+  <script src="/static/ai-learning.js?v=0.3.155"></script>
 </body>
 </html>

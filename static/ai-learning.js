@@ -4,8 +4,9 @@ const LEARNING_TRACK = location.pathname.includes("/embodied") ? "embodied" : "a
 const trackQuery = (extra = "") => `track=${encodeURIComponent(LEARNING_TRACK)}${extra ? `&${extra}` : ""}`;
 
 const learnQuery = (selector, root = document) => root.querySelector(selector);
+const learnQueryAll = (selector, root = document) => [...root.querySelectorAll(selector)];
 const learnEscape = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0 };
+const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0, explorations: [], exploreKind: "term", exercise: null };
 
 function learningSetStatus(message = "", tone = "") {
   const node = learnQuery("#learning-page-status");
@@ -113,11 +114,15 @@ function renderTodayLesson(lesson = {}) {
           <div class="case-item"><span>做法</span><p>${learnEscape(caseItem.approach || "")}</p></div>
           <div class="case-item"><span>结果</span><p>${learnEscape(caseItem.result || "")}</p></div>
           <div class="case-item"><span>经验</span><p>${learnEscape(caseItem.lesson || "")}</p></div>
-        </div></div>
+        </div>${caseItem.answer ? `<details class="case-answer"><summary>先自己想：这个情境下你会怎么做？想好再展开对答案</summary><p>${learnEscape(caseItem.answer)}</p></details>` : ""}</div>
       </section>
       <section class="lesson-section" aria-labelledby="practice-title">
         <div class="lesson-section-head"><span class="lesson-step">3</span><div><h3 id="practice-title">练习</h3><p>按步骤完成并记录结果</p></div></div>
         <div class="practice-box"><div><h4>${learnEscape(practice.task || "把今天的方法用到一项真实工作中。")}</h4><ol class="practice-steps">${steps.map((step) => `<li>${learnEscape(step)}</li>`).join("")}</ol></div><div class="deliverable-card"><span>交付物</span><strong>${learnEscape(practice.deliverable || "一条可复用的方法记录")}</strong></div></div>
+        <div class="exercise-block" id="exercise-block" data-lesson-id="${learnEscape(lesson.id)}">
+          <div class="exercise-intro"><div><strong>手上没有现成的工作场景？</strong><p>让 AI 按这节课出一道题，背景给全，你只需要思考和作答，答完再对参考答案。</p></div><button type="button" id="exercise-new" class="secondary-button">出一道题</button></div>
+          <div id="exercise-host" class="exercise-host"></div>
+        </div>
         <label class="practice-output-field" for="practice-output"><span class="practice-output-head"><span>练习成果 <small>必填</small></span><span id="draft-status" class="draft-status ${completed || lesson.status === "in_progress" ? "saved" : ""}" role="status" aria-live="polite">${completed ? "已完成" : lesson.status === "in_progress" ? "已保存" : "自动保存"}</span></span><textarea id="practice-output" rows="5" maxlength="8000" placeholder="粘贴结果、写下方案，或记录你实际完成了什么" ${completed ? "readonly" : ""}>${learnEscape(lesson.practice_output || "")}</textarea></label>
       </section>
       <section class="lesson-section" aria-labelledby="quiz-title">
@@ -196,7 +201,10 @@ async function openHistoryLesson(lessonId) {
     renderLessonHistory(learningState.history);
     learnQuery("#today-lesson")?.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
-    learningSetStatus(`打开这节课失败：${error.message}`, "error");
+    // 带上 id 和状态码：这条错误此前只有一句「打开失败」，报上来也没法定位
+    // 是课程不存在、后端没起来，还是请求超时。
+    const status = error?.status ? `HTTP ${error.status}` : "";
+    learningSetStatus(`打开第 ${id} 节失败：${error.message}${status ? `（${status}）` : ""}`, "error");
   }
 }
 
@@ -466,7 +474,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.154", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.155", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 
@@ -538,10 +546,207 @@ function setupLearningHistory() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 主动学习：名词 / 最近热点 / 理论
+//
+// 在这之前学习只有一条被动通道——每天推一节，学完为止。临时想弄懂一个词，
+// 只能等课程哪天刚好讲到。
+// ---------------------------------------------------------------------------
+const EXPLORE_PLACEHOLDER = {
+  term: "例如：RAG 到底解决了什么",
+  hotspot: "可留空，让 AI 从真实热点里挑；也可以写一个方向",
+  theory: "例如：Scaling Law 的边界在哪",
+};
+
+// 每个 kind 的字段不同，但都遵循「先讲清楚，再说边界」的顺序。
+const EXPLORE_FIELDS = [
+  ["definition", "一句话说清楚"],
+  ["core_idea", "核心主张"],
+  ["whats_new", "发生了什么"],
+  ["mechanism", "它为什么成立"],
+  ["why_it_matters", "为什么重要"],
+  ["what_to_learn", "真正值得学的是什么"],
+  ["misconceptions", "常见误解"],
+  ["skeptic", "被高估的地方"],
+  ["evidence", "支持依据"],
+  ["boundary", "什么时候不适用"],
+  ["in_your_work", "在你的工作里怎么用"],
+  ["check", "自查一下你是否真懂"],
+];
+
+function exploreValueMarkup(value) {
+  if (Array.isArray(value)) return `<ul>${value.map((item) => `<li>${learnEscape(item)}</li>`).join("")}</ul>`;
+  return `<p>${learnEscape(value)}</p>`;
+}
+
+function renderExploration(exploration) {
+  const host = learnQuery("#explore-result");
+  if (!host) return;
+  const content = exploration?.content || {};
+  const rows = EXPLORE_FIELDS
+    .filter(([key]) => content[key] && (!Array.isArray(content[key]) || content[key].length))
+    .map(([key, label]) => `<div class="explore-field ${key === "boundary" || key === "misconceptions" || key === "skeptic" ? "caution" : ""}"><strong>${label}</strong>${exploreValueMarkup(content[key])}</div>`)
+    .join("");
+  host.hidden = false;
+  host.innerHTML = `<div class="explore-result-head"><strong>${learnEscape(content.title || exploration.title || "小专题")}</strong><button type="button" id="explore-close" class="secondary-button">收起</button></div>${rows || "<p class=\"form-note\">这次没有生成可展示的内容，换个说法再试一次。</p>"}
+    <div class="explore-foot"><button type="button" class="secondary-button" data-explore-exercise="${learnEscape(exploration.id)}">就这个出道题考我</button></div>`;
+}
+
+function renderExploreHistory(items = []) {
+  const host = learnQuery("#explore-history");
+  if (!host) return;
+  host.innerHTML = items.length
+    ? `<div class="explore-history-head">最近问过</div>` + items.slice(0, 6).map((item) => `<button type="button" class="explore-history-item" data-exploration-id="${learnEscape(item.id)}"><span>${learnEscape(item.title || item.topic || "小专题")}</span><small>${learnEscape(item.kind === "term" ? "名词" : item.kind === "hotspot" ? "热点" : "理论")}</small></button>`).join("")
+    : "";
+}
+
+async function loadExploreHistory() {
+  try {
+    const body = await requestJson(`/api/ai-learning/explorations?${trackQuery()}&limit=12`);
+    learningState.explorations = body.explorations || [];
+    renderExploreHistory(learningState.explorations);
+  } catch (error) {
+    // 历史读不到不该挡住主功能，静默即可——真正的入口是上面的输入框。
+  }
+}
+
+function setupExplore() {
+  const form = learnQuery("#explore-form");
+  if (!form) return;
+  const input = learnQuery("#explore-topic");
+  const message = learnQuery("#explore-message");
+  learningState.exploreKind = "term";
+  learnQuery(".explore-kinds").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-explore-kind]");
+    if (!button) return;
+    learningState.exploreKind = button.dataset.exploreKind;
+    learnQueryAll(".explore-kind").forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-selected", String(active));
+    });
+    input.placeholder = EXPLORE_PLACEHOLDER[learningState.exploreKind] || "";
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    wbSetBusy(button, true, "正在准备…");
+    message.textContent = "";
+    try {
+      const body = await requestJson(`/api/ai-learning/explorations?${trackQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: learningState.exploreKind, topic: input.value.trim() }),
+      });
+      renderExploration(body.exploration || {});
+      input.value = "";
+      void loadExploreHistory();
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      wbSetBusy(button, false);
+    }
+  });
+  learnQuery("#explore-result").addEventListener("click", (event) => {
+    if (event.target.closest("#explore-close")) { learnQuery("#explore-result").hidden = true; return; }
+    const ask = event.target.closest("[data-explore-exercise]");
+    if (ask) {
+      const item = (learningState.explorations || []).find((entry) => String(entry.id) === ask.dataset.exploreExercise);
+      void createExercise({ topic: item?.title || item?.topic || "" });
+    }
+  });
+  learnQuery("#explore-history").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-exploration-id]");
+    if (!item) return;
+    const found = (learningState.explorations || []).find((entry) => String(entry.id) === item.dataset.explorationId);
+    if (found) renderExploration(found);
+  });
+  void loadExploreHistory();
+}
+
+// ---------------------------------------------------------------------------
+// AI 出题 → 我作答 → AI 评判
+//
+// 原来的练习假设「你手上正好有一个真实场景可以拿来练」。大多数时候没有，
+// 于是练习框空着，AI 批改也就无从批起。
+// ---------------------------------------------------------------------------
+function renderExercise(exercise) {
+  const host = learnQuery("#exercise-host");
+  if (!host || !exercise?.id) return;
+  learningState.exercise = exercise;
+  const feedback = exercise.feedback || {};
+  const criteria = (exercise.criteria || []).map((item) => `<li>${learnEscape(item)}</li>`).join("");
+  const answered = Boolean(exercise.answered);
+  const list = (items) => (items || []).map((item) => `<li>${learnEscape(item)}</li>`).join("");
+  host.innerHTML = `<article class="exercise-card">
+    <div class="exercise-question"><span>题目</span><p>${learnEscape(exercise.question || "")}</p></div>
+    ${exercise.context ? `<div class="exercise-context"><span>背景</span><p>${learnEscape(exercise.context)}</p></div>` : ""}
+    ${criteria ? `<details class="exercise-criteria"><summary>这道题会按什么标准评</summary><ul>${criteria}</ul></details>` : ""}
+    <label class="exercise-answer-field" for="exercise-answer"><span>你的答案</span><textarea id="exercise-answer" rows="5" maxlength="4000" placeholder="写下你的判断和理由，不用长，但要说清楚为什么" ${answered ? "readonly" : ""}>${learnEscape(exercise.user_answer || "")}</textarea></label>
+    ${answered ? "" : '<div class="exercise-actions"><button type="button" id="exercise-submit" class="primary-button">交给 AI 评判</button></div>'}
+    ${answered ? `<div class="exercise-feedback">
+      <div class="exercise-score"><strong>${exercise.score >= 0 ? `${learnEscape(exercise.score)} 分` : "已评判"}</strong><span>${learnEscape(feedback.verdict || "")}</span></div>
+      ${feedback.hits?.length ? `<div class="exercise-hits"><strong>答到了</strong><ul>${list(feedback.hits)}</ul></div>` : ""}
+      ${feedback.misses?.length ? `<div class="exercise-misses"><strong>差在哪</strong><ul>${list(feedback.misses)}</ul></div>` : ""}
+      ${feedback.rewrite ? `<div class="exercise-rewrite"><strong>改写成合格答案</strong><p>${learnEscape(feedback.rewrite)}</p></div>` : ""}
+      ${exercise.reference_answer ? `<details class="exercise-reference"><summary>参考答案</summary><p>${learnEscape(exercise.reference_answer)}</p></details>` : ""}
+      ${feedback.next_step ? `<p class="exercise-next"><strong>下一步：</strong>${learnEscape(feedback.next_step)}</p>` : ""}
+    </div>` : ""}
+  </article>`;
+}
+
+async function createExercise({ lessonId = 0, topic = "" } = {}) {
+  const button = learnQuery("#exercise-new");
+  const host = learnQuery("#exercise-host");
+  if (host) host.innerHTML = '<p class="form-note">正在出题…</p>';
+  wbSetBusy(button, true, "出题中…");
+  try {
+    const body = await requestJson(`/api/ai-learning/exercises?${trackQuery()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lesson_id: Number(lessonId) || 0, topic }),
+    });
+    renderExercise(body.exercise || {});
+  } catch (error) {
+    if (host) host.innerHTML = `<p class="form-note error">${learnEscape(error.message)}</p>`;
+  } finally {
+    wbSetBusy(button, false);
+  }
+}
+
+function setupExercises() {
+  // 委托绑定到 #today-lesson：课程内容每次重渲染都会重建这些节点。
+  const root = learnQuery("#today-lesson");
+  if (!root) return;
+  root.addEventListener("click", (event) => {
+    if (event.target.closest("#exercise-new")) {
+      const block = event.target.closest(".exercise-block") || learnQuery("#exercise-block");
+      void createExercise({ lessonId: block?.dataset.lessonId || 0 });
+      return;
+    }
+    if (event.target.closest("#exercise-submit")) {
+      const answer = learnQuery("#exercise-answer")?.value.trim() || "";
+      const exerciseId = learningState.exercise?.id;
+      if (!exerciseId) return;
+      if (!answer) { learnQuery("#exercise-host").insertAdjacentHTML("beforeend", '<p class="form-note error">先写下你的答案。</p>'); return; }
+      const button = event.target.closest("#exercise-submit");
+      wbSetBusy(button, true, "评判中…");
+      requestJson(`/api/ai-learning/exercises/${encodeURIComponent(exerciseId)}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer }),
+      }).then((body) => renderExercise(body.exercise || {}))
+        .catch((error) => { wbSetBusy(button, false); learnQuery("#exercise-host").insertAdjacentHTML("beforeend", `<p class="form-note error">${learnEscape(error.message)}</p>`); });
+    }
+  });
+}
+
 function setupAILearning() {
   setupLearningProfile();
   setupLearningPush();
   setupLearningHistory();
+  setupExplore();
+  setupExercises();
   loadLearningDashboard();
 }
 

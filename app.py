@@ -2903,6 +2903,46 @@ def _initialize_extended_schema(connection: sqlite3.Connection) -> None:
         log.info("ai_learning_profiles 已迁移到多轨道结构")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_learning_lessons_status ON ai_learning_lessons(status, lesson_date DESC)")
 
+    # 主动学习：不属于 14 天路线，所以不能塞进 ai_learning_lessons——那张表有
+    # UNIQUE(track, lesson_date)，一天只能有一节。想查个名词就把今天的课冲掉，
+    # 显然不行。单独一张表，随时可以查、可以查很多次。
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS ai_learning_explorations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track TEXT NOT NULL DEFAULT 'ai-transformation',
+            kind TEXT NOT NULL DEFAULT 'term',
+            topic TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            content_json TEXT NOT NULL DEFAULT '{}',
+            source TEXT NOT NULL DEFAULT 'llm',
+            created_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_learning_explorations ON ai_learning_explorations(track, id DESC)")
+
+    # AI 出题：一道题一行，带参考答案和评分标准，用户作答后写回 feedback。
+    # 和「练习成果」分开存，因为练习是「你把工作里的产出贴进来」，出题是
+    # 「你手上没有场景，我给你一个」——后者可以反复做，前者一节课只有一次。
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS ai_learning_exercises (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track TEXT NOT NULL DEFAULT 'ai-transformation',
+            lesson_id INTEGER NOT NULL DEFAULT 0,
+            exploration_id INTEGER NOT NULL DEFAULT 0,
+            topic TEXT NOT NULL DEFAULT '',
+            question TEXT NOT NULL DEFAULT '',
+            context TEXT NOT NULL DEFAULT '',
+            reference_answer TEXT NOT NULL DEFAULT '',
+            criteria_json TEXT NOT NULL DEFAULT '[]',
+            user_answer TEXT NOT NULL DEFAULT '',
+            feedback_json TEXT NOT NULL DEFAULT '{}',
+            score INTEGER NOT NULL DEFAULT -1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_learning_exercises ON ai_learning_exercises(track, id DESC)")
+
     # ------------------------------------------------------------------
     # Hot-path indexes for the five core tables that had none.
     #
@@ -12081,6 +12121,7 @@ READ_ONLY_REACT_TOOLS = frozenset({
     "server_status", "sub2api_status", "knowledge_search", "inbox_read",
     "work_items_read", "aihot_read", "market_read", "doc_validate",
     "doc_template", "crawl_fetch", "idea_read", "cid_read", "cloud_dev_status",
+    "market_style_screen", "product_read", "learning_read",
 })
 
 
@@ -12278,6 +12319,91 @@ def _react_cid_read(args: dict[str, Any]) -> dict[str, Any]:
     } for o in opportunities[:12]]}
 
 
+def _react_market_style_screen(args: dict[str, Any]) -> dict[str, Any]:
+    """按某个选股风格筛一遍自选池，返回逐条规则的通过情况。
+
+    没有这个工具时，市场 Agent 只能读到原始行情，然后自己"讲"一套选股逻辑——
+    讲出来的和页面上那套按固定规则跑的完全是两回事。现在它调的就是页面上
+    同一个函数，结论对得上，样本不够时也一样明确拒绝而不是硬凑。
+    """
+    style_id = str(args.get("style_id") or "").strip()
+    if not style_id:
+        return {"ok": False, "error": "需要指定风格 id", "styles": [
+            {"id": item["id"], "name": item["name"], "thesis": clip(item.get("thesis", ""), 120)}
+            for item in market_style_catalog()
+        ]}
+    symbols = [str(item).strip() for item in (args.get("symbols") or []) if str(item).strip()]
+    try:
+        result = run_market_style_screen(style_id, symbols or None)
+    except HTTPException as exc:
+        return {"ok": False, "error": str(exc.detail)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": clip(str(exc), 300)}
+    return {"ok": True, **result}
+
+
+def _react_product_read(args: dict[str, Any]) -> dict[str, Any]:
+    """读取产品作战室的项目和需求/缺陷清单。
+
+    产品作战室的 Agent 之前只有 knowledge_search，连它自己项目里的需求都读不到——
+    问它「现在哪个需求最该做」，它只能凭对话里的只言片语猜。
+    """
+    project_id = str(args.get("project_id") or "").strip()
+    item_type = str(args.get("item_type") or "").strip()
+    limit = max(1, min(60, int(args.get("limit") or 20)))
+    try:
+        projects = list_product_projects()
+        items = list_product_requirements(limit=limit, project_id=project_id, item_type=item_type)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": clip(str(exc), 300)}
+    return {
+        "ok": True,
+        "projects": [{"id": item.get("id"), "name": item.get("name"), "status": item.get("status")} for item in projects],
+        "count": len(items),
+        "items": [{
+            "id": item.get("id"),
+            "title": item.get("title"),
+            "type": item.get("item_type"),
+            "status": item.get("status"),
+            "severity": item.get("severity"),
+            "project_id": item.get("project_id"),
+            "value": item.get("value_score"),
+            "effort": item.get("effort"),
+            "updated_at": item.get("updated_at"),
+        } for item in items],
+    }
+
+
+def _react_learning_read(args: dict[str, Any]) -> dict[str, Any]:
+    """读取学习进度：当前画像、最近课程、自测对错。
+
+    学习类 Agent 之前只能查知识库和抓网页，唯独读不到「我学到哪了」——
+    于是它给的建议永远是通用的，跟这个人已经学过什么完全脱节。
+    """
+    track = learning_track_id(str(args.get("track") or ""))
+    limit = max(1, min(30, int(args.get("limit") or 10)))
+    try:
+        profile = get_ai_learning_profile(track)
+        lessons = list_ai_learning_lessons(limit=limit, track=track)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": clip(str(exc), 300)}
+    return {
+        "ok": True,
+        "track": track,
+        "profile": {key: profile.get(key) for key in ("role", "target_role", "level", "daily_minutes", "focus", "goal")},
+        "completed": sum(1 for item in lessons if item.get("completed")),
+        "lessons": [{
+            "id": item.get("id"),
+            "date": item.get("lesson_date"),
+            "title": item.get("title"),
+            "module": item.get("module"),
+            "status": item.get("status"),
+            "quiz_correct": item.get("quiz_correct"),
+            "confidence": item.get("confidence"),
+        } for item in lessons],
+    }
+
+
 def _react_aihot_feedback(args: dict[str, Any]) -> dict[str, Any]:
     """给 AI 热点条目提交反馈：useful / not_useful（影响来源分）。"""
     item_id = str(args.get("item_id") or "")
@@ -12364,6 +12490,55 @@ SUBAGENT_EXTRA_TOOLS: dict[str, dict[str, Any]] = {
         },
         "handler": _react_cid_read,
     },
+    "market_style_screen": {
+        "type": "function",
+        "function": {
+            "name": "market_style_screen",
+            "description": "按某个选股风格（趋势跟随/超跌回归/低波动等）筛一遍自选池，返回逐条规则的通过情况和拒绝理由。不传 style_id 时返回可选风格清单。样本不足时明确拒绝，不给结论。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "style_id": {"type": "string", "description": "风格 id；不填则返回可选清单"},
+                    "symbols": {"type": "array", "items": {"type": "string"}, "description": "要筛的标的代码；不填则用自选池"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "handler": _react_market_style_screen,
+    },
+    "product_read": {
+        "type": "function",
+        "function": {
+            "name": "product_read",
+            "description": "读取产品作战室的项目列表和需求/缺陷清单（标题、类型、状态、严重度、价值、工作量）。适合问'现在哪个需求最该做/有哪些未处理缺陷'。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "只看某个项目，可选"},
+                    "item_type": {"type": "string", "description": "requirement 或 defect，可选"},
+                    "limit": {"type": "integer", "description": "条数，默认 20"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "handler": _react_product_read,
+    },
+    "learning_read": {
+        "type": "function",
+        "function": {
+            "name": "learning_read",
+            "description": "读取学习进度：岗位画像、目标、最近课程、自测对错和掌握度。适合问'我学到哪了/我哪块最弱/下一步该学什么'。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "track": {"type": "string", "description": "学习轨道 id，不填用默认轨道"},
+                    "limit": {"type": "integer", "description": "课程条数，默认 10"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "handler": _react_learning_read,
+    },
     "cloud_dev_status": {
         "type": "function",
         "function": {
@@ -12411,16 +12586,16 @@ SUBAGENT_TOOL_MAP: dict[str, list[str]] = {
     "knowledge": ["knowledge_search", "knowledge_write", "inbox_read", "work_items_read", "notify"],
     "doc-factory": ["doc_validate", "doc_template", "knowledge_search", "work_items_read", "notify"],
     "sub2api": ["sub2api_status", "work_items_read", "notify"],
-    "market": ["market_read", "market_analyze", "work_items_read", "notify"],
+    "market": ["market_read", "market_analyze", "market_style_screen", "work_items_read", "notify"],
     "server": ["server_status", "work_items_read", "notify"],
     "crawl4ai": ["crawl_fetch", "knowledge_search", "inbox_capture", "work_items_read", "notify"],
     "web-research": ["crawl_fetch", "knowledge_search", "work_items_read", "notify"],
     "aihot": ["aihot_read", "aihot_feedback", "work_items_read", "notify"],
     "idea-analysis": ["idea_read", "inbox_capture", "work_items_read", "notify"],
-    "product-manager": ["knowledge_search", "work_items_read", "notify"],
+    "product-manager": ["product_read", "knowledge_search", "inbox_capture", "work_items_read", "notify"],
     "cid-dashboard": ["cid_read", "work_items_read", "notify"],
-    "embodied": ["crawl_fetch", "knowledge_search", "knowledge_write", "work_items_read", "notify"],
-    "ai-learning": ["crawl_fetch", "knowledge_search", "knowledge_write", "work_items_read", "notify"],
+    "embodied": ["learning_read", "crawl_fetch", "knowledge_search", "knowledge_write", "work_items_read", "notify"],
+    "ai-learning": ["learning_read", "crawl_fetch", "knowledge_search", "knowledge_write", "work_items_read", "notify"],
     # cloud_dev_build 按 cloud_dev_policy() 属于需要审批的动作，没有审批链路就
     # 不能做成模型可以直接调的工具，所以这里不登记——留着只会又变成一个查不到
     # handler、被静默丢掉的名字。
@@ -15645,6 +15820,27 @@ def fallback_ai_learning_content(day_index: int, profile: dict[str, Any], track:
     return template
 
 
+def parse_llm_json_object(answer: str) -> dict[str, Any] | None:
+    """从模型回复里抠出一个 JSON 对象。
+
+    模型时不时会把 JSON 包在 ```json 里，或者在前面加一句「好的，以下是」。
+    这个提取逻辑本来只长在 parse_ai_learning_content 里，新增的几个接口
+    如果各写一份，迟早会在某一处漏掉围栏这种情况。
+    """
+    candidate = str(answer or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", candidate, flags=re.DOTALL | re.IGNORECASE)
+    json_text = fenced.group(1) if fenced else candidate
+    if not fenced:
+        start, end = candidate.find("{"), candidate.rfind("}")
+        if start >= 0 and end > start:
+            json_text = candidate[start : end + 1]
+    try:
+        raw = json.loads(json_text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
 def parse_ai_learning_content(answer: str, fallback: dict[str, Any]) -> dict[str, Any]:
     candidate = str(answer or "").strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", candidate, flags=re.DOTALL | re.IGNORECASE)
@@ -15668,7 +15864,9 @@ def parse_ai_learning_content(answer: str, fallback: dict[str, Any]) -> dict[str
         if len(normalized) >= 2:
             content["knowledge"] = normalized
     for key, fields in {
-        "case": ("situation", "approach", "result", "lesson"),
+        # answer 是新增的一格：案例只讲「他怎么做的」，读的人无从判断自己想的
+        # 对不对；把「这个情境下正确的做法和理由」显式写出来，案例才有答案。
+        "case": ("situation", "approach", "result", "lesson", "answer"),
         "practice": ("task", "deliverable"),
     }.items():
         value = raw.get(key)
@@ -15738,7 +15936,7 @@ async def generate_ai_learning_lesson(*, lesson_date: str = "", force: bool = Fa
         try:
             answer = await call_llm(
                 [
-                    {"role": "system", "content": "你是务实的中文 AI 转型教练。为用户生成一节能在指定时间内完成的小课。案例必须是贴近真实工作的情境，不得捏造公司名、研究数据或收益数字。只输出 JSON。字段：module, title, objective, knowledge(2-4条), case{situation,approach,result,lesson}, practice{task,steps(2-5条),deliverable}, quiz{question,options(恰好4项),correct_index(0-3),explanation}, takeaway。"},
+                    {"role": "system", "content": "你是务实的中文 AI 转型教练。为用户生成一节能在指定时间内完成的小课。只输出 JSON。字段：module, title, objective, knowledge(2-4条), case{situation,approach,result,lesson,answer}, practice{task,steps(2-5条),deliverable}, quiz{question,options(恰好4项),correct_index(0-3),explanation}, takeaway。案例要求：situation 必须具体到能直接判断——写清楚是谁、手上有什么、要交付什么、卡在哪，不要停留在「某公司想用 AI 提效」这种空壳；数字和公司名写成明显的示例，不得冒充真实公司、真实研究或真实收益；answer 写「在这个情境下正确的做法是什么、为什么」，并指出一个常见的错误做法错在哪。"},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 max_tokens=1_800,
@@ -16151,6 +16349,338 @@ async def review_ai_learning_practice(lesson_id: int) -> dict[str, Any]:
 @app.post("/api/ai-learning/lessons/{lesson_id}/note")
 def post_ai_learning_note(lesson_id: int) -> dict[str, Any]:
     return save_ai_learning_note(lesson_id)
+
+
+# ---------------------------------------------------------------------------
+# 主动学习
+#
+# 在这之前，学习只有一条被动通道：每天推一节课，学完为止。想临时搞懂一个名词、
+# 想知道这周 AI 圈发生了什么值得学的、想把某个理论一次性弄透——都没有入口，
+# 只能去等哪天课程刚好讲到。这三个 kind 补的就是「我现在就想学这个」。
+# ---------------------------------------------------------------------------
+EXPLORATION_KINDS: dict[str, dict[str, str]] = {
+    "term": {
+        "label": "名词",
+        "ask": "解释这个名词",
+        "shape": "字段：title, definition(一句话说清楚), why_it_matters, misconceptions(2-3条常见误解，每条写清楚「很多人以为…其实…」), in_your_work(结合用户岗位的一个具体用法), boundary(什么情况下这个概念不适用), check(一个能自查是否真懂的问题)",
+    },
+    "hotspot": {
+        "label": "热点",
+        "ask": "从最近的真实热点里挑出值得学的部分",
+        "shape": "字段：title, whats_new(发生了什么，只用我给你的条目，不要补充我没给你的事实), why_it_matters, what_to_learn(2-3条从这件事里真正值得学的能力或概念), skeptic(这件事被高估的地方是什么), in_your_work, check",
+    },
+    "theory": {
+        "label": "理论",
+        "ask": "把这个理论讲透",
+        "shape": "字段：title, core_idea, mechanism(它为什么成立，讲清楚推理链), evidence(它的支持依据，不确定就写不确定), boundary(它在什么条件下失效), in_your_work, check",
+    },
+}
+
+
+def exploration_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["content"] = decode_json_value(item.pop("content_json", "{}"), {}) or {}
+    return item
+
+
+def list_ai_learning_explorations(track: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    connection = db_connection()
+    try:
+        rows = connection.execute(
+            "SELECT * FROM ai_learning_explorations WHERE track = ? ORDER BY id DESC LIMIT ?",
+            (learning_track_id(track), max(1, min(60, limit))),
+        ).fetchall()
+        return [exploration_row(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def get_ai_learning_exploration(exploration_id: int) -> dict[str, Any] | None:
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT * FROM ai_learning_explorations WHERE id = ?", (exploration_id,)).fetchone()
+        return exploration_row(row) if row else None
+    finally:
+        connection.close()
+
+
+async def create_ai_learning_exploration(kind: str, topic: str, track: str = "") -> dict[str, Any]:
+    """按需生成一份小专题并存下来。"""
+    spec = EXPLORATION_KINDS.get(kind)
+    if not spec:
+        raise HTTPException(400, f"不支持的主动学习类型：{kind}")
+    if not llm_settings().get("configured"):
+        raise HTTPException(503, "请先在工作台顶部配置全局 LLM。")
+    track_id = learning_track_id(track)
+    profile = get_ai_learning_profile(track_id)
+    topic = clip(str(topic or "").strip(), 120)
+
+    grounding: list[dict[str, Any]] = []
+    if kind == "hotspot":
+        # 热点必须落在真实条目上。让模型自由发挥「最近的 AI 热点」，它只会
+        # 复述训练数据里的旧闻，还会说得像刚发生一样——这比不给更糟。
+        try:
+            snapshot = load_aihot_snapshot()
+            grounding = [
+                {"title": clip(str(item.get("title") or ""), 140), "source": item.get("source"), "url": item.get("url"), "importance": item.get("importance")}
+                for item in select_aihot_items(snapshot, mode="useful", limit=12)
+            ][:12]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("读取热点条目失败：%s", exc)
+        if not grounding:
+            raise HTTPException(
+                409,
+                "还没有抓到任何 AI 热点条目，没法基于真实内容出专题。先到「AI 热点」项目里刷新一次，再回来。",
+            )
+    if not topic and kind != "hotspot":
+        raise HTTPException(400, f"请先写清楚想学的{spec['label']}。")
+
+    payload = {
+        "kind": kind,
+        "topic": topic or "（由你从下面的真实热点里挑）",
+        "current_role": profile.get("current_role") or "未填写",
+        "target_role": profile.get("target_role") or "AI 相关岗位",
+        "experience": profile.get("experience"),
+        "goal": profile.get("goal") or "提升 AI 实战能力",
+        "real_items": grounding,
+    }
+    answer = await call_llm(
+        [
+            {"role": "system", "content": (
+                f"你是务实的中文技术教练。用户{spec['ask']}。只输出 JSON，不要 markdown 代码块。{spec['shape']}。"
+                "写作要求：讲清楚推理过程而不是只给结论；不确定的地方明确写「不确定」；"
+                "绝对不要编造公司名、论文、数据、日期或收益数字；"
+                "如果我给了 real_items，所有事实只能来自 real_items。"
+            )},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        max_tokens=1_600,
+        temperature=0.4,
+        purpose="ai_learning_exploration",
+    )
+    content = parse_llm_json_object(answer)
+    if not isinstance(content, dict) or not content:
+        raise HTTPException(502, "生成结果不是可解析的结构化内容，请再试一次。")
+    title = clip(str(content.get("title") or topic or spec["label"]), 120)
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        cursor = connection.execute(
+            "INSERT INTO ai_learning_explorations (track, kind, topic, title, content_json, source, created_at) VALUES (?,?,?,?,?,?,?)",
+            (track_id, kind, topic, title, json.dumps(content, ensure_ascii=False), "llm", timestamp),
+        )
+        connection.commit()
+        exploration_id = int(cursor.lastrowid or 0)
+    finally:
+        connection.close()
+    return get_ai_learning_exploration(exploration_id) or {}
+
+
+class AILearningExploreRequest(BaseModel):
+    kind: str = Field(default="term", max_length=20)
+    topic: str = Field(default="", max_length=120)
+
+
+@app.get("/api/ai-learning/explorations")
+def get_ai_learning_explorations(track: str = DEFAULT_LEARNING_TRACK, limit: int = 20) -> dict[str, Any]:
+    return {
+        "kinds": [{"id": key, "label": value["label"]} for key, value in EXPLORATION_KINDS.items()],
+        "explorations": list_ai_learning_explorations(track, limit),
+    }
+
+
+@app.post("/api/ai-learning/explorations")
+async def post_ai_learning_exploration(request: AILearningExploreRequest, track: str = DEFAULT_LEARNING_TRACK) -> dict[str, Any]:
+    return {"exploration": await create_ai_learning_exploration(request.kind, request.topic, track)}
+
+
+# ---------------------------------------------------------------------------
+# AI 出题 → 我作答 → AI 评判
+#
+# 原来的练习假设「你手上正好有一个真实场景可以拿来练」。大多数时候没有——
+# 于是练习框空着，AI 批改也就无从批起。出题走的是另一条路：题目和背景由 AI
+# 给全，你只需要思考和回答；参考答案先藏起来，答完再对照。
+# ---------------------------------------------------------------------------
+def exercise_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["criteria"] = decode_json_value(item.pop("criteria_json", "[]"), []) or []
+    item["feedback"] = decode_json_value(item.pop("feedback_json", "{}"), {}) or {}
+    item["answered"] = bool(str(item.get("user_answer") or "").strip())
+    return item
+
+
+def get_ai_learning_exercise(exercise_id: int) -> dict[str, Any] | None:
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT * FROM ai_learning_exercises WHERE id = ?", (exercise_id,)).fetchone()
+        return exercise_row(row) if row else None
+    finally:
+        connection.close()
+
+
+def list_ai_learning_exercises(track: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    connection = db_connection()
+    try:
+        rows = connection.execute(
+            "SELECT * FROM ai_learning_exercises WHERE track = ? ORDER BY id DESC LIMIT ?",
+            (learning_track_id(track), max(1, min(60, limit))),
+        ).fetchall()
+        return [exercise_row(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def public_exercise(exercise: dict[str, Any]) -> dict[str, Any]:
+    """没作答之前不返回参考答案。
+
+    参考答案跟着题目一起发到前端，就算界面上藏起来，打开开发者工具也能看到；
+    真想抄的人一定会抄，而抄完这道题就废了。答完之后再给。
+    """
+    item = dict(exercise)
+    if not item.get("answered"):
+        item["reference_answer"] = ""
+    return item
+
+
+async def create_ai_learning_exercise(*, track: str = "", lesson_id: int = 0, topic: str = "") -> dict[str, Any]:
+    if not llm_settings().get("configured"):
+        raise HTTPException(503, "请先在工作台顶部配置全局 LLM，才能出题。")
+    track_id = learning_track_id(track)
+    profile = get_ai_learning_profile(track_id)
+    lesson = get_ai_learning_lesson(lesson_id=lesson_id) if lesson_id else None
+    if lesson_id and not lesson:
+        raise HTTPException(404, "学习课程不存在")
+    subject = clip(str(topic or "").strip(), 120) or str((lesson or {}).get("title") or "")
+    if not subject:
+        raise HTTPException(400, "请给一个题目方向，或者从某一节课出题。")
+    recent = [item.get("question", "") for item in list_ai_learning_exercises(track_id, 8)]
+    payload = {
+        "subject": subject,
+        "lesson_objective": ((lesson or {}).get("content") or {}).get("objective", ""),
+        "lesson_knowledge": ((lesson or {}).get("content") or {}).get("knowledge", []),
+        "current_role": profile.get("current_role") or "未填写",
+        "target_role": profile.get("target_role") or "AI 相关岗位",
+        "experience": profile.get("experience"),
+        "avoid_questions": recent,
+    }
+    answer = await call_llm(
+        [
+            {"role": "system", "content": (
+                "你是务实的中文教练，负责出一道能靠思考回答的题，不需要用户手上有现成的工作材料。只输出 JSON，不要 markdown 代码块。"
+                "字段：question(题干，要求给出判断并说明理由，不是填空也不是选择), "
+                "context(题目需要的全部背景，写成一个具体到能直接思考的情境：具体角色、具体输入、具体产出要求。背景里的公司、人名、数字都写成明显的示例，不要冒充真实公司或真实数据), "
+                "criteria(3-4条评分要点，每条是一个能判断答没答到的具体标准), "
+                "reference_answer(一份合格答案，把推理过程写出来，并指出常见的错误答法错在哪)。"
+                "题目难度对准用户的当前水平，别出只能靠背概念回答的题。"
+            )},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        max_tokens=1_500,
+        temperature=0.5,
+        purpose="ai_learning_exercise",
+    )
+    data = parse_llm_json_object(answer)
+    if not isinstance(data, dict) or not str(data.get("question") or "").strip():
+        raise HTTPException(502, "出题结果不可解析，请再试一次。")
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        cursor = connection.execute(
+            """INSERT INTO ai_learning_exercises
+            (track, lesson_id, topic, question, context, reference_answer, criteria_json, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                track_id, int(lesson_id or 0), subject,
+                clip(str(data.get("question") or ""), 1200),
+                clip(str(data.get("context") or ""), 2500),
+                clip(str(data.get("reference_answer") or ""), 4000),
+                json.dumps([str(item) for item in (data.get("criteria") or [])][:6], ensure_ascii=False),
+                timestamp, timestamp,
+            ),
+        )
+        connection.commit()
+        exercise_id = int(cursor.lastrowid or 0)
+    finally:
+        connection.close()
+    return public_exercise(get_ai_learning_exercise(exercise_id) or {})
+
+
+async def grade_ai_learning_exercise(exercise_id: int, user_answer: str) -> dict[str, Any]:
+    exercise = get_ai_learning_exercise(exercise_id)
+    if not exercise:
+        raise HTTPException(404, "题目不存在")
+    text = str(user_answer or "").strip()
+    if not text:
+        raise HTTPException(400, "先写下你的答案，再让 AI 评判。")
+    if not llm_settings().get("configured"):
+        raise HTTPException(503, "请先在工作台顶部配置全局 LLM，才能评判。")
+    payload = {
+        "question": exercise.get("question"),
+        "context": exercise.get("context"),
+        "criteria": exercise.get("criteria"),
+        "reference_answer": exercise.get("reference_answer"),
+        "user_answer": clip(text, 4000),
+    }
+    answer = await call_llm(
+        [
+            {"role": "system", "content": (
+                "你是严格但讲道理的中文教练。对照评分要点批改用户的答案。只输出 JSON，不要 markdown 代码块。"
+                "字段：score(0-100 的整数), verdict(一句话结论), "
+                "hits(答到的要点，逐条引用用户的原话), "
+                "misses(没答到或答错的要点，每条说清楚差在哪、正确的想法是什么), "
+                "rewrite(把用户的答案改写成一份合格答案，保留他自己的思路和用词习惯), "
+                "next_step(下一步该练什么，一个具体动作)。"
+                "不要因为答案短就打低分，也不要因为写得长就打高分——只看有没有答到要点。"
+            )},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        max_tokens=1_600,
+        temperature=0.25,
+        purpose="ai_learning_exercise_review",
+    )
+    feedback = parse_llm_json_object(answer)
+    if not isinstance(feedback, dict):
+        feedback = {"verdict": clip(answer, 1200), "score": -1}
+    try:
+        score = int(feedback.get("score", -1))
+    except (TypeError, ValueError):
+        score = -1
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        connection.execute(
+            "UPDATE ai_learning_exercises SET user_answer = ?, feedback_json = ?, score = ?, updated_at = ? WHERE id = ?",
+            (clip(text, 4000), json.dumps(feedback, ensure_ascii=False), max(-1, min(100, score)), timestamp, exercise_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    # 交卷之后才把参考答案一起返回，这时对照才有意义。
+    return get_ai_learning_exercise(exercise_id) or {}
+
+
+class AILearningExerciseRequest(BaseModel):
+    lesson_id: int = 0
+    topic: str = Field(default="", max_length=120)
+
+
+class AILearningExerciseAnswerRequest(BaseModel):
+    answer: str = Field(min_length=1, max_length=4000)
+
+
+@app.get("/api/ai-learning/exercises")
+def get_ai_learning_exercises(track: str = DEFAULT_LEARNING_TRACK, limit: int = 20) -> dict[str, Any]:
+    return {"exercises": [public_exercise(item) for item in list_ai_learning_exercises(track, limit)]}
+
+
+@app.post("/api/ai-learning/exercises")
+async def post_ai_learning_exercise(request: AILearningExerciseRequest, track: str = DEFAULT_LEARNING_TRACK) -> dict[str, Any]:
+    return {"exercise": await create_ai_learning_exercise(track=track, lesson_id=request.lesson_id, topic=request.topic)}
+
+
+@app.post("/api/ai-learning/exercises/{exercise_id}/answer")
+async def post_ai_learning_exercise_answer(exercise_id: int, request: AILearningExerciseAnswerRequest) -> dict[str, Any]:
+    return {"exercise": await grade_ai_learning_exercise(exercise_id, request.answer)}
 
 
 @app.get("/projects/idea-analysis")

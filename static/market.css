@@ -578,3 +578,52 @@ html[data-theme="dark"] .m2-ai { background: linear-gradient(135deg, var(--surfa
 @media (prefers-reduced-motion: reduce) {
   .decision-groups button, .decision-card, .decision-card-actions button, .decision-card-actions a { transition: none; }
 }
+
+
+/* ── 按流派选股 ──────────────────────────────────────────────
+   刻意把「什么时候会亏」和「判断规则」放在同一层展开里：一个只写自己什么
+   时候管用的策略卡片，读起来像广告；把失效条件摆在旁边，才是能拿来做决定
+   的东西。 */
+.style-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.style-item { display: grid; gap: 8px; min-width: 0; padding: 13px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 11px; }
+.style-item.open { border-color: var(--accent); }
+.style-item-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
+.style-item-head > div { min-width: 0; }
+.style-item-head strong { display: block; color: var(--ink); font-size: 13px; }
+.style-item-head small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.style-verdict { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.style-verdict.hit { color: #176b4f; background: #e4f4ec; }
+.style-verdict.none { color: var(--muted); background: var(--surface-muted); }
+.style-verdict.blocked { color: #8a5312; background: #fdefdb; }
+html[data-theme="dark"] .style-verdict.hit { color: #86d3ae; background: #1d3730; }
+html[data-theme="dark"] .style-verdict.blocked { color: #e8b878; background: #3a2d18; }
+.style-item-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--faint); font-size: 10px; }
+.style-rules { color: var(--muted); font-size: 11px; }
+.style-rules summary { cursor: pointer; color: var(--accent); font-size: 11px; }
+.style-rules > div { margin-top: 9px; }
+.style-rules strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: 11px; }
+.style-rules ul { margin: 0; padding-left: 17px; line-height: 1.65; }
+.style-rules p { margin: 0; line-height: 1.65; }
+.style-fails strong { color: #a8563f; }
+html[data-theme="dark"] .style-fails strong { color: #e6a08a; }
+
+.style-result { margin-top: 12px; padding: 13px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 11px; }
+.style-result[hidden] { display: none; }
+.style-result-head { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 8px; }
+.style-result-head strong { font-size: 13px; }
+.style-summary { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.style-summary.warn { color: #8a5312; }
+html[data-theme="dark"] .style-summary.warn { color: #e8b878; }
+.style-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.style-table th, .style-table td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.style-table th { color: var(--faint); font-size: 10px; font-weight: 700; }
+.style-table tr.style-hit td { background: color-mix(in srgb, var(--green, #238b72) 8%, transparent); }
+.style-table tr.style-blocked td { color: var(--muted); }
+.style-checks { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.style-checks li { color: var(--muted); line-height: 1.5; }
+.style-checks li.pass { color: var(--green, #238b72); }
+.style-checks li.fail { color: #a8563f; }
+.style-checks small { display: block; color: var(--faint); font-size: 10px; }
+html[data-theme="dark"] .style-checks li.fail { color: #e6a08a; }
+
+@media (max-width: 700px) { .style-list { grid-template-columns: minmax(0, 1fr); } }
