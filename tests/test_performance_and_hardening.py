@@ -985,17 +985,57 @@ class ProductProjectDimensionTests(unittest.TestCase):
         self.assertEqual(app._product_defect_priority(""), "normal")
 
     def test_unknown_project_falls_back_to_unassigned(self):
-        """项目必须真实存在，否则写进去的是一条永远筛不出来的脏数据。"""
+        """归属必须是用户建过的产品项目，否则写进去的是一条永远筛不出来的脏数据。"""
         temp_dir, database_file = temp_database()
         with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
-            item = self.create(title="伪造项目", project_id="不存在的项目")
-        self.assertEqual(item["project_id"], "")
+            unknown = self.create(title="伪造项目", project_id="999")
+            # 工作台内置项目的 id 也不算数：产品作战室管的是「我在做哪些产品」，
+            # 不是「工作台有哪些功能模块」。
+            builtin = self.create(title="用工作台项目 id", project_id="market")
+        self.assertEqual(unknown["project_id"], "")
+        self.assertEqual(builtin["project_id"], "")
+
+    def test_project_names_are_unique(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            app.create_product_project("量化助手")
+            with self.assertRaises(app.HTTPException) as ctx:
+                app.create_product_project("量化助手")
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_archived_project_leaves_the_active_list(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            project = app.create_product_project("要归档的项目")
+            app.update_product_project(int(project["id"]), status="archived")
+            active = [item["name"] for item in app.list_product_projects()]
+            everything = [item["name"] for item in app.list_product_projects(True)]
+        self.assertNotIn("要归档的项目", active)
+        self.assertIn("要归档的项目", everything)
+
+    def test_dead_project_ids_collapse_into_one_unassigned_bucket(self):
+        """失效 id 各自成桶会显示成一排同名的「未归属」。"""
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                for stale in ("market", "knowledge", "42"):
+                    connection.execute(
+                        "INSERT INTO product_requirements(title, project_id, item_type, status, created_at, updated_at) VALUES (?,?,'requirement','discovering',?,?)",
+                        (f"归属已失效的 {stale}", stale, app.now_iso(), app.now_iso()),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+            rollup = app.product_manager_overview()["projects"]["rollup"]
+        unassigned = [row for row in rollup if row["project_title"] == "未归属"]
+        self.assertEqual(len(unassigned), 1, "失效归属应合并成一个桶")
+        self.assertEqual(unassigned[0]["requirements"], 3)
 
     def test_items_are_filtered_by_project_and_type(self):
         temp_dir, database_file = temp_database()
-        known = {str(item.get("id")) for item in app.load_projects()}
-        project = "market" if "market" in known else sorted(known)[0]
         with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            project = str(app.create_product_project("量化助手")["id"])
             self.create(title="该项目的需求", project_id=project)
             self.create(title="该项目的缺陷", project_id=project, item_type="defect", severity="major")
             self.create(title="别处的需求")
@@ -1008,9 +1048,9 @@ class ProductProjectDimensionTests(unittest.TestCase):
 
     def test_overview_rolls_up_by_project_and_surfaces_blockers_first(self):
         temp_dir, database_file = temp_database()
-        known = {str(item.get("id")) for item in app.load_projects()}
-        quiet, smoking = sorted(known)[0], sorted(known)[1]
         with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            quiet = str(app.create_product_project("安静项目")["id"])
+            smoking = str(app.create_product_project("冒烟项目")["id"])
             self.create(title="安静项目的需求", project_id=quiet)
             self.create(title="冒烟项目的阻塞缺陷", project_id=smoking, item_type="defect", severity="blocker")
             overview = app.product_manager_overview()
@@ -1021,17 +1061,15 @@ class ProductProjectDimensionTests(unittest.TestCase):
         self.assertNotIn("冒烟项目的阻塞缺陷", [item["title"] for item in overview["attention"]["top_priority"]],
                          "缺陷不该混进 RICE 优先级榜")
 
-    def test_defect_work_item_lands_on_the_real_project(self):
-        """工作项要归到实际项目，否则首页和联动矩阵里全堆在 product-manager 一个桶。"""
+    def test_defect_work_item_carries_severity_priority_and_project(self):
         temp_dir, database_file = temp_database()
-        known = {str(item.get("id")) for item in app.load_projects()}
-        project = "knowledge" if "knowledge" in known else sorted(known)[0]
         with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            project = str(app.create_product_project("量化助手")["id"])
             self.create(title="缺陷", project_id=project, item_type="defect", severity="blocker")
             items = app.list_work_items()
         item = next(x for x in items if x["kind"] == "product_defect")
-        self.assertEqual(item["target_project"], project)
         self.assertEqual(item["priority"], "urgent")
+        self.assertEqual(item["metadata"]["project_id"], project)
 
 
 class MemoryHygieneTests(unittest.TestCase):
@@ -1136,3 +1174,30 @@ class MemoryHygieneTests(unittest.TestCase):
         self.assertNotIn("duplicates", report)
         self.assertIn("never_used", report)
         self.assertIn("idle", report)
+
+
+class ProductFormValidationTests(unittest.TestCase):
+    """表单里的两个坑，都会让提交静默失败。"""
+
+    def html(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "product-manager.html").read_text(encoding="utf-8")
+
+    def test_effort_default_value_is_valid_for_its_own_step(self):
+        """min=0.1 step=0.5 让默认值 1 本身非法（合法值是 0.6、1.1…）。
+
+        这是一个早就存在的问题：需求模式下该字段可见，浏览器会弹「请输入有效值」；
+        缺陷模式下它被隐藏，就变成提交没反应、控制台只留一句
+        "An invalid form control ... is not focusable"。
+        """
+        markup = self.html()
+        match = re.search(r'id="requirement-effort"[^>]*', markup)
+        self.assertIsNotNone(match)
+        field = match.group(0)
+        self.assertIn('step="any"', field, "effort 是估算值，不该被固定步进卡住")
+
+    def test_hidden_scoring_fields_are_disabled_not_just_hidden(self):
+        """被 display:none 的控件仍然参与校验，校验不通过时浏览器既无法聚焦也不提示。"""
+        script = (Path(__file__).resolve().parents[1] / "static" / "product-manager.js").read_text(encoding="utf-8")
+        block = script[script.find("function syncRequirementTypeFields"):]
+        block = block[:block.find("\nfunction ")]
+        self.assertIn("disabled = isDefect", block, "隐藏字段必须同时 disabled，否则会静默阻塞提交")
