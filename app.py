@@ -18973,6 +18973,357 @@ async def run_market_screen(criteria: MarketScreenRequest) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 选股风格库
+#
+# 设计前提（很重要，别绕过它）：当前行情源只有价格和成交量，没有 PE、PB、ROE、
+# 营收增速这些基本面字段——app.py 里 market_factors 的注释早就写明了这一点，
+# 并且明确选择「缺就是缺，不靠推断补」。
+#
+# 所以这里不做「价值风格选股」这种拿价格算估值的假动作。每个风格显式声明它需要
+# 哪些数据；数据不够就不出结论，而是告诉你差什么、去哪补。一个只说什么时候管用、
+# 不说什么时候会亏的选股策略是有害的，所以每个风格都必须写失效场景。
+#
+# 刻意不用真人姓名：公开的投资大师方法本来就没有完整规则，把某个在世投资人的
+# 名字挂在自动选股结果上，既不准确，出了亏损也说不清。用风格流派 + 可查证的
+# 量化条件更实在。
+# ---------------------------------------------------------------------------
+MARKET_STYLE_DATA_LABELS = {
+    "price_series": "价格时间序列",
+    "volume_series": "成交量时间序列",
+    "pe": "市盈率",
+    "pb": "市净率",
+    "dividend_yield": "股息率",
+    "revenue_growth": "营收增速",
+    "profit_growth": "利润增速",
+    "roe": "净资产收益率",
+    "debt_ratio": "资产负债率",
+    "market_cap": "总市值",
+}
+
+MARKET_STYLES: list[dict[str, Any]] = [
+    {
+        "id": "trend-following",
+        "name": "趋势跟随",
+        "thesis": "价格的方向比价格的高低更有信息量；上涨中的标的更可能继续上涨，直到趋势被打断。",
+        "requires": ["price_series"],
+        "min_points": 20,
+        "rules": [
+            "样本区间累计涨幅为正，且最近 1/3 区间的涨幅不弱于整体",
+            "最大回撤小于区间涨幅的一半（涨得动也扛得住）",
+            "价格在样本后段位于全区间中位数之上",
+        ],
+        "works_when": "市场有明确主线、资金持续流入某个方向时最有效。",
+        "fails_when": "震荡市里会被反复打脸——趋势策略在横盘中天然亏钱，因为每次信号都是假突破。政策或情绪突变导致的急转弯也躲不掉。",
+    },
+    {
+        "id": "momentum-rotation",
+        "name": "相对强度轮动",
+        "thesis": "比较同一时间窗口内不同标的的相对表现，持有跑得快的、换掉跑得慢的。",
+        "requires": ["price_series"],
+        "min_points": 20,
+        "rules": [
+            "在自选池内按区间涨幅排名，取前 1/3",
+            "剔除波动率排名同样靠前的（涨幅来自剧烈波动而非稳定上行）",
+            "需要至少 5 只标的才有比较意义",
+        ],
+        "works_when": "板块分化明显、有明确领涨方向时。",
+        "fails_when": "普涨或普跌时排名没有区分度；调仓频率高会被交易成本吃掉大部分超额收益，A 股还要额外考虑印花税。",
+    },
+    {
+        "id": "mean-reversion",
+        "name": "超跌回归",
+        "thesis": "短期非理性下跌往往过度，价格会向近期均值回归。",
+        "requires": ["price_series"],
+        "min_points": 20,
+        "rules": [
+            "当前价格显著低于样本均值（偏离超过一个标准差）",
+            "下跌过程中没有出现持续放量（放量下跌通常意味着基本面变化，不是情绪超跌）",
+            "样本区间整体不是单边下行",
+        ],
+        "works_when": "情绪性错杀、无基本面变化的短期回调。",
+        "fails_when": "遇到真实利空时这个策略最危险——它会让你在下跌趋势里不断加仓。所谓「接飞刀」说的就是它。必须配合基本面排查，而当前数据源没有基本面。",
+    },
+    {
+        "id": "volume-breakout",
+        "name": "放量突破",
+        "thesis": "价格创出区间新高且伴随成交量明显放大，说明有增量资金认可这个价格。",
+        "requires": ["price_series", "volume_series"],
+        "min_points": 20,
+        "rules": [
+            "最新价格接近或超过样本区间最高价",
+            "最近成交量高于区间均量的 1.5 倍",
+            "突破前有一段窄幅整理（波动率低于区间中位数）",
+        ],
+        "works_when": "有明确催化剂（业绩、政策、订单）的启动初期。",
+        "fails_when": "放量也可能是出货。单看量价无法区分「资金进场」和「主力派发」，这是这个风格最本质的盲区。缩量新高同样常见，会被这套规则漏掉。",
+    },
+    {
+        "id": "low-volatility",
+        "name": "低波动防守",
+        "thesis": "长期看，波动更小的组合在同等收益下体验更好，回撤更浅也更容易拿得住。",
+        "requires": ["price_series"],
+        "min_points": 20,
+        "rules": [
+            "区间波动率排在自选池后 1/3",
+            "最大回撤小于自选池中位数",
+            "区间收益不为负",
+        ],
+        "works_when": "市场不确定性高、你更在意回撤而不是弹性时。",
+        "fails_when": "牛市里会显著跑输——低波动的代价就是放弃弹性。另外历史低波动不保证未来低波动，黑天鹅面前所有低波动都会失效。",
+    },
+    # ---- 以下风格当前数据源支撑不了，显式列出而不是假装能算 ----
+    {
+        "id": "deep-value",
+        "name": "低估值",
+        "thesis": "用显著低于内在价值的价格买入，安全边际来自估值本身。",
+        "requires": ["pe", "pb", "dividend_yield"],
+        "min_points": 0,
+        "rules": ["市盈率与市净率处于历史分位低位", "股息率高于市场中位数", "排除盈利为负导致的假低估"],
+        "works_when": "市场系统性悲观、优质资产被无差别抛售时。",
+        "fails_when": "便宜可能有便宜的道理——价值陷阱是这个风格的主要亏损来源。行业衰退期的低估值往往会更低。",
+    },
+    {
+        "id": "quality-growth",
+        "name": "质量成长",
+        "thesis": "持续高回报率且能维持增长的生意，时间站在你这边。",
+        "requires": ["revenue_growth", "profit_growth", "roe", "debt_ratio"],
+        "min_points": 0,
+        "rules": ["净资产收益率连续多期高于阈值", "营收与利润同步增长", "负债率不因扩张而失控"],
+        "works_when": "经济扩张期、优质公司能持续兑现增长时。",
+        "fails_when": "好公司未必是好股票——买得太贵时，业绩兑现了股价照样跌。增速一旦放缓，高估值的杀伤力非常大。",
+    },
+]
+
+
+def market_style_catalog() -> list[dict[str, Any]]:
+    """风格目录（含数据依赖），前端据此渲染，不在页面里硬编码规则。"""
+    return [
+        {
+            **{key: value for key, value in style.items() if key != "requires"},
+            "requires": [{"id": item, "label": MARKET_STYLE_DATA_LABELS.get(item, item)} for item in style["requires"]],
+        }
+        for style in MARKET_STYLES
+    ]
+
+
+def _style_series(points: list[dict[str, Any]]) -> tuple[list[float], list[float]]:
+    prices = [float(p["price"]) for p in points if isinstance(p.get("price"), (int, float))]
+    volumes = [float(p["volume"]) for p in points if isinstance(p.get("volume"), (int, float)) and p["volume"] >= 0]
+    return prices, volumes
+
+
+def _style_metrics(prices: list[float], volumes: list[float]) -> dict[str, Any]:
+    """只算价格和成交量能支撑的指标，一个都不外推。"""
+    if len(prices) < 2:
+        return {}
+    start, end = prices[0], prices[-1]
+    peak, trough_after_peak = prices[0], 0.0
+    max_drawdown = 0.0
+    for price in prices:
+        peak = max(peak, price)
+        if peak:
+            max_drawdown = min(max_drawdown, (price - peak) / peak * 100)
+    returns = [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices)) if prices[i - 1]]
+    volatility = round(statistics.pstdev(returns) * 100, 3) if len(returns) >= 2 else None
+    tail = prices[max(0, len(prices) * 2 // 3):]
+    tail_return = round((tail[-1] - tail[0]) / tail[0] * 100, 2) if len(tail) >= 2 and tail[0] else None
+    return {
+        "return_pct": round((end - start) / start * 100, 2) if start else None,
+        "tail_return_pct": tail_return,
+        "max_drawdown_pct": round(max_drawdown, 2),
+        "volatility_pct": volatility,
+        "median_price": round(statistics.median(prices), 4),
+        "mean_price": round(statistics.fmean(prices), 4),
+        "price_stdev": round(statistics.pstdev(prices), 4) if len(prices) >= 2 else None,
+        "last_price": round(end, 4),
+        "max_price": round(max(prices), 4),
+        "volume_ratio": round(volumes[-1] / statistics.fmean(volumes), 2) if len(volumes) >= 3 and statistics.fmean(volumes) else None,
+        "points": len(prices),
+        "volume_points": len(volumes),
+    }
+
+
+def evaluate_market_style(style_id: str, symbol: str, points: list[dict[str, Any]], peer_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """对单个标的评估一个风格。
+
+    返回里一定包含 status：
+      ready        —— 数据够，给出判断
+      insufficient —— 数据不够，明确说差多少
+      unsupported  —— 当前数据源根本没有这个风格需要的字段
+    绝不在 insufficient/unsupported 时给分数或结论——那正是「看着专业实则编造」。
+    """
+    style = next((item for item in MARKET_STYLES if item["id"] == style_id), None)
+    if not style:
+        raise HTTPException(404, f"没有这个选股风格：{style_id}")
+
+    missing_fields = [item for item in style["requires"] if item not in {"price_series", "volume_series"}]
+    if missing_fields:
+        return {
+            "style_id": style_id, "style": style["name"], "symbol": symbol, "status": "unsupported",
+            "reason": "当前行情源只提供价格和成交量",
+            "missing": [{"id": item, "label": MARKET_STYLE_DATA_LABELS.get(item, item)} for item in missing_fields],
+            "next_step": "接入含基本面字段的数据源后，这个风格才能给出结论。",
+        }
+
+    prices, volumes = _style_series(points)
+    needed = int(style["min_points"])
+    if len(prices) < needed:
+        return {
+            "style_id": style_id, "style": style["name"], "symbol": symbol, "status": "insufficient",
+            "reason": f"需要至少 {needed} 个价格样本，当前只有 {len(prices)} 个",
+            "have": len(prices), "need": needed,
+            "next_step": "先让行情自动化按固定间隔采样，攒够样本再看结论。",
+        }
+    if "volume_series" in style["requires"] and len(volumes) < needed:
+        return {
+            "style_id": style_id, "style": style["name"], "symbol": symbol, "status": "insufficient",
+            "reason": f"需要至少 {needed} 个成交量样本，当前只有 {len(volumes)} 个",
+            "have": len(volumes), "need": needed,
+            "next_step": "行情源需要同时记录成交量。",
+        }
+
+    metrics = _style_metrics(prices, volumes)
+    peer = peer_context or {}
+    checks: list[dict[str, Any]] = []
+
+    def check(passed: bool, label: str, detail: str) -> None:
+        checks.append({"passed": bool(passed), "label": label, "detail": detail})
+
+    if style_id == "trend-following":
+        ret, tail, dd = metrics.get("return_pct"), metrics.get("tail_return_pct"), metrics.get("max_drawdown_pct")
+        check(ret is not None and ret > 0, "区间上行", f"区间涨幅 {ret}%")
+        # 按「每期涨幅」比较，而不是直接拿后段百分比和全段的 1/3 比。
+        # 后段基数更高，同样的斜率算出来的百分比天然更小——那样会系统性
+        # 冤枉稳定上涨的标的，而这正是趋势跟随最该选中的形态。
+        points_total = max(1, int(metrics.get("points") or 1) - 1)
+        points_tail = max(1, points_total // 3)
+        pace_total = (ret / points_total) if ret is not None else None
+        pace_tail = (tail / points_tail) if tail is not None else None
+        check(
+            pace_tail is not None and pace_total is not None and pace_tail >= pace_total * 0.5,
+            "后段未失速",
+            f"后段每期 {round(pace_tail, 3) if pace_tail is not None else '—'}% / 全段每期 {round(pace_total, 3) if pace_total is not None else '—'}%",
+        )
+        check(dd is not None and ret is not None and ret > 0 and abs(dd) < max(ret / 2, 1e-9), "回撤可控", f"最大回撤 {dd}%")
+        check(metrics.get("last_price", 0) >= metrics.get("median_price", 0), "价格居于中位数之上", f"最新 {metrics.get('last_price')} / 中位 {metrics.get('median_price')}")
+    elif style_id == "momentum-rotation":
+        rank, total = peer.get("return_rank"), peer.get("peer_count", 0)
+        check(total >= 5, "样本池足够比较", f"自选池 {total} 只（至少 5 只）")
+        check(rank is not None and total and rank <= max(1, total // 3), "涨幅排名靠前", f"排名 {rank}/{total}")
+        vol_rank = peer.get("volatility_rank")
+        check(vol_rank is None or (total and vol_rank > total // 3), "涨幅不是靠剧烈波动", f"波动率排名 {vol_rank}/{total}")
+    elif style_id == "mean-reversion":
+        last, mean, sd = metrics.get("last_price"), metrics.get("mean_price"), metrics.get("price_stdev")
+        deviated = sd is not None and sd > 0 and last is not None and mean is not None and (mean - last) > sd
+        check(deviated, "显著低于均值", f"最新 {last} / 均值 {mean} / 标准差 {sd}")
+        check((metrics.get("volume_ratio") or 0) < 1.5 if metrics.get("volume_ratio") is not None else False,
+              "下跌未持续放量", f"最新量比 {metrics.get('volume_ratio')}")
+        check((metrics.get("return_pct") or 0) > -30, "并非单边崩塌", f"区间涨幅 {metrics.get('return_pct')}%")
+    elif style_id == "volume-breakout":
+        last, top = metrics.get("last_price"), metrics.get("max_price")
+        check(last is not None and top and last >= top * 0.98, "接近区间新高", f"最新 {last} / 区间最高 {top}")
+        check((metrics.get("volume_ratio") or 0) >= 1.5, "成交显著放大", f"量比 {metrics.get('volume_ratio')}")
+        check(metrics.get("volatility_pct") is not None, "有波动率样本", f"波动率 {metrics.get('volatility_pct')}%")
+    elif style_id == "low-volatility":
+        vol_rank, total = peer.get("volatility_rank"), peer.get("peer_count", 0)
+        check(total >= 3, "样本池足够比较", f"自选池 {total} 只")
+        check(vol_rank is not None and total and vol_rank > total * 2 // 3, "波动排名靠后", f"波动率排名 {vol_rank}/{total}")
+        check((metrics.get("return_pct") or 0) >= 0, "区间收益不为负", f"区间涨幅 {metrics.get('return_pct')}%")
+
+    passed = sum(1 for item in checks if item["passed"])
+    return {
+        "style_id": style_id, "style": style["name"], "symbol": symbol, "status": "ready",
+        "hit": passed == len(checks) and bool(checks),
+        "score": round(passed / len(checks), 2) if checks else 0.0,
+        "checks": checks, "metrics": metrics,
+        "works_when": style["works_when"], "fails_when": style["fails_when"],
+    }
+
+
+def run_market_style_screen(style_id: str, symbols: list[str] | None = None) -> dict[str, Any]:
+    """一键按风格筛自选池。
+
+    数据不够时不给排名——宁可返回一份「差什么」的清单，也不返回一个看起来
+    很专业、实际建立在 3 个样本点上的推荐。
+    """
+    style = next((item for item in MARKET_STYLES if item["id"] == style_id), None)
+    if not style:
+        raise HTTPException(404, f"没有这个选股风格：{style_id}")
+    watchlist = [str(item.get("symbol") or "").strip() for item in load_market_watchlist()]
+    targets = [item for item in (symbols or watchlist) if item]
+    if not targets:
+        raise HTTPException(400, "自选池是空的，先添加要观察的标的")
+
+    snapshot = load_market_snapshot()
+    history = list_market_history(limit=400)
+
+    # 先算全池指标，才能做相对排名（轮动和低波动都依赖同池比较）。
+    per_symbol: dict[str, dict[str, Any]] = {}
+    for symbol in targets:
+        points = _market_history_points(symbol, snapshot, history)
+        prices, volumes = _style_series(points)
+        per_symbol[symbol] = {"points": points, "metrics": _style_metrics(prices, volumes) if len(prices) >= 2 else {}}
+
+    comparable = [item for item in targets if per_symbol[item]["metrics"].get("return_pct") is not None]
+    by_return = sorted(comparable, key=lambda item: per_symbol[item]["metrics"]["return_pct"], reverse=True)
+    by_volatility = sorted(
+        [item for item in comparable if per_symbol[item]["metrics"].get("volatility_pct") is not None],
+        key=lambda item: per_symbol[item]["metrics"]["volatility_pct"],
+    )
+
+    results = []
+    for symbol in targets:
+        peer = {
+            "peer_count": len(comparable),
+            "return_rank": by_return.index(symbol) + 1 if symbol in by_return else None,
+            "volatility_rank": by_volatility.index(symbol) + 1 if symbol in by_volatility else None,
+        }
+        results.append(evaluate_market_style(style_id, symbol, per_symbol[symbol]["points"], peer))
+
+    ready = [item for item in results if item["status"] == "ready"]
+    picks = sorted([item for item in ready if item.get("hit")], key=lambda item: item.get("score", 0), reverse=True)
+    blocked = [item for item in results if item["status"] != "ready"]
+
+    return {
+        "style": {key: value for key, value in style.items() if key != "requires"},
+        "picks": picks,
+        "evaluated": results,
+        "blocked": blocked,
+        "data_ready": not blocked,
+        "summary": (
+            f"{len(picks)} 只命中「{style['name']}」全部条件"
+            if ready and picks else
+            (f"自选池 {len(targets)} 只，没有标的同时满足全部条件" if ready else
+             f"数据不足，{len(blocked)} 只标的无法评估——先补齐数据再看结论")
+        ),
+        "disclaimer": (
+            "这是基于本地历史快照的规则匹配，不是投资建议，也不会下单。"
+            "每个风格的失效场景写在 fails_when 里，用之前请先读它。"
+        ),
+    }
+
+
+@app.get("/api/market/styles")
+def get_market_styles() -> dict[str, Any]:
+    """选股风格目录：每个风格声明它需要什么数据、什么时候管用、什么时候会亏。"""
+    return {
+        "styles": market_style_catalog(),
+        "available_fields": ["price_series", "volume_series"],
+        "note": "当前行情源只提供价格与成交量；依赖基本面的风格会明确标为数据不支持，而不是用价格硬凑。",
+    }
+
+
+class MarketStyleScreenRequest(BaseModel):
+    style_id: str = Field(min_length=1, max_length=60)
+    symbols: list[str] = Field(default_factory=list, max_length=60)
+
+
+@app.post("/api/market/styles/screen")
+def post_market_style_screen(request: MarketStyleScreenRequest) -> dict[str, Any]:
+    return run_market_style_screen(request.style_id, [item.strip() for item in request.symbols if item.strip()])
+
+
 @app.post("/api/market/screen")
 async def post_market_screen(request: MarketScreenRequest) -> dict[str, Any]:
     try:
