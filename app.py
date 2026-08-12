@@ -27201,6 +27201,171 @@ async def post_market_ai_scan(request: dict[str, Any]) -> dict[str, Any]:
 
 BROWSER_SHOT_DIR = OUTPUTS_DIR / "browser-shots"
 
+# ---------------------------------------------------------------------------
+# AI 浏览器：长驻受控浏览器会话
+#
+# 这是整个工作台里权限最大的一块——一个跑在你服务器上、由 LLM 决定下一步点哪里
+# 的真实浏览器。所以约束写在最前面，而不是散在各处：
+#   1. 每一次导航都必须过 valid_research_url（拒绝本机、私网、云元数据地址）。
+#      抓取那边只在入口校验一次，这里每一步都要校验——AI 可能自己决定跳转。
+#   2. 绝不允许访问工作台自身的地址，否则等于把内部 API 交给模型。
+#   3. 会话数、步数、空闲时间都有硬上限，超时直接 kill 整个进程组。
+#   4. 上传文件只能来自专用目录，模型不能指定服务器上的任意路径。
+# ---------------------------------------------------------------------------
+BROWSER_SESSION_DIR = DATA_DIR / "browser-sessions"
+BROWSER_MAX_SESSIONS = _int_env("WORKBENCH_BROWSER_MAX_SESSIONS", 2, minimum=1, maximum=6)
+BROWSER_IDLE_SECONDS = _int_env("WORKBENCH_BROWSER_IDLE_SECONDS", 900, minimum=60, maximum=7200)
+BROWSER_MAX_AGENT_STEPS = _int_env("WORKBENCH_BROWSER_MAX_AGENT_STEPS", 12, minimum=1, maximum=40)
+BROWSER_ACTIONS = {"goto", "click", "type", "scroll", "back", "snapshot", "upload"}
+
+_browser_sessions: dict[str, dict[str, Any]] = {}
+_browser_lock = threading.Lock()
+
+
+def _browser_blocked_reason(url: str) -> str:
+    """返回空串表示允许；否则是拒绝理由。"""
+    candidate = str(url or "").strip()
+    if not candidate:
+        return "缺少地址"
+    if not valid_research_url(candidate):
+        return "只允许访问公网 http/https 地址（已拒绝本机、私网和云元数据地址）"
+    host = (urlparse(candidate).hostname or "").lower()
+    # 工作台自身绝不能成为目标：那等于把内部 API 交给模型去点。
+    own_hosts = {"workbench.example.dev", "127.0.0.1", "localhost"}
+    configured = str(os.getenv("WORKBENCH_PUBLIC_HOST", "")).strip().lower()
+    if configured:
+        own_hosts.add(configured)
+    if host in own_hosts:
+        return "不允许让浏览器访问工作台自身"
+    return ""
+
+
+def _browser_reap_idle() -> None:
+    """回收空闲会话。浏览器是这台 2GB 机器上最贵的东西，绝不能忘了关。"""
+    now = time.time()
+    for session_id, session in list(_browser_sessions.items()):
+        if now - float(session.get("touched_at") or 0) > BROWSER_IDLE_SECONDS:
+            log.info("回收空闲浏览器会话 %s", session_id)
+            _browser_close(session_id)
+
+
+def _browser_close(session_id: str) -> bool:
+    session = _browser_sessions.pop(session_id, None)
+    if not session:
+        return False
+    process = session.get("process")
+    if process is None:
+        return True
+    try:
+        process.stdin.write(json.dumps({"action": "close"}) + "\n")
+        process.stdin.flush()
+        process.wait(timeout=8)
+    except Exception:
+        log.warning("浏览器会话 %s 未能优雅退出，强制终止", session_id)
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except Exception:
+            log.debug("强制终止浏览器会话失败", exc_info=True)
+    return True
+
+
+def browser_session_start() -> dict[str, Any]:
+    _browser_reap_idle()
+    with _browser_lock:
+        if len(_browser_sessions) >= BROWSER_MAX_SESSIONS:
+            raise HTTPException(429, f"同时最多 {BROWSER_MAX_SESSIONS} 个浏览器会话，请先关闭一个")
+        worker = ROOT / "browser_session_worker.py"
+        if not worker.is_file():
+            raise HTTPException(503, "缺少 browser_session_worker.py")
+        session_id = uuid.uuid4().hex[:12]
+        try:
+            process = subprocess.Popen(  # noqa: S603 - 固定脚本，无用户输入拼接
+                [sys.executable, str(worker)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1, start_new_session=True,
+            )
+        except OSError as exc:
+            raise HTTPException(503, f"无法启动浏览器：{exc}") from exc
+        ready_line = process.stdout.readline()
+        try:
+            ready = json.loads(ready_line or "{}")
+        except json.JSONDecodeError:
+            ready = {}
+        if not ready.get("ready"):
+            detail = (process.stderr.readline() or "").strip() or "浏览器未能启动"
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except Exception:
+                log.debug("清理失败的浏览器进程时出错", exc_info=True)
+            raise HTTPException(503, f"浏览器启动失败：{clip(detail, 200)}")
+        _browser_sessions[session_id] = {
+            "id": session_id, "process": process, "created_at": now_iso(),
+            "touched_at": time.time(), "steps": 0, "url": "", "history": [],
+        }
+        log.info("浏览器会话 %s 已启动", session_id)
+        return {"session_id": session_id, "created_at": _browser_sessions[session_id]["created_at"]}
+
+
+def browser_session_act(session_id: str, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = dict(payload or {})
+    if action not in BROWSER_ACTIONS:
+        raise HTTPException(400, f"不支持的动作：{action}")
+    session = _browser_sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "浏览器会话不存在或已回收")
+    if action == "goto":
+        reason = _browser_blocked_reason(str(payload.get("url") or ""))
+        if reason:
+            raise HTTPException(400, reason)
+    if action == "upload":
+        # 只允许上传到会话专属目录里的文件，模型不能点名服务器上的任意路径。
+        safe_dir = (BROWSER_SESSION_DIR / session_id).resolve()
+        resolved: list[str] = []
+        for raw in (payload.get("paths") or []):
+            candidate = (safe_dir / Path(str(raw)).name).resolve()
+            if not str(candidate).startswith(str(safe_dir)) or not candidate.is_file():
+                raise HTTPException(400, f"找不到可上传的文件：{Path(str(raw)).name}")
+            resolved.append(str(candidate))
+        if not resolved:
+            raise HTTPException(400, "请先上传文件到本次会话")
+        payload["paths"] = resolved
+
+    process = session["process"]
+    command = {"action": action, **payload}
+    try:
+        process.stdin.write(json.dumps(command, ensure_ascii=False) + "\n")
+        process.stdin.flush()
+        line = process.stdout.readline()
+    except Exception as exc:
+        _browser_close(session_id)
+        raise HTTPException(503, f"浏览器会话已中断：{clip(str(exc), 160)}") from exc
+    if not line:
+        _browser_close(session_id)
+        raise HTTPException(503, "浏览器会话意外退出")
+    try:
+        result = json.loads(line)
+    except json.JSONDecodeError:
+        raise HTTPException(502, "浏览器返回了无法解析的结果")
+
+    session["touched_at"] = time.time()
+    session["steps"] = int(session["steps"]) + 1
+    if result.get("url"):
+        session["url"] = result["url"]
+        session["history"] = [*session["history"][-19:], {"action": action, "url": result["url"], "at": now_iso()}]
+    result["session_id"] = session_id
+    result["steps"] = session["steps"]
+    return result
+
+
+def browser_session_list() -> list[dict[str, Any]]:
+    _browser_reap_idle()
+    return [
+        {"id": item["id"], "url": item.get("url") or "", "steps": item.get("steps") or 0,
+         "created_at": item.get("created_at"), "idle_seconds": int(time.time() - float(item.get("touched_at") or 0))}
+        for item in _browser_sessions.values()
+    ]
+
+
 def _render_page_shot_sync(url: str, *, width: int = 1280, height: int = 900) -> tuple[bytes, str]:
     """用独立子进程 + 服务器 Chromium 渲染目标网页并截图。
 
@@ -27239,6 +27404,73 @@ def _render_page_shot_sync(url: str, *, width: int = 1280, height: int = 900) ->
         return data, ""
     except Exception as exc:
         return b"", f"渲染失败：{clip(str(exc), 300)}"
+
+
+class BrowserActRequest(BaseModel):
+    action: str = Field(min_length=1, max_length=20)
+    url: str = Field(default="", max_length=2_000)
+    index: int = Field(default=-1, ge=-1, le=500)
+    text: str = Field(default="", max_length=4_000)
+    submit: bool = False
+    delta: int = Field(default=600, ge=-5_000, le=5_000)
+    paths: list[str] = Field(default_factory=list, max_length=10)
+    screenshot: bool = True
+
+
+@app.get("/api/browser/sessions")
+def get_browser_sessions() -> dict[str, Any]:
+    return {
+        "sessions": browser_session_list(),
+        "limits": {
+            "max_sessions": BROWSER_MAX_SESSIONS,
+            "idle_seconds": BROWSER_IDLE_SECONDS,
+            "max_agent_steps": BROWSER_MAX_AGENT_STEPS,
+        },
+        "policy": "浏览器跑在服务器上，每一步导航都会校验目标地址；拒绝本机、私网、云元数据以及工作台自身。",
+    }
+
+
+@app.post("/api/browser/sessions")
+def post_browser_session() -> dict[str, Any]:
+    return {"ok": True, **browser_session_start()}
+
+
+@app.post("/api/browser/sessions/{session_id}/act")
+def post_browser_act(session_id: str, request: BrowserActRequest) -> dict[str, Any]:
+    payload = request.model_dump(exclude={"action"})
+    return browser_session_act(session_id, request.action, payload)
+
+
+@app.post("/api/browser/sessions/{session_id}/files")
+async def post_browser_session_file(session_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    """把本地文件放进会话专属目录，之后才能被 upload 动作送进页面的文件框。
+
+    刻意不接受任意服务器路径：模型只能引用你显式上传过的文件名。
+    """
+    if session_id not in _browser_sessions:
+        raise HTTPException(404, "浏览器会话不存在或已回收")
+    safe_name = Path(str(file.filename or "upload.bin")).name
+    if not safe_name or safe_name.startswith("."):
+        raise HTTPException(400, "文件名不合法")
+    target_dir = BROWSER_SESSION_DIR / session_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    destination = target_dir / safe_name
+    size = 0
+    with destination.open("wb") as handle:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > 25 * 1024 * 1024:
+                handle.close()
+                destination.unlink(missing_ok=True)
+                raise HTTPException(413, "单个文件最大 25MB")
+            handle.write(chunk)
+    return {"ok": True, "name": safe_name, "bytes": size,
+            "files": sorted(item.name for item in target_dir.iterdir() if item.is_file())}
+
+
+@app.delete("/api/browser/sessions/{session_id}")
+def delete_browser_session(session_id: str) -> dict[str, Any]:
+    return {"ok": _browser_close(session_id)}
 
 
 @app.post("/api/browser/render")
