@@ -56,12 +56,19 @@
   <script src="/static/request.js?v=0.3.154"></script>
   <script src="/static/project.js?v=0.3.154"></script>
   <script>
+    // 整段包进 IIFE：这段脚本原来在全局作用域里 const 了一个 escapeHtml，
+    // 而先加载的 project.js 已经有同名的全局函数声明。全局词法声明和已存在的
+    // 全局函数同名会直接抛 SyntaxError，整个 <script> 一行都不执行——表现是
+    // 这个页面永远停在「读取中…」，所有按钮都没反应，而且报错只在控制台里。
+    // 包起来之后这里所有顶层声明都不再进全局作用域，以后加共享脚本也不会撞。
+    (() => {
     const $ = (selector) => document.querySelector(selector);
     const escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
     function readinessCard(label, ok, detail) { return `<article class="cloud-check ${ok ? "ok" : "warn"}"><strong>${ok ? "✓" : "!"} ${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></article>`; }
     async function loadCloudStatus() { const host = $("#cloud-workspaces"), readiness = $("#cloud-readiness"); const [cloudResult, feishuResult] = await Promise.allSettled([window.requestJson("/api/cloud-dev"), window.requestJson("/api/feishu")]); const body = cloudResult.status === "fulfilled" ? cloudResult.value : null; const feishu = feishuResult.status === "fulfilled" ? feishuResult.value : null; const rows = body?.workspaces || []; const workspaceReady = rows.length > 0; const appReady = Boolean(feishu?.configured); const callbackReady = Boolean(feishu?.verify_token_set || feishu?.encrypt_key_set); readiness.innerHTML = [readinessCard("云开发工作区", workspaceReady, workspaceReady ? `${rows.length} 个白名单工作区可用` : "未配置 WORKBENCH_CLOUD_WORKSPACES，状态/测试不会执行"), readinessCard("飞书应用凭据", appReady, appReady ? "App ID / App Secret 已配置" : "未配置 WORKBENCH_FEISHU_APP_ID/SECRET（也支持无前缀兼容名）"), readinessCard("飞书回调校验", callbackReady, callbackReady ? "VERIFY_TOKEN 或 ENCRYPT_KEY 已配置" : "未配置 WORKBENCH_FEISHU_VERIFY_TOKEN/ENCRYPT_KEY，回调会拒绝")].join(""); if (body) { host.innerHTML = rows.length ? rows.map((item) => `<article class="cloud-workspace-item"><strong>${escapeHtml(item.project || "未命名")}</strong><small>标记：${escapeHtml((item.markers || []).join("、") || "无")} · 可用动作：${escapeHtml((item.available_actions || []).join("、"))}</small></article>`).join("") : '<span class="cloud-muted">服务器尚未配置工作区。请设置 WORKBENCH_CLOUD_WORKSPACES。</span>'; } else { host.textContent = cloudResult.reason?.message || "云开发状态读取失败。"; } }
     $("#cloud-form").addEventListener("submit", async (event) => { event.preventDefault(); const status = $("#cloud-status"), output = $("#cloud-output"), button = event.submitter || $("#cloud-form button[type=submit]"); button.disabled = true; status.textContent = "处理中…"; try { const body = await window.requestJson("/api/cloud-dev", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:$("#cloud-command").value}) }); const result = body.result || {}; status.textContent = body.status === "approval_required" ? "已进入审批" : (result.status || body.status || "完成"); output.textContent = body.status === "approval_required" ? `审批编号：${body.approval?.id || "—"}\n构建不会在审批前执行。` : JSON.stringify(result, null, 2); } catch (error) { status.textContent = "失败"; output.textContent = error.message; } finally { button.disabled = false; } });
     $("#cloud-refresh").addEventListener("click", loadCloudStatus); loadCloudStatus();
+    })();
   </script>
 </body>
 </html>

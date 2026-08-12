@@ -572,6 +572,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
    而不是跳到 /projects/knowledge 再想办法找回来。 */
 .kb-drawer { position: fixed; right: 0; bottom: 84px; z-index: 55; display: flex; align-items: flex-end; gap: 0; pointer-events: none; }
 .kb-drawer > * { pointer-events: auto; }
+/* 项目 Agent 面板打开时把知识库入口收起来。
+   两者都钉在右下角：知识库 right:0 bottom:84 z-index 55，Agent 面板
+   right:24 bottom:76 z-index 19。实测 1280×720 下知识库按钮正好压在
+   「发送」按钮上，而且 z-index 更高——点发送点到的是知识库。
+   Agent 面板打开时本来就锁了整页滚动，按模态处理，隐藏其他悬浮入口最干净；
+   位移躲让在窄屏上会把按钮推出视口，反而更糟。 */
+body[data-agent-panel-open] .kb-drawer { opacity: 0; pointer-events: none; visibility: hidden; }
 .kb-toggle { display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px 9px 10px; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-right: none; border-radius: 10px 0 0 10px; box-shadow: -4px 4px 16px rgba(25,44,72,.08); font-size: 12px; cursor: pointer; }
 .kb-toggle:hover { color: var(--ink); border-color: var(--accent); }
 .kb-toggle-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: var(--accent-soft, #edf4ff); color: var(--accent); font: 700 10px/1 ui-monospace, monospace; }

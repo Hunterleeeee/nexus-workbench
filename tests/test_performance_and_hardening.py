@@ -1487,6 +1487,113 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class FloatingSurfaceCollisionTests(unittest.TestCase):
+    """两个悬浮入口都钉在右下角，谁也不知道对方存在。
+
+    知识库抽屉 right:0 bottom:84 z-index 55，项目 Agent 面板
+    right:24 bottom:76 z-index 19。用 Chromium 量过：1280×720 下知识库按钮
+    的矩形正好盖在「发送」按钮上，而且 z-index 更高——elementFromPoint 打在
+    发送按钮中心，拿到的是知识库。也就是发送按钮点不动（只有 Enter 还能发）。
+    """
+
+    def styles(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "project.css").read_text(encoding="utf-8")
+
+    def test_knowledge_drawer_yields_while_the_agent_panel_is_open(self):
+        styles = self.styles()
+        self.assertIn("body[data-agent-panel-open] .kb-drawer", styles)
+        rule = styles[styles.find("body[data-agent-panel-open] .kb-drawer"):]
+        rule = rule[:rule.find("}")]
+        self.assertIn("pointer-events: none", rule, "只做透明还会挡点击")
+        self.assertIn("visibility: hidden", rule)
+
+    def test_the_open_state_marker_the_rule_depends_on_still_exists(self):
+        """这条规则挂在 body 上的 data 标记上，标记没了规则就静默失效。"""
+        script = (Path(__file__).resolve().parents[1] / "static" / "project.js").read_text(encoding="utf-8")
+        self.assertIn("document.body.dataset.agentPanelOpen", script)
+        agent_css = (Path(__file__).resolve().parents[1] / "static" / "project-agent.css").read_text(encoding="utf-8")
+        self.assertIn("body[data-agent-panel-open]", agent_css)
+
+
+class InlineScriptScopeTests(unittest.TestCase):
+    """页面内联脚本和共享脚本在同一个全局作用域里，重名就是整段不执行。
+
+    /projects/cloud-dev 的内联脚本顶层 `const escapeHtml = ...`，而先加载的
+    project.js 已经有同名全局函数声明。全局词法声明撞上已存在的全局函数会直接
+    抛 SyntaxError，整个 <script> 一行都不跑——页面永远停在「读取中…」，
+    所有按钮无反应，报错只出现在控制台。Playwright 实测：
+    pageerror = "Identifier 'escapeHtml' has already been declared"，
+    #cloud-workspaces 文本恒为「读取中…」。
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def shared_globals(self):
+        """project.js 顶层声明的名字——内联脚本不能在全局再声明一次。"""
+        source = (self.ROOT / "static" / "project.js").read_text(encoding="utf-8")
+        names = set()
+        for line in source.splitlines():
+            match = re.match(r"^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", line)
+            if match:
+                names.add(match.group(1))
+            match = re.match(r"^function\s+([A-Za-z_$][\w$]*)\s*\(", line)
+            if match:
+                names.add(match.group(1))
+        return names
+
+    @staticmethod
+    def inline_scripts(markup):
+        return re.findall(r"<script(?![^>]*\ssrc=)[^>]*>(.*?)</script>", markup, flags=re.S)
+
+    def test_no_page_redeclares_a_name_that_project_js_owns(self):
+        shared = self.shared_globals()
+        self.assertIn("escapeHtml", shared, "探测顶层声明的正则失效了")
+        offenders = []
+        for path in sorted([*(self.ROOT / "static").glob("*.html"), *(self.ROOT / "projects").glob("*.html")]):
+            markup = path.read_text(encoding="utf-8")
+            if "project.js" not in markup:
+                continue
+            for block in self.inline_scripts(markup):
+                # 包进 IIFE 的块里声明什么都不会进全局作用域，不算冲突。
+                if "(() => {" in block or "(function" in block:
+                    continue
+                for name in shared:
+                    if re.search(rf"(?:const|let)\s+{re.escape(name)}\s*=", block):
+                        offenders.append(f"{path.name}:{name}")
+        self.assertEqual(sorted(set(offenders)), [], "内联脚本在全局重复声明了共享脚本的名字，整段脚本会不执行")
+
+    def test_the_cloud_dev_inline_script_is_wrapped(self):
+        markup = (self.ROOT / "static" / "cloud-dev.html").read_text(encoding="utf-8")
+        body = markup[markup.rfind("<script>"):]
+        self.assertIn("(() => {", body, "内联脚本没有包进 IIFE，顶层声明仍会进全局作用域")
+        self.assertIn("})();", body)
+
+
+class ProjectSourceFallbackTests(unittest.TestCase):
+    """projects.json 里配的是开发机上的绝对路径。"""
+
+    def test_the_configured_path_is_machine_specific(self):
+        config = json.loads((Path(__file__).resolve().parents[1] / "projects.json").read_text(encoding="utf-8"))
+        items = config if isinstance(config, list) else config.get("projects", [])
+        entry = next(item for item in items if item.get("id") == "cid-dashboard")
+        self.assertTrue(entry["source_path"].startswith("/Users/"), "如果哪天改成相对路径，这个兜底就可以拆了")
+
+    def test_the_route_falls_back_to_the_copy_inside_this_repo(self):
+        """换一台机器那个绝对路径就不存在，iframe 404、整页空白，
+        而看板本身就是这一页的主体内容。"""
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find("async def cid_dashboard_source("):]
+        body = body[:body.find("\n@app.")]
+        self.assertIn('ROOT / "projects"', body)
+        self.assertIn("is_relative_to(projects_root)", body, "兜底不能顺手放宽读文件的边界")
+
+    def test_the_fallback_still_refuses_a_path_outside_the_projects_folder(self):
+        client = TestClient(app.app)
+        with patch.object(app, "load_projects", lambda: [{"id": "cid-dashboard", "source_env": "", "source_path": "/nowhere/../../etc/passwd"}]):
+            response = client.get("/projects/cid-dashboard-source")
+        self.assertEqual(response.status_code, 404)
+
+
 class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
     """同一个 Agent，换个入口就少了半条腿。
 

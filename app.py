@@ -16191,7 +16191,18 @@ async def cid_dashboard_source() -> FileResponse:
     source_path = os.getenv(project.get("source_env", ""), project.get("source_path", ""))
     source = Path(source_path)
     if not source.is_file():
-        raise HTTPException(404, f"项目文件不存在：{source}")
+        # projects.json 里配的是开发机上的绝对路径（/Users/…）。换一台机器
+        # ——服务器、另一个 checkout、CI——这个路径都不存在，iframe 直接 404，
+        # 而看板是整页的主体内容，页面等于空白。除非有人记得在 .env 里设
+        # WORKBENCH_CID_DASHBOARD_FILE，否则没人会想到去查这个。
+        # 兜底回落到本仓库内的同名文件；仍然强制解析后必须落在 projects/ 目录
+        # 之内，不因为兜底而放宽读文件的边界。
+        fallback = (ROOT / "projects" / Path(source_path or "").name).resolve()
+        projects_root = (ROOT / "projects").resolve()
+        if source_path and fallback.is_file() and fallback.is_relative_to(projects_root):
+            source = fallback
+        else:
+            raise HTTPException(404, f"项目文件不存在：{source}")
     return FileResponse(source, media_type="text/html")
 
 
