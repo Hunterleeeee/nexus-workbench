@@ -27357,6 +27357,139 @@ def browser_session_act(session_id: str, action: str, payload: dict[str, Any] | 
     return result
 
 
+BROWSER_AGENT_SYSTEM = """你在操作一个真实的浏览器来完成用户交给你的任务。
+
+每一轮你会收到：当前网址、页面标题、页面正文（截断）、以及一份带序号的可交互元素清单。
+你只能通过序号操作，不能自己写选择器。
+
+只返回一个 JSON 对象，不要有别的文字：
+  {"thought": "一句话说明你为什么这么做", "action": "goto|click|type|scroll|back|finish",
+   "url": "goto 时填", "index": 序号, "text": "type 时填", "submit": true/false,
+   "delta": 滚动像素, "answer": "finish 时填最终回答"}
+
+硬性要求：
+1. 序号来自本轮清单，上一轮的序号已经失效——页面变了就重新看清单。
+2. 每次只做一个动作。不确定页面状态时先 scroll 看看，不要瞎点。
+3. 拿到足够信息就 finish，不要为了多点几下而继续。答案必须基于页面上真实出现过的内容。
+4. 遇到登录墙、验证码、付费墙就 finish 并如实说明卡在哪里，不要反复尝试。
+5. 不要点击"删除""购买""提交订单"这类会产生真实后果的按钮，除非用户明确要求。
+"""
+
+
+def _browser_agent_observation(result: dict[str, Any]) -> str:
+    """把一次快照压成模型能读的观察文本。截图不进提示词——太贵，元素清单足够定位。"""
+    elements = result.get("elements") or []
+    lines = []
+    for item in elements[:60]:
+        kind = item.get("tag", "")
+        if item.get("file_input"):
+            kind = "文件上传框"
+        elif item.get("editable"):
+            kind = "输入框"
+        elif kind == "a":
+            kind = "链接"
+        elif kind == "button":
+            kind = "按钮"
+        label = str(item.get("label") or "").strip() or "（无文字）"
+        lines.append(f"[{item.get('index')}] {kind}：{label}")
+    scroll = result.get("scroll") or {}
+    return (
+        f"当前网址：{result.get('url', '')}\n"
+        f"页面标题：{result.get('title', '')}\n"
+        f"滚动位置：{scroll.get('y', 0)} / {scroll.get('height', 0)}\n\n"
+        f"可操作元素（按序号）：\n" + ("\n".join(lines) or "（本屏没有可操作元素，可以 scroll）") + "\n\n"
+        f"页面正文：\n{clip_for_llm(str(result.get('text') or ''), 5000)}"
+    )
+
+
+async def browser_agent_run(session_id: str, goal: str, max_steps: int = 0) -> dict[str, Any]:
+    """给一个目标，让模型自己在页面上连续操作直到完成或用尽步数。
+
+    每一步都记录：模型的想法、执行的动作、动作结果。用户要能看懂它为什么这么点，
+    否则这就是个黑盒——出了问题既不知道哪一步错了，也不知道该不该信它的结论。
+    """
+    if not llm_settings().get("configured"):
+        raise HTTPException(503, "请先配置全局 LLM，才能让 AI 操作浏览器")
+    session = _browser_sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "浏览器会话不存在或已回收")
+    clean_goal = str(goal or "").strip()
+    if not clean_goal:
+        raise HTTPException(400, "请说明你要 AI 做什么")
+    budget = max(1, min(int(max_steps or BROWSER_MAX_AGENT_STEPS), BROWSER_MAX_AGENT_STEPS))
+
+    observation = _browser_agent_observation(browser_session_act(session_id, "snapshot", {"screenshot": False}))
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": BROWSER_AGENT_SYSTEM},
+        {"role": "user", "content": f"任务：{clean_goal}\n\n{observation}"},
+    ]
+    steps: list[dict[str, Any]] = []
+    answer = ""
+    stop_reason = "step_limit"
+
+    for _ in range(budget):
+        try:
+            raw = await call_llm(messages, max_tokens=900, temperature=0.1, purpose="browser_agent")
+        except Exception as exc:
+            stop_reason = "llm_failed"
+            steps.append({"error": f"模型调用失败：{clip(str(exc), 200)}"})
+            break
+        decision = decode_json_value(extract_json_block(raw), {}) or {}
+        if not isinstance(decision, dict) or not decision.get("action"):
+            stop_reason = "bad_decision"
+            steps.append({"error": "模型没有给出可执行的动作", "raw": clip(raw, 400)})
+            break
+        action = str(decision.get("action") or "")
+        thought = clip(str(decision.get("thought") or ""), 300)
+
+        if action == "finish":
+            answer = clip(str(decision.get("answer") or ""), 6000)
+            stop_reason = "finished"
+            steps.append({"thought": thought, "action": "finish", "ok": True})
+            break
+        if action not in BROWSER_ACTIONS:
+            steps.append({"thought": thought, "action": action, "ok": False, "error": f"不支持的动作：{action}"})
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user", "content": f"动作 {action} 不被允许，只能用 goto/click/type/scroll/back/finish。"})
+            continue
+
+        payload = {key: decision[key] for key in ("url", "index", "text", "submit", "delta") if key in decision}
+        try:
+            result = browser_session_act(session_id, action, payload)
+        except HTTPException as exc:
+            # 被安全策略拦下时，把理由告诉模型让它换路子，而不是直接中断整个任务。
+            steps.append({"thought": thought, "action": action, "ok": False, "error": str(exc.detail)})
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user", "content": f"这一步被拒绝了：{exc.detail}\n请换一个做法。"})
+            continue
+
+        ok = bool(result.get("ok"))
+        steps.append({
+            "thought": thought, "action": action, "ok": ok,
+            "url": result.get("url", ""), "title": result.get("title", ""),
+            "error": clip(str(result.get("error") or ""), 300),
+        })
+        observation = _browser_agent_observation(result) if ok else f"上一步失败：{result.get('error')}"
+        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "user", "content": observation})
+        # 只保留最近几轮观察，否则上下文会被整页正文撑爆。
+        if len(messages) > 9:
+            messages = [messages[0], messages[1], *messages[-6:]]
+
+    if not answer and stop_reason == "step_limit":
+        answer = f"已执行 {len(steps)} 步仍未完成，最后停在 {session.get('url') or '未知页面'}。"
+
+    return {
+        "ok": stop_reason == "finished",
+        "goal": clean_goal,
+        "answer": answer,
+        "steps": steps,
+        "stop_reason": stop_reason,
+        "url": session.get("url") or "",
+        "policy": "每一步的目标地址都经过安全校验；模型只能用序号操作，无法执行任意脚本。结论来自页面内容，请自行核对。",
+    }
+
+
 def browser_session_list() -> list[dict[str, Any]]:
     _browser_reap_idle()
     return [
@@ -27466,6 +27599,17 @@ async def post_browser_session_file(session_id: str, file: UploadFile = File(...
             handle.write(chunk)
     return {"ok": True, "name": safe_name, "bytes": size,
             "files": sorted(item.name for item in target_dir.iterdir() if item.is_file())}
+
+
+class BrowserAgentRequest(BaseModel):
+    goal: str = Field(min_length=1, max_length=2_000)
+    max_steps: int = Field(default=0, ge=0, le=40)
+
+
+@app.post("/api/browser/sessions/{session_id}/agent")
+async def post_browser_agent(session_id: str, request: BrowserAgentRequest) -> dict[str, Any]:
+    """给一个目标，让 AI 自己在这个会话里连续操作。"""
+    return await browser_agent_run(session_id, request.goal, request.max_steps)
 
 
 @app.delete("/api/browser/sessions/{session_id}")

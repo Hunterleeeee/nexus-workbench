@@ -68,11 +68,19 @@ function renderTabs() {
   const openCount = state.contexts.filter((item) => item.url).length;
   $("#tab-count") && ($("#tab-count").textContent = String(openCount));
   $("#open-tab-count") && ($("#open-tab-count").textContent = String(openCount));
-  if (!state.contexts.length) { host.innerHTML = '<div class="sidebar-empty"><span class="empty-mark">＋</span><strong>从一个问题开始</strong><p>输入网址或搜索词，AI 会陪你一起读。</p></div>'; return; }
-  host.innerHTML = [...groups.entries()].map(([group, items]) => `<section class="sidebar-group"><div class="sidebar-group-label"><i></i><span>${escapeHtml(group)}</span></div>${items.map((item) => `<button class="sidebar-tab ${item.id === state.activeId ? "active" : ""}" data-context-id="${escapeHtml(item.id)}" type="button" title="${escapeHtml(item.url || "新标签")}"><span class="tab-favicon"></span><span class="tab-title">${escapeHtml(item.title || "新标签")}</span><span class="tab-close" data-close-context="${escapeHtml(item.id)}" title="关闭">×</span></button>`).join("")}</section>`).join("");
+  if (!state.contexts.length) { host.innerHTML = '<span class="tab-strip-empty">还没有打开的页面</span>'; return; }
+  // 横向标签条：按打开顺序平铺，和普通浏览器一致。
+  // 原来按域名分组的竖排列表在侧栏里能读，横过来就会因为分组标题占位而挤成一团。
+  host.innerHTML = state.contexts.map((item) => `<button class="browser-tab ${item.id === state.activeId ? "active" : ""}" data-context-id="${escapeHtml(item.id)}" type="button" role="listitem" title="${escapeHtml(item.url || "新标签")}"><span class="tab-favicon"></span><span class="tab-title">${escapeHtml(item.title || "新标签")}</span><span class="tab-close" data-close-context="${escapeHtml(item.id)}" title="关闭" aria-label="关闭标签">×</span></button>`).join("");
   host.querySelectorAll("[data-context-id]").forEach((button) => button.addEventListener("click", (event) => { if (event.target.closest("[data-close-context]")) return; selectContext(button.dataset.contextId); }));
   host.querySelectorAll("[data-close-context]").forEach((close) => close.addEventListener("click", (event) => { event.stopPropagation(); closeContext(close.dataset.closeContext); }));
 }
+function bindTabStrip() {
+  const button = document.getElementById("tab-strip-new");
+  if (!button) return;
+  button.addEventListener("click", () => { newContext(); renderTabs(); selectContext(state.activeId); });
+}
+
 function closeContext(id) { const index = state.contexts.findIndex((item) => item.id === id); if (index < 0) return; if (nativeBrowserAvailable()) nativeBrowser.close(id); delete state.nativeBrowserStates[id]; state.contexts.splice(index, 1); if (state.activeId === id) { state.activeId = state.contexts[index]?.id || state.contexts[index - 1]?.id || ""; state.readToken += 1; } if (!state.contexts.length) { const context = newContext(); state.activeId = context.id; } saveContexts(); renderTabs(); selectContext(state.activeId); }
 function selectRelativeContext(direction) { if (state.contexts.length < 2) return; const index = state.contexts.findIndex((item) => item.id === state.activeId); const next = (index + direction + state.contexts.length) % state.contexts.length; selectContext(state.contexts[next].id); }
 
@@ -425,6 +433,7 @@ function selectContext(id) { if (!state.contexts.some((item) => item.id === id))
 function init() {
   setupTheme(); setupNativeBrowser(); loadContexts(); applyIncomingContext();
   if (!state.contexts.length) newContext();
+  bindTabStrip();
   renderTabs(); selectContext(state.activeId); void loadBookmarks();
 
   $("#new-context").addEventListener("click", () => { const context = newContext(); setSidebarView("tabs"); renderTabs(); selectContext(context.id); $("#address-input").focus(); });

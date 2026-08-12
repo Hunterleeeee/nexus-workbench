@@ -145,7 +145,7 @@ button:disabled { cursor: not-allowed; }
 .sidebar-foot-row { justify-content: flex-start; color: var(--browser-muted); font-size: 10px; }
 .sidebar-foot small { display: block; margin-top: 5px; color: var(--browser-faint); font-size: 8px; line-height: 1.5; }
 
-.browser-main { display: grid; grid-template-columns: minmax(0, 1fr) clamp(310px, 22vw, 360px); min-width: 0; min-height: 0; overflow: hidden; }
+.browser-main { display: grid; grid-template-columns: minmax(0, 1fr) clamp(310px, 22vw, 360px); grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; }
 .browser-canvas { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--browser-bg); }
 .browser-toolbar { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 12px 16px 8px; }
 .nav-actions, .toolbar-tools { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
@@ -378,3 +378,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* 标签条从左侧竖排改到顶部横排。
+   竖排在侧栏里能读，但它占掉了正文最宝贵的横向空间，而且和所有人对
+   「浏览器标签」的肌肉记忆都不一样——标签本来就该在页面上方。 */
+/* 标签条跨满两列独占一行——否则会变成和浏览区并排的网格项。 */
+.tab-strip { grid-column: 1 / -1; flex: 0 0 auto; display: flex; align-items: stretch; gap: 2px; min-height: 38px; max-height: 44px; padding: 5px 8px 0; background: color-mix(in srgb, var(--browser-surface) 86%, transparent); border-bottom: 1px solid var(--browser-line); }
+.tab-strip-list { display: flex; align-items: stretch; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.tab-strip-list::-webkit-scrollbar { height: 3px; }
+.tab-strip-empty { align-self: center; padding-left: 6px; color: var(--browser-faint); font-size: 12px; }
+.browser-tab { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 190px; min-width: 96px; max-width: 210px; padding: 7px 9px; color: var(--browser-muted); background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; font-size: 12px; cursor: pointer; transition: background .16s ease, color .16s ease; }
+.browser-tab:hover { color: var(--browser-ink); background: color-mix(in srgb, var(--browser-soft) 70%, transparent); }
+.browser-tab.active { color: var(--browser-ink); background: var(--browser-bg); border-color: var(--browser-line); font-weight: 600; }
+.browser-tab .tab-favicon { flex: 0 0 auto; width: 13px; height: 13px; border-radius: 3px; background: var(--browser-line); }
+.browser-tab .tab-title { flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+.browser-tab .tab-close { flex: 0 0 auto; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; opacity: 0; font-size: 13px; }
+.browser-tab:hover .tab-close, .browser-tab.active .tab-close { opacity: .55; }
+.browser-tab .tab-close:hover { opacity: 1; background: var(--browser-soft); }
+.tab-strip-new { flex: 0 0 auto; align-self: center; width: 27px; height: 27px; margin-left: 4px; color: var(--browser-muted); background: transparent; border: 1px solid transparent; border-radius: 7px; font-size: 15px; cursor: pointer; }
+.tab-strip-new:hover { color: var(--browser-ink); background: var(--browser-soft); border-color: var(--browser-line); }
+@media (max-width: 760px) { .browser-tab { flex-basis: 132px; } }

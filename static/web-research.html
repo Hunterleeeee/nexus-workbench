@@ -37,16 +37,10 @@
           <button id="new-context" class="sidebar-add" type="button" title="新建标签页" aria-label="新建标签页">＋</button>
         </div>
         <div class="sidebar-library-tabs" role="tablist" aria-label="浏览器资料">
-          <button id="sidebar-tabs-button" class="active" type="button" role="tab" aria-selected="true" aria-controls="sidebar-tabs-pane" data-sidebar-view="tabs">标签 <span id="tab-count">0</span></button>
+          <button id="sidebar-tabs-button" hidden class="active" type="button" role="tab" aria-selected="true" aria-controls="sidebar-tabs-pane" data-sidebar-view="tabs">标签 <span id="tab-count">0</span></button>
           <button id="sidebar-bookmarks-button" type="button" role="tab" aria-selected="false" aria-controls="sidebar-bookmarks-pane" data-sidebar-view="bookmarks">书签 <span id="bookmark-count">0</span></button>
           <button id="sidebar-passwords-button" type="button" role="tab" aria-selected="false" aria-controls="sidebar-passwords-pane" data-sidebar-view="passwords">密码</button>
         </div>
-        <section id="sidebar-tabs-pane" class="sidebar-library-pane active" role="tabpanel" aria-labelledby="sidebar-tabs-button">
-          <div class="sidebar-list-heading"><span>打开的页面</span><button id="tab-rail-new" class="visually-hidden" type="button" aria-hidden="true" tabindex="-1">＋</button><span id="open-tab-count">0</span></div>
-          <div id="context-tabs" class="sidebar-tabs" role="list" aria-label="打开的网页">
-            <div class="sidebar-empty"><span class="empty-mark">＋</span><strong>从一个问题开始</strong><p>输入网址或搜索词，AI 会陪你一起读。</p></div>
-          </div>
-        </section>
         <section id="sidebar-bookmarks-pane" class="sidebar-library-pane" role="tabpanel" aria-labelledby="sidebar-bookmarks-button" hidden>
           <button id="bookmark-current-sidebar" class="sidebar-primary" type="button" disabled>收藏当前网页</button>
           <label class="sidebar-search"><span class="visually-hidden">搜索书签</span><input id="bookmark-search" type="search" placeholder="搜索书签" autocomplete="off" /></label>
@@ -75,6 +69,10 @@
       </aside>
 
       <main class="browser-main">
+        <div class="tab-strip" role="tablist" aria-label="打开的页面">
+          <div id="context-tabs" class="tab-strip-list" role="list"></div>
+          <button id="tab-strip-new" class="tab-strip-new" type="button" title="新建标签页 (Ctrl/⌘+T)" aria-label="新建标签页">＋</button>
+        </div>
         <section class="browser-canvas" aria-label="网页浏览区">
           <div class="browser-toolbar">
             <div class="nav-actions" aria-label="页面导航">
