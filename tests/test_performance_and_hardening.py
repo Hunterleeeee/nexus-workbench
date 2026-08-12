@@ -1487,6 +1487,81 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class CrawlJanitorTests(unittest.TestCase):
+    """flag_orphaned_crawl_runs() 在它唯一该生效的场景里从来不会跑。
+
+    这个函数是为「Crawl Worker 根本没启动、任务永远卡在 queued」写的，但它
+    此前只在 recover_stale_crawl_runs() 里被调用，而后者只在 crawl_worker.py
+    内部调用——Worker 不在的时候，连回收也不会发生。逻辑上自相矛盾：
+    它兜的底恰好是它自己够不着的地方。
+    """
+
+    def source(self):
+        return (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+
+    def test_the_main_process_runs_the_janitor(self):
+        source = self.source()
+        self.assertIn("async def crawl_janitor_loop(", source)
+        startup = source[source.find("async def start_automation_scheduler("):]
+        startup = startup[:startup.find("\n@app.on_event")]
+        self.assertIn("crawl_janitor_loop()", startup)
+
+    def test_it_starts_even_when_the_other_workers_are_external(self):
+        """那些开关控制的是别的 Worker 要不要在进程内跑，
+        而这件事恰恰是要在别的 Worker 都不在时兜底。"""
+        source = self.source()
+        startup = source[source.find("async def start_automation_scheduler("):]
+        startup = startup[:startup.find("\n@app.on_event")]
+        line = next(item for item in startup.splitlines() if "crawl_janitor_loop()" in item)
+        guard = startup[:startup.find(line)].splitlines()[-1]
+        self.assertNotIn("external_sync_worker", guard)
+        self.assertNotIn("external_agent_worker", guard)
+
+    def test_a_single_failure_does_not_kill_the_loop(self):
+        source = self.source()
+        body = source[source.find("async def crawl_janitor_loop("):]
+        body = body[:body.find("\n@app.on_event")]
+        self.assertIn("except asyncio.CancelledError", body, "取消要能穿透，否则关不掉")
+        self.assertIn("exc_info=True", body)
+
+    def test_it_is_cancelled_on_shutdown(self):
+        source = self.source()
+        shutdown = source[source.find("async def stop_automation_scheduler("):]
+        shutdown = shutdown[:shutdown.find("\n\n\n")]
+        self.assertIn("crawl_janitor", shutdown)
+
+
+class ReleaseGateTests(unittest.TestCase):
+    """发布闸门放行的测试集，必须和开发机上跑的是同一套。"""
+
+    def script(self):
+        path = Path(__file__).resolve().parents[1] / "deploy" / "deploy-workbench.sh"
+        if not path.exists():
+            self.skipTest("deploy 脚本不在这个检出里")
+        return path.read_text(encoding="utf-8")
+
+    def test_the_gate_does_not_skip_any_test(self):
+        """被跳过的那几条一旦真的坏了，正好在发布这一刻没人发现。"""
+        script = self.script()
+        body = script[script.find("run_release_tests()"):]
+        body = body[:body.find("\n}")]
+        # 只看真正会执行的行：注释里写「这里曾经用 --deselect」是在解释历史，
+        # 不该被当成还在跳过用例。
+        code = "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
+        self.assertNotIn("--deselect", code)
+        self.assertNotIn(" -k ", code, "用 -k 挑着跑等于另一种形式的跳过")
+        self.assertIn('"$test_python" -m pytest -q )', code)
+
+    def test_no_test_depends_on_a_specific_machines_files(self):
+        """读开发机上真实文件的用例，在别的机器上必然失败，
+        而且用户改一下自己的文件，闸门就会莫名其妙卡住。"""
+        memory_tests = (Path(__file__).resolve().parents[1] / "tests" / "test_memory.py").read_text(encoding="utf-8")
+        body = memory_tests[memory_tests.find("def test_workbuddy_preview_only_reads_user_preferences("):]
+        body = body[:body.find("\n    def ")]
+        self.assertIn("TemporaryDirectory", body)
+        self.assertIn('patch.object(app, "ROOT"', body)
+
+
 class DesktopTabStripTests(unittest.TestCase):
     """Electron 标签栏一多就散架。
 

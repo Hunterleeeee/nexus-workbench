@@ -27374,6 +27374,33 @@ async def automation_scheduler_loop() -> None:
                 continue
 
 
+async def crawl_janitor_loop() -> None:
+    """定期回收「没有 Worker 会来取」的排队任务。
+
+    flag_orphaned_crawl_runs() 是为「Crawl Worker 根本没启动」写的，但它此前
+    只在 recover_stale_crawl_runs() 里被调用，而后者只在 crawl_worker.py 内部
+    调用——Worker 不在的时候，连回收也不会发生。也就是说这个函数在它唯一
+    该生效的场景里从来不会跑，逻辑上自相矛盾。
+
+    主进程是唯一「一定在跑」的进程，所以放在这里，并且不受
+    WORKBENCH_EXTERNAL_*_WORKER 开关影响：那些开关控制的是别的 Worker 要不要
+    在进程内跑，而这件事恰恰是要在别的 Worker 都不在时兜底。
+    """
+    # 回收本身要等排队超过 stale 窗口 4 倍才动手，所以检查间隔按 stale 窗口来
+    # 就够了，没必要跑得更勤。
+    interval = max(60, WORKBENCH_CRAWL_STALE_SECONDS)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            flagged = await asyncio.to_thread(flag_orphaned_crawl_runs)
+            if flagged:
+                log.warning("回收了 %s 个无人认领的爬取任务（Crawl Worker 未运行）", flagged)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - 兜底循环不能被单次失败终结
+            log.warning("回收无人认领的爬取任务失败", exc_info=True)
+
+
 @app.on_event("startup")
 async def start_automation_scheduler() -> None:
     external_sync_worker = os.getenv("WORKBENCH_EXTERNAL_SYNC_WORKER", "").strip().lower() in {"1", "true", "yes"}
@@ -27386,6 +27413,9 @@ async def start_automation_scheduler() -> None:
         app.state.automation_scheduler = asyncio.create_task(automation_scheduler_loop())
     if not external_sync_worker and getattr(app.state, "sub2api_auto_sync_task", None) is None:
         app.state.sub2api_auto_sync_task = asyncio.create_task(sub2api_auto_sync_loop())
+    # 无条件启动：它兜的就是「别的 Worker 都不在」这种情况。
+    if getattr(app.state, "crawl_janitor", None) is None:
+        app.state.crawl_janitor = asyncio.create_task(crawl_janitor_loop())
 
 
 @app.on_event("shutdown")
@@ -27398,6 +27428,10 @@ async def stop_automation_scheduler() -> None:
     if sync_task:
         sync_task.cancel()
         app.state.sub2api_auto_sync_task = None
+    janitor = getattr(app.state, "crawl_janitor", None)
+    if janitor:
+        janitor.cancel()
+        app.state.crawl_janitor = None
     await close_llm_http_clients()
     external_sync_worker = os.getenv("WORKBENCH_EXTERNAL_SYNC_WORKER", "").strip().lower() in {"1", "true", "yes"}
     external_agent_worker = os.getenv("WORKBENCH_EXTERNAL_AGENT_WORKER", "").strip().lower() in {"1", "true", "yes"}

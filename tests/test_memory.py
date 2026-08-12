@@ -122,11 +122,36 @@ class WorkbenchMemoryTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 404)
 
     def test_workbuddy_preview_only_reads_user_preferences(self):
-        preview = app.workbuddy_memory_preview()
-        self.assertTrue(preview)
+        """这条用例原来直接读开发机上真实的 .workbuddy/memory/MEMORY.md，
+        断言里还写死了「中文交流」这几个字。后果有两个：文件不在的机器上
+        （容器、CI、别人的检出）它必然失败，而只要用户改一下自己的备忘录，
+        发布前的测试闸门就会莫名其妙卡住——测的是别人的文件内容，不是代码。
+
+        改成自建 fixture，保留它真正要守的东西：预览只取「用户偏好」这一节，
+        并且带凭据、IP 这类内容的行不进预览。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = root / ".workbuddy" / "memory"
+            memory.mkdir(parents=True)
+            (memory / "MEMORY.md").write_text(
+                "\n".join([
+                    "# 备忘",
+                    "## 用户偏好",
+                    "- 默认用中文交流，先说结论",
+                    "- 服务器 124.223.1.2 的 root 密码是 hunter2",
+                    "- 回答里不要用「赋能」这类词",
+                    "## 项目笔记",
+                    "- 这一节不该出现在预览里",
+                ]),
+                encoding="utf-8",
+            )
+            with patch.object(app, "ROOT", root):
+                preview = app.workbuddy_memory_preview()
         combined = "\n".join(item["content"] for item in preview)
         self.assertIn("中文交流", combined)
-        self.assertNotIn("服务器", combined)
+        self.assertIn("赋能", combined)
+        self.assertNotIn("这一节不该出现", combined, "只该读「用户偏好」这一节")
+        self.assertNotIn("hunter2", combined, "带凭据的行不能进预览")
         self.assertNotIn("124.223", combined)
 
     def test_result_contract_and_frontend_expose_memory_trace(self):
