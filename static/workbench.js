@@ -1193,7 +1193,7 @@ function setupMemoryCenter() {
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
   modal.setAttribute("aria-labelledby", "memory-modal-title");
-  modal.innerHTML = `<div class="modal memory-modal"><div class="modal-head"><div><h2 id="memory-modal-title">我的记忆</h2><p>只有“已确认”的内容会影响 Agent。你可以随时修改、忽略或彻底删除。</p></div><button class="icon-button" data-close-memory type="button" aria-label="关闭我的记忆">×</button></div><div id="memory-summary" class="memory-summary" aria-live="polite"><span>正在读取…</span></div><form id="memory-create-form" class="memory-create-form"><label>新增一条明确记忆<textarea id="memory-create-content" rows="2" required maxlength="1000" placeholder="例如：回答默认用中文，先说结论。"></textarea></label><div class="memory-create-grid"><label>范围<select id="memory-create-scope"><option value="global">整个工作台</option><option value="project">指定项目</option></select></label><label>项目 ID（项目记忆才需要）<input id="memory-create-project" maxlength="80" placeholder="例如 market" /></label><label>类型<select id="memory-create-kind"><option value="preference">偏好</option><option value="constraint">边界</option><option value="routine">习惯</option><option value="decision">决策</option><option value="profile">个人信息</option></select></label><button class="primary-button" type="submit">确认并记住</button></div></form><div class="memory-toolbar"><label>查看<select id="memory-filter"><option value="active">有效记忆</option><option value="candidate">待确认</option><option value="confirmed">已确认</option><option value="all">全部</option></select></label><div><button id="memory-import" class="secondary-button" type="button">预览已有偏好</button><button id="memory-refresh" class="secondary-button" type="button">刷新</button></div></div><p id="memory-message" class="modal-message" role="status" aria-live="polite"></p><div id="memory-list" class="memory-list" aria-live="polite"><div class="memory-empty">正在读取记忆…</div></div></div>`;
+  modal.innerHTML = `<div class="modal memory-modal"><div class="modal-head"><div><h2 id="memory-modal-title">我的记忆</h2><p>只有“已确认”的内容会影响 Agent。你可以随时修改、忽略或彻底删除。</p></div><button class="icon-button" data-close-memory type="button" aria-label="关闭我的记忆">×</button></div><div id="memory-summary" class="memory-summary" aria-live="polite"><span>正在读取…</span></div><form id="memory-create-form" class="memory-create-form"><label>新增一条明确记忆<textarea id="memory-create-content" rows="2" required maxlength="1000" placeholder="例如：回答默认用中文，先说结论。"></textarea></label><div class="memory-create-grid"><label>范围<select id="memory-create-scope"><option value="global">整个工作台</option><option value="project">指定项目</option></select></label><label>项目 ID（项目记忆才需要）<input id="memory-create-project" maxlength="80" placeholder="例如 market" /></label><label>类型<select id="memory-create-kind"><option value="preference">偏好</option><option value="constraint">边界</option><option value="routine">习惯</option><option value="decision">决策</option><option value="profile">个人信息</option></select></label><button class="primary-button" type="submit">确认并记住</button></div></form><div class="memory-toolbar"><label>查看<select id="memory-filter"><option value="active">有效记忆</option><option value="candidate">待确认</option><option value="confirmed">已确认</option><option value="all">全部</option></select></label><div><button id="memory-import" class="secondary-button" type="button">预览已有偏好</button><button id="memory-refresh" class="secondary-button" type="button">刷新</button></div></div><p id="memory-message" class="modal-message" role="status" aria-live="polite"></p><details id="memory-hygiene" class="memory-hygiene"><summary>记忆体检 <small>哪些记忆在拖后腿</small></summary><div id="memory-hygiene-body"><p class="memory-empty">展开后开始检查。</p></div></details><div id="memory-list" class="memory-list" aria-live="polite"><div class="memory-empty">正在读取记忆…</div></div></div>`;
   document.body.append(modal);
   const summary = modal.querySelector("#memory-summary"), list = modal.querySelector("#memory-list"), status = modal.querySelector("#memory-message"), filter = modal.querySelector("#memory-filter"), badges = [document.querySelector("#memory-nav-badge"), document.querySelector("#memory-mobile-badge")].filter(Boolean);
   const close = () => { modal.classList.add("hidden"); const previous = document.getElementById(modal.dataset.prevFocus || ""); (previous || button).focus(); };
@@ -1212,6 +1212,47 @@ function setupMemoryCenter() {
     setStatus(body.policy || "记忆已更新。");
     return body;
   }
+  // 记忆体检的接口（/api/memories/hygiene）早就写好了，但整个前端一个调用点
+  // 都没有——每轮只有 5 条能进上下文，池子越大真正相关的越容易被挤掉，
+  // 而"哪些记忆在白占名额"这件事此前只能 curl 才看得到。
+  const hygiene = modal.querySelector("#memory-hygiene");
+  const hygieneBody = modal.querySelector("#memory-hygiene-body");
+  const hygieneGroup = (title, hint, items) => items.length
+    ? `<div class="memory-hygiene-group"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(hint)}</small>${items.map((item) => `<label class="memory-hygiene-item"><input type="checkbox" value="${escapeHtml(item.id)}" /><span>${escapeHtml(item.content)}</span><small>${item.use_count ? `用过 ${escapeHtml(item.use_count)} 次` : "从未被用到"}</small></label>`).join("")}</div>`
+    : "";
+  async function loadHygiene() {
+    hygieneBody.innerHTML = '<p class="memory-empty">正在检查…</p>';
+    try {
+      const body = await workbenchRequestJson("/api/memories/hygiene?limit=40");
+      const groups = hygieneGroup("从没被用过", "确认很久却一次都没被检索命中，多半是当初随手确认的", body.never_used || [])
+        + hygieneGroup("很久没用了", `用过但超过 ${body.stale_days || 30} 天没再用，可能是已经结束的阶段性信息`, body.idle || []);
+      hygieneBody.innerHTML = groups
+        ? `${groups}<div class="memory-hygiene-actions"><button type="button" id="memory-archive" class="secondary-button">归档选中的</button><small>归档不是删除：记忆仍在库里，只是不再进入 Agent 上下文。</small></div>`
+        : `<p class="memory-empty">没有需要处理的。${escapeHtml(body.policy || "")}</p>`;
+    } catch (error) {
+      hygieneBody.innerHTML = `<p class="memory-empty">体检失败：${escapeHtml(error.message)}</p>`;
+    }
+  }
+  hygiene.addEventListener("toggle", () => { if (hygiene.open) void loadHygiene(); });
+  hygieneBody.addEventListener("click", async (event) => {
+    if (!event.target.closest("#memory-archive")) return;
+    const ids = [...hygieneBody.querySelectorAll("input[type=checkbox]:checked")].map((box) => box.value);
+    if (!ids.length) { setStatus("先勾选要归档的记忆。", true); return; }
+    const archiveButton = event.target.closest("#memory-archive");
+    archiveButton.disabled = true;
+    try {
+      await workbenchRequestJson("/api/memories/archive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memory_ids: ids }) });
+      // 先刷新，再写提示：loadMemories 结尾会把状态行改成策略说明，
+      // 顺序反了的话「已归档 N 条」这句刚出现就被盖掉。
+      await Promise.all([loadHygiene(), loadMemories()]);
+      setStatus(`已归档 ${ids.length} 条，它们不再进入 Agent 上下文。`);
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      archiveButton.disabled = false;
+    }
+  });
+
   const open = async (event) => { modal.classList.remove("hidden"); modal.dataset.prevFocus = document.activeElement?.id || event.currentTarget?.id || "memory-open"; try { await loadMemories(); modal.querySelector("#memory-create-content").focus(); } catch (error) { setStatus(error.message, true); } };
   button.addEventListener("click", open);
   mobileButton.addEventListener("click", open);

@@ -1487,6 +1487,89 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class MemoryTransparencyTests(unittest.TestCase):
+    """记忆是整个工作台唯一会静默改变回答的东西。
+
+    此前页面上只显示「使用了 N 条已确认记忆」——看不到是哪几条，更看不到它
+    凭什么被选中。于是一条早就忘了自己写过的偏好把回答带偏时，既发现不了，
+    也没有就地关掉的入口。
+
+    先量过再动手：用 8 条贴近真实的记忆和 12 条提问跑了一遍现有的召回，
+    命中基本正确，误召回只有「服务号→服务器」这种个位数的边缘情况。
+    所以这次没有去调打分公式——没有测出来的缺陷就去调参，只是把问题换个
+    地方藏起来。真正缺的是可见性和反馈入口。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for name, value in (("DATA_DIR", Path(self.tmp.name)),
+                            ("DATABASE_FILE", Path(self.tmp.name) / "workbench.db"),
+                            ("_DB_SCHEMA_READY", False)):
+            patcher = patch.object(app, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def seed(self):
+        app.create_memory_item(content="回答默认用中文，先说结论再给依据", status="confirmed", pinned=True)
+        app.create_memory_item(content="服务器磁盘超过 80% 就要提醒我", status="confirmed")
+        app.create_memory_item(content="关注美股行情，主要看科技股", status="confirmed")
+
+    def test_every_recalled_memory_explains_why_it_was_recalled(self):
+        self.seed()
+        items = app.retrieve_memories("服务器现在怎么样", project_id="server")
+        reasons = {item["content"][:4]: item["match_reason"] for item in items}
+        self.assertEqual(len(reasons), 2)
+        self.assertIn("置顶", reasons["回答默认"], "置顶记忆要说明它每轮都会带上")
+        self.assertIn("命中", reasons["服务器磁"])
+        self.assertTrue(all(item.get("match_score") is not None for item in items))
+
+    def test_the_reason_does_not_read_like_a_tokenizer_dump(self):
+        """query_terms 把中文切成二元片段，一句「服务器现在怎么样」会同时命中
+        「服务」和「务器」。两条一起摆出来只是噪音。"""
+        self.assertEqual(app.memory_match_reason(["服务", "务器"], "服务器磁盘超过 80%"), "命中 「服务」")
+        self.assertEqual(app.memory_match_reason(["服务器磁盘", "服务", "磁盘"]), "命中 「服务器磁盘」")
+        self.assertEqual(app.memory_match_reason(["需求", "行情"], "需求评审要看行情"), "命中 「需求」、「行情」")
+        self.assertEqual(app.memory_match_reason([]), "")
+
+    def test_the_reason_travels_all_the_way_to_the_answer(self):
+        self.seed()
+        context = app.memory_context_for_llm("server", "服务器现在怎么样")
+        self.assertTrue(context["refs"])
+        for ref in context["refs"]:
+            with self.subTest(ref=ref["id"]):
+                self.assertTrue(ref["reason"], "refs 里没有理由，前端就只能显示一个数字")
+
+    def test_unrelated_questions_do_not_drag_in_topic_memories(self):
+        """跑偏的召回比不召回更糟：它会静默改变回答的方向。"""
+        self.seed()
+        items = app.retrieve_memories("今天心情不太好", project_id="server")
+        self.assertEqual([item["pinned"] for item in items], [1], "只有置顶记忆该无条件进入")
+
+    def test_the_agent_panel_renders_the_memories_and_a_way_out(self):
+        script = (Path(__file__).resolve().parents[1] / "static" / "project.js").read_text(encoding="utf-8")
+        self.assertIn("本轮用到的记忆", script)
+        self.assertIn("data-memory-drop", script)
+        self.assertIn("/reject", script, "看到一条记忆把回答带偏了，要能就地关掉")
+
+    def test_the_hygiene_endpoint_finally_has_a_caller(self):
+        """memory_hygiene 早就写好了，但整个前端一个调用点都没有——
+        每轮只有 5 条能进上下文，池子越大真正相关的越容易被挤掉，
+        而「哪些记忆在白占名额」此前只能 curl 才看得到。"""
+        script = (Path(__file__).resolve().parents[1] / "static" / "workbench.js").read_text(encoding="utf-8")
+        self.assertIn("/api/memories/hygiene", script)
+        self.assertIn("/api/memories/archive", script)
+        self.assertIn("归档不是删除", script, "要说清楚归档不会丢数据")
+
+    def test_archiving_takes_a_memory_out_of_the_context_but_not_the_store(self):
+        self.seed()
+        target = next(item for item in app.list_memory_items(status="confirmed") if "美股" in item["content"])
+        app.archive_memory_items([target["id"]])
+        recalled = app.retrieve_memories("美股昨天涨了吗", project_id="market")
+        self.assertNotIn(target["id"], [item["id"] for item in recalled], "归档后不该再进上下文")
+        self.assertTrue(any(item["id"] == target["id"] for item in app.list_memory_items(status="all")), "归档不是删除")
+
+
 class LessonActionTargetTests(unittest.TestCase):
     """从学习记录打开第一课、点批改，结果跳到了第二课。
 

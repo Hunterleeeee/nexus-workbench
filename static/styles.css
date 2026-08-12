@@ -381,3 +381,17 @@ html[data-theme="light"] .note-icon { border-color: var(--line-strong, #c8d2da);
 .companion-settings-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .companion-settings-actions .secondary-button { min-height: 30px; }
 .companion-settings-actions > span { min-width: 0; flex: 1 1 200px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+
+/* 记忆体检：接口早就有，页面上一直没有入口。 */
+.memory-hygiene { margin: 10px 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; }
+.memory-hygiene > summary { color: var(--text); cursor: pointer; font-size: 12px; font-weight: 650; }
+.memory-hygiene > summary small { margin-left: 6px; color: var(--muted); font-size: 10px; font-weight: 400; }
+.memory-hygiene-group { margin-top: 11px; }
+.memory-hygiene-group > strong { display: block; color: var(--text); font-size: 11px; }
+.memory-hygiene-group > small { display: block; margin: 2px 0 6px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.memory-hygiene-item { display: flex; align-items: flex-start; gap: 7px; padding: 6px 7px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+.memory-hygiene-item + .memory-hygiene-item { margin-top: 4px; }
+.memory-hygiene-item span { flex: 1; min-width: 0; color: var(--text); font-size: 11px; line-height: 1.5; }
+.memory-hygiene-item small { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.memory-hygiene-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 10px; }
+.memory-hygiene-actions small { color: var(--muted); font-size: 10px; }

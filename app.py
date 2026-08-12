@@ -9513,6 +9513,28 @@ def ensure_legacy_cid_memories() -> None:
         connection.close()
 
 
+def memory_match_reason(hit_terms: list[str], haystack: str = "") -> str:
+    """把命中的词整理成一句人能看懂的理由。
+
+    query_terms 会把中文切成二元片段，一句「服务器现在怎么样」能同时命中
+    「服务」和「务器」——两条一起摆出来只是噪音，说明不了任何额外的东西。
+    所以优先用长词，并且丢掉已被更长的词包含的碎片，最多留两个。
+    """
+    # 同样长度的片段里，取在原文中出现得最靠前的那个：「服务器磁盘」里
+    # 「服务」从第 0 个字开始，「务器」从第 1 个字开始，前者读起来才像话。
+    ordered = sorted(hit_terms, key=lambda term: (-len(term), haystack.find(term) if haystack else 0, term))
+    kept: list[str] = []
+    for term in ordered:
+        # 已被更长的词包含，或者和已选的二元片段首尾相接（服务 / 务器），
+        # 都不带来新信息。
+        if any(term in existing or term[:1] == existing[-1:] or term[-1:] == existing[:1] for existing in kept):
+            continue
+        kept.append(term)
+        if len(kept) == 2:
+            break
+    return "命中 " + "、".join(f"「{term}」" for term in kept) if kept else ""
+
+
 def retrieve_memories(
     query: str,
     *,
@@ -9535,26 +9557,37 @@ def retrieve_memories(
             (MEMORY_OWNER_ID, project_id, now_iso()),
         ).fetchall()
         terms = query_terms(query)
-        pinned: list[tuple[float, sqlite3.Row]] = []
-        matched: list[tuple[float, sqlite3.Row]] = []
+        pinned: list[tuple[float, sqlite3.Row, str]] = []
+        matched: list[tuple[float, sqlite3.Row, str]] = []
         for row in rows:
             haystack = f"{row['memory_key']} {row['content']} {row['value_json']}".lower()
-            matches = sum(1 for term in terms if term in haystack)
+            hit_terms = [term for term in terms if term in haystack]
             score = (34 if row["scope"] == "project" else 16)
-            score += float(row["confidence"] or 0) * 20 + min(int(row["use_count"] or 0), 5) + matches * 12
+            score += float(row["confidence"] or 0) * 20 + min(int(row["use_count"] or 0), 5) + len(hit_terms) * 12
+            # 命中原因要能说给人听。记忆是整个工作台唯一会静默改变回答的东西，
+            # 看不见它凭什么被选中，就没法判断一个奇怪的回答是不是它带偏的。
+            # query_terms 会把中文切成二元片段，所以这里只展示最长的几个——
+            # 「服务」这种碎片作为理由没有意义，「服务器磁盘」才有。
+            reason = "置顶记忆，每轮都会带上" if row["pinned"] else memory_match_reason(hit_terms, haystack)
             if row["pinned"]:
-                pinned.append((score, row))
-            elif matches:
-                matched.append((score, row))
-        sort_key = lambda pair: (pair[0], str(pair[1]["updated_at"]))
+                pinned.append((score, row, reason))
+            elif hit_terms:
+                matched.append((score, row, reason))
+        sort_key = lambda triple: (triple[0], str(triple[1]["updated_at"]))
         pinned.sort(key=sort_key, reverse=True)
         matched.sort(key=sort_key, reverse=True)
         maximum = max(1, min(int(limit), MAX_MEMORY_CONTEXT_ITEMS))
-        selected_rows = [row for _, row in pinned[: min(MAX_MEMORY_PINNED_ITEMS, maximum)]]
+        selected = list(pinned[: min(MAX_MEMORY_PINNED_ITEMS, maximum)])
         if not core_only:
-            matched_limit = min(MAX_MEMORY_MATCHED_ITEMS, maximum - len(selected_rows))
-            selected_rows.extend(row for _, row in matched[:matched_limit])
-        return [memory_item_row(row) for row in selected_rows]
+            matched_limit = min(MAX_MEMORY_MATCHED_ITEMS, maximum - len(selected))
+            selected.extend(matched[:matched_limit])
+        results = []
+        for score, row, reason in selected:
+            item = memory_item_row(row)
+            item["match_reason"] = reason
+            item["match_score"] = round(float(score), 1)
+            results.append(item)
+        return results
     finally:
         connection.close()
 
@@ -9604,7 +9637,7 @@ def memory_context_for_llm(project_id: str, message: str, *, core_only: bool = F
     finally:
         connection.close()
     refs = [
-        {"id": item["id"], "content": str(item["content"])[:MAX_MEMORY_ITEM_CONTEXT_CHARS], "scope": item["scope"], "project_id": item["project_id"], "kind": item["kind"], "confidence": item["confidence"], "pinned": bool(item["pinned"])}
+        {"id": item["id"], "content": str(item["content"])[:MAX_MEMORY_ITEM_CONTEXT_CHARS], "scope": item["scope"], "project_id": item["project_id"], "kind": item["kind"], "kind_label": item.get("kind_label", ""), "confidence": item["confidence"], "pinned": bool(item["pinned"]), "reason": item.get("match_reason", ""), "score": item.get("match_score")}
         for item in items
     ]
     stats = {

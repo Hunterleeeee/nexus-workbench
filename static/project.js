@@ -140,11 +140,17 @@ function agentResultContractMarkup(contract = {}) {
   const plan = contract.execution_plan || {};
   const planTrace = agentExecutionPlanTrace(plan);
   const memoryTrace = contract.memory_refs?.length ? `使用了 ${contract.memory_refs.length} 条已确认记忆` : "";
+  // 记忆是整个工作台唯一会静默改变回答的东西：一条早就忘了自己写过的偏好，
+  // 可以让 Agent 的回答无端偏一个方向，而页面上此前只显示「使用了 N 条」——
+  // 看不到是哪几条，更看不到它凭什么被选中。把它摊开，并且就地能关掉。
+  const memoryPanel = contract.memory_refs?.length
+    ? `<div class="project-agent-memories"><strong>本轮用到的记忆</strong>${contract.memory_refs.map((item) => `<div class="agent-memory-ref" data-memory-ref="${escapeHtml(item.id)}"><div><p>${escapeHtml(item.content)}</p><small>${escapeHtml(item.reason || "已确认记忆")}${item.scope === "project" ? ` · 项目 ${escapeHtml(item.project_id || "")}` : " · 全局"}</small></div><button type="button" data-memory-drop="${escapeHtml(item.id)}" title="不再让这条记忆参与回答">别用这条</button></div>`).join("")}</div>`
+    : "";
   const memoryUpdateTrace = contract.memory_updates?.length ? `本轮发现 ${contract.memory_updates.length} 条记忆` : "";
   const memoryContext = contract.memory_context || {};
   const memoryBudgetTrace = memoryContext.chars ? `记忆上下文 ${Number(memoryContext.chars)} 字${Number(memoryContext.calls) > 1 ? ` / ${Number(memoryContext.calls)} 次调用` : ""}` : "";
   const trace = [contract.data_as_of ? `数据时间：${escapeHtml(contract.data_as_of)}` : "", refs ? `来源：${refs}` : "", coverageText, memoryTrace, memoryBudgetTrace, memoryUpdateTrace, planTrace, contract.artifact_ids?.length ? `Artifact ${contract.artifact_ids.length} 份` : "", contract.work_item_ids?.length ? `WorkItem ${contract.work_item_ids.length} 条` : "", contract.relation_ids?.length ? `Relation ${contract.relation_ids.length} 条` : "", review, contract.replay?.href ? `<a href="${escapeHtml(contract.replay.href)}" target="_blank" rel="noopener noreferrer">查看 Run 回放</a>` : ""].filter(Boolean).join(" · ");
-  return `<details class="project-agent-result-contract"><summary>结构化结果 · ${escapeHtml(contract.summary || "查看结论与证据")}</summary>${body || `<p>${escapeHtml(contract.summary || "暂无结构化摘要")}</p>`}${citations ? `<div class="project-agent-citations"><strong>可回溯来源</strong><p>${citations}</p></div>` : ""}${trace ? `<div class="project-agent-citations"><strong>审计链</strong><p>${trace}</p></div>` : ""}</details>`;
+  return `<details class="project-agent-result-contract"><summary>结构化结果 · ${escapeHtml(contract.summary || "查看结论与证据")}</summary>${body || `<p>${escapeHtml(contract.summary || "暂无结构化摘要")}</p>`}${memoryPanel}${citations ? `<div class="project-agent-citations"><strong>可回溯来源</strong><p>${citations}</p></div>` : ""}${trace ? `<div class="project-agent-citations"><strong>审计链</strong><p>${trace}</p></div>` : ""}</details>`;
 }
 
 function setupIncomingHandoffQueue(projectId, host) {
@@ -536,6 +542,23 @@ function setupProjectAgent() {
       await requestJson("/api/handoffs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, description: lastAnswer, from_project: projectId, to_project: toProject, confirmed: true, metadata: { source_session_id: sessionId } }) });
       status.textContent = `已交给 ${targetLabel}，工作台已记录联动任务。`;
     } catch (error) { status.textContent = error.message; } finally { handoffConfirmationPending = false; handoffButton.classList.remove("pending"); handoffButton.textContent = "转交"; handoffButton.disabled = false; }
+  });
+  // 「别用这条」就地生效：发现一条记忆把回答带偏了，就在看到它的地方关掉，
+  // 而不是记住内容、翻到工作台首页、打开记忆面板再找一遍。
+  messages.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-memory-drop]");
+    if (!button) return;
+    const card = button.closest("[data-memory-ref]");
+    button.disabled = true;
+    button.textContent = "处理中…";
+    try {
+      await requestJson(`/api/memories/${encodeURIComponent(button.dataset.memoryDrop)}/reject`, { method: "POST" });
+      if (card) { card.classList.add("dropped"); card.querySelector("button")?.remove(); card.insertAdjacentHTML("beforeend", "<small>已停用，之后不再参与回答</small>"); }
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "别用这条";
+      status.textContent = error.message;
+    }
   });
   quickActions.addEventListener("click", (event) => {
     const button = event.target.closest("[data-agent-quick-prompt]");

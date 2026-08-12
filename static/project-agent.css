@@ -195,3 +195,16 @@ body[data-project-id="crawl4ai"] .project-agent-panel {
 @media (prefers-reduced-motion: reduce) {
   .project-agent-launcher, .project-agent-quick-actions button, .project-agent-panel.is-open { transition: none; animation: none; }
 }
+
+/* 本轮用到的记忆：记忆是唯一会静默改变回答的东西，看不见它凭什么被选中，
+   就没法判断一个奇怪的回答是不是它带偏的。 */
+.project-agent-memories { margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--agent-line); }
+.project-agent-memories > strong { display: block; margin-bottom: 5px; color: var(--agent-ink); font-size: 9px; }
+.agent-memory-ref { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 6px 7px; background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 6px; }
+.agent-memory-ref + .agent-memory-ref { margin-top: 4px; }
+.agent-memory-ref > div { min-width: 0; }
+.agent-memory-ref p { margin: 0; color: var(--agent-ink); font-size: 9px; line-height: 1.55; }
+.agent-memory-ref small { display: block; margin-top: 3px; color: var(--agent-faint); font-size: 8px; }
+.agent-memory-ref button { flex: 0 0 auto; padding: 3px 6px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 5px; font: inherit; font-size: 8px; cursor: pointer; }
+.agent-memory-ref button:hover { color: #bf7569; border-color: #bf7569; }
+.agent-memory-ref.dropped { opacity: .55; }
