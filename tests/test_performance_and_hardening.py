@@ -1487,6 +1487,86 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class EvidenceCardContrastTests(unittest.TestCase):
+    """证据卡片在浅色主题下几乎读不出来。
+
+    原因是它直接复用了全局变量：--browser-soft(#f8f9fa) 铺在 card 的
+    --browser-surface(#ffffff) 上，对比度只有 1.02——卡片等于没有边界；
+    元信息用 --browser-faint(#a5a8ae) 配 8px，对比度 2.25:1，远低于可读线。
+    深色主题下这两组值本来就拉得开，所以同一份 CSS 只在浅色露馅。
+    修法是给证据区一套自己的变量，两套主题各自取值。
+    """
+
+    def styles(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "web-research.css").read_text(encoding="utf-8")
+
+    def palette(self, styles, selector):
+        block = styles[styles.find(selector + " {") + len(selector) + 2:]
+        block = block[:block.find("}")]
+        out = {}
+        for line in block.split(";"):
+            if ":" not in line:
+                continue
+            name, _, value = line.partition(":")
+            out[name.strip()] = value.strip()
+        return out
+
+    @staticmethod
+    def luminance(hex_color):
+        raw = hex_color.lstrip("#")
+        channels = []
+        for offset in (0, 2, 4):
+            value = int(raw[offset:offset + 2], 16) / 255
+            channels.append(value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+    def ratio(self, front, back):
+        pair = sorted((self.luminance(front), self.luminance(back)), reverse=True)
+        return (pair[0] + 0.05) / (pair[1] + 0.05)
+
+    def test_both_themes_define_the_evidence_palette(self):
+        styles = self.styles()
+        light = self.palette(styles, ":root")
+        dark = self.palette(styles, 'html[data-theme="dark"]')
+        needed = {"--evidence-fill", "--evidence-line", "--evidence-meta", "--evidence-link",
+                  "--chip-good-ink", "--chip-good-bg", "--chip-low-ink", "--chip-low-bg"}
+        for name in sorted(needed):
+            self.assertIn(name, light, f"浅色主题缺少 {name}")
+            self.assertIn(name, dark, f"深色主题缺少 {name}——只改浅色会把深色弄坏")
+
+    def test_text_on_the_card_clears_the_readability_line(self):
+        styles = self.styles()
+        for selector, surface in ((":root", "#ffffff"), ('html[data-theme="dark"]', "#202125")):
+            palette = self.palette(styles, selector)
+            fill = palette["--evidence-fill"]
+            with self.subTest(theme=selector):
+                # 元信息是最小号的正文，原来只有 2.25:1。
+                self.assertGreaterEqual(self.ratio(palette["--evidence-meta"], fill), 4.5)
+                self.assertGreaterEqual(self.ratio(palette["--evidence-link"], fill), 4.5)
+                # 质量标签自带底色，要跟自己的底色比，而不是跟卡片比。
+                self.assertGreaterEqual(self.ratio(palette["--chip-good-ink"], palette["--chip-good-bg"]), 4.5)
+                self.assertGreaterEqual(self.ratio(palette["--chip-low-ink"], palette["--chip-low-bg"]), 4.5)
+                # 卡片填色和 card 底色几乎相同时，边框是唯一的边界，必须看得见。
+                self.assertGreaterEqual(self.ratio(palette["--evidence-line"], surface), 1.3)
+
+    def test_no_hard_coded_colours_left_in_the_evidence_block(self):
+        """写死的 #fff5e4 在深色下是一块刺眼的浅黄，主题一切就露馅。"""
+        styles = self.styles()
+        block = styles[styles.find(".evidence-list {"):styles.find(".empty-result {")]
+        self.assertNotIn("#fff5e4", block)
+        self.assertNotIn("#b27938", block)
+        self.assertNotIn("var(--browser-faint)", block, "元信息不该再用最淡的那档灰")
+
+    def test_long_titles_shrink_instead_of_pushing_the_chip_out(self):
+        """标题外面那层 div 是 flex 项，min-width 默认是 auto，
+        nowrap 的长标题会把它撑开，质量标签被顶出卡片。"""
+        styles = self.styles()
+        block = styles[styles.find(".evidence-list {"):styles.find(".empty-result {")]
+        self.assertIn(".evidence-item-head > div { min-width: 0", block)
+        self.assertIn("flex: 0 0 auto", block[block.find(".quality-chip {"):], "标签不该被压缩")
+        self.assertNotIn("max-width: 390px", block, "面板早就不到 390px 宽了")
+
+
 class KnowledgeNoteReadTests(unittest.TestCase):
     """项目页要能直接看知识库，就需要一个按路径读全文的接口——
     而这是整个工作台唯一一个按用户给的路径读文件的地方，不做限制就是任意文件读取。"""

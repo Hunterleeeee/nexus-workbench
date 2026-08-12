@@ -13,6 +13,14 @@
   --browser-violet: #7869d8;
   --browser-success: #3d9b78;
   --browser-shadow: 0 14px 40px rgba(29, 31, 35, .06);
+  --evidence-fill: #f7f8fa;
+  --evidence-line: #dcdee3;
+  --evidence-meta: #5f636a;
+  --evidence-link: #5647b8;
+  --chip-good-ink: #1f6d51;
+  --chip-good-bg: #e3f2eb;
+  --chip-low-ink: #8a5312;
+  --chip-low-bg: #fdefdb;
 }
 
 html[data-theme="dark"] {
@@ -28,6 +36,14 @@ html[data-theme="dark"] {
   --browser-violet: #9d92ec;
   --browser-success: #70c59f;
   --browser-shadow: 0 14px 40px rgba(0, 0, 0, .18);
+  --evidence-fill: #1c1d21;
+  --evidence-line: #3a3c43;
+  --evidence-meta: #9a9da4;
+  --evidence-link: #a89ef0;
+  --chip-good-ink: #86d3ae;
+  --chip-good-bg: #1d3730;
+  --chip-low-ink: #e8b878;
+  --chip-low-bg: #3a2d18;
 }
 
 html[data-theme="dark"] .address-go,
@@ -306,14 +322,21 @@ button:disabled { cursor: not-allowed; }
 .section-heading h3 { margin: 3px 0 0; font: 700 12px var(--display); }
 .card-kicker { color: var(--browser-orange); font-size: 8px; font-weight: 800; letter-spacing: .12em; }
 .section-heading-actions { display: flex; gap: 5px; }
-.evidence-list { display: grid; gap: 6px; }
-.evidence-item { padding: 8px; background: var(--browser-soft); border: 1px solid var(--browser-line); border-radius: 7px; }
+/* 证据卡片单独一套变量：浅色下 --browser-soft(#f8f9fa) 铺在 --browser-surface(#fff)
+   的 card 上对比度只有 1.02，卡片等于没有边界；而 --browser-faint 的 8px 元信息
+   对比度 2.25:1，基本看不清。深色下这两组值本来就拉得开，所以问题只在浅色出现。 */
+.evidence-list { display: grid; gap: 7px; }
+.evidence-item { min-width: 0; padding: 9px 10px; background: var(--evidence-fill); border: 1px solid var(--evidence-line); border-radius: 8px; transition: border-color .18s ease, background .18s ease; }
+.evidence-item:hover { border-color: color-mix(in srgb, var(--browser-orange) 45%, var(--evidence-line)); }
 .evidence-item-head, .evidence-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.evidence-item h4 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.evidence-item a { display: block; max-width: 390px; overflow: hidden; color: var(--browser-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 8px; }
-.quality-chip { padding: 2px 5px; color: var(--browser-success); background: color-mix(in srgb, var(--browser-success) 10%, transparent); border-radius: 5px; font-size: 8px; white-space: nowrap; }
-.quality-chip.low { color: #b27938; background: #fff5e4; }
-.evidence-meta { justify-content: flex-start; margin-top: 6px; color: var(--browser-faint); font-size: 8px; }
+.evidence-item-head > div { min-width: 0; flex: 1 1 auto; }
+.evidence-item h4 { margin: 0; overflow: hidden; color: var(--browser-ink); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.evidence-item a { display: block; max-width: 100%; margin-top: 2px; overflow: hidden; color: var(--evidence-link); text-decoration: none; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.evidence-item a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.quality-chip { flex: 0 0 auto; padding: 2px 6px; color: var(--chip-good-ink); background: var(--chip-good-bg); border-radius: 5px; font-size: 9px; font-weight: 600; white-space: nowrap; }
+.quality-chip.low { color: var(--chip-low-ink); background: var(--chip-low-bg); }
+.evidence-meta { flex-wrap: wrap; justify-content: flex-start; margin-top: 7px; row-gap: 2px; color: var(--evidence-meta); font-size: 9px; }
+.evidence-meta span + span { padding-left: 8px; border-left: 1px solid var(--evidence-line); }
 .empty-result { display: grid; place-items: center; min-height: 100px; color: var(--browser-faint); text-align: center; }
 .empty-result strong { color: var(--browser-muted); font-size: 10px; }
 .empty-result p { margin: 4px 0 0; font-size: 9px; }
