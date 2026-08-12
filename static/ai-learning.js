@@ -6,7 +6,7 @@ const trackQuery = (extra = "") => `track=${encodeURIComponent(LEARNING_TRACK)}$
 const learnQuery = (selector, root = document) => root.querySelector(selector);
 const learnQueryAll = (selector, root = document) => [...root.querySelectorAll(selector)];
 const learnEscape = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0, explorations: [], exploreKind: "term", exercise: null };
+const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0, openingLessonId: 0, explorations: [], exploreKind: "term", exercise: null };
 
 function learningSetStatus(message = "", tone = "") {
   const node = learnQuery("#learning-page-status");
@@ -191,20 +191,45 @@ function renderLearningPhases(phases = [], today = {}) {
 }
 
 async function openHistoryLesson(lessonId) {
+  // data-lesson-id 缺失或不是数字时，原来是一句静默 return——点了完全没反应，
+  // 连一条能报上来的线索都没有。现在明确说出来。
   const id = Number(lessonId || 0);
-  if (!id) return;
+  if (!Number.isFinite(id) || id <= 0) {
+    learningSetStatus(`这条记录没有可用的课程编号（拿到的是 ${JSON.stringify(lessonId)}），请刷新页面重试。`, "error");
+    return;
+  }
   if (learningState.openedLessonId === id) { closeHistoryLesson(); return; }
+  if (learningState.openingLessonId) return;   // 连点两下不该发两个请求
+  learningState.openingLessonId = id;
+  // 先把这一行标成加载中：点击到内容替换之间有一段网络时间，这段时间里
+  // 页面上任何地方都不动，看起来就是「点了没反应」。
+  const row = learnQuery(`#lesson-history [data-lesson-id="${id}"]`);
+  row?.classList.add("loading");
+  learningSetStatus(`正在打开第 ${id} 节…`);
   try {
-    const body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(id)}`);
+    let body;
+    try {
+      body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(id)}`);
+    } catch (error) {
+      // 网络类失败重试一次：进程刚起、连接刚被回收这类一次性抖动，
+      // 第一下失败第二下就好，没必要让用户自己去点第二次。
+      if (error?.code !== "network" && error?.code !== "timeout") throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, 600));
+      body = await requestJson(`/api/ai-learning/lessons/${encodeURIComponent(id)}`);
+    }
     learningState.openedLessonId = id;
     renderTodayLesson(body.lesson || {});
     renderLessonHistory(learningState.history);
+    learningSetStatus("");
     learnQuery("#today-lesson")?.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     // 带上 id 和状态码：这条错误此前只有一句「打开失败」，报上来也没法定位
     // 是课程不存在、后端没起来，还是请求超时。
-    const status = error?.status ? `HTTP ${error.status}` : "";
+    const status = error?.status ? `HTTP ${error.status}` : error?.code ? error.code : "";
     learningSetStatus(`打开第 ${id} 节失败：${error.message}${status ? `（${status}）` : ""}`, "error");
+  } finally {
+    learningState.openingLessonId = 0;
+    learnQuery(`#lesson-history [data-lesson-id="${id}"]`)?.classList.remove("loading");
   }
 }
 

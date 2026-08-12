@@ -1487,6 +1487,89 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class LearningHistoryOpenTests(unittest.TestCase):
+    """「点击学习记录没反应」和「第一次打开失败」。
+
+    这两个症状在本地数据上都复现不出来（连点四条全部 200、无 pageerror），
+    所以修的是让它们不可能再变成沉默失败的三条路径：
+      1. data-lesson-id 拿不到数字时原来是一句 `if (!id) return;`——
+         点了完全没反应，连一条能报上来的线索都没有；
+      2. 点击到内容替换之间的网络时间里页面上什么都不动，看起来就是没反应；
+      3. 网络类失败一次就报错，而「第一次失败、第二次就好」正是一次性抖动的样子。
+    """
+
+    def script(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
+
+    def body(self):
+        source = self.script()
+        body = source[source.find("async function openHistoryLesson("):]
+        return body[:body.find("\nfunction closeHistoryLesson(")]
+
+    def test_an_unusable_id_is_reported_instead_of_silently_ignored(self):
+        body = self.body()
+        self.assertNotIn("if (!id) return;", body, "静默 return 就是「点了没反应」")
+        self.assertIn("Number.isFinite(id)", body)
+        self.assertIn("没有可用的课程编号", body)
+
+    def test_the_clicked_row_shows_that_something_started(self):
+        body = self.body()
+        self.assertIn('classList.add("loading")', body)
+        self.assertIn('classList.remove("loading")', body)
+        styles = (Path(__file__).resolve().parents[1] / "static" / "ai-learning.css").read_text(encoding="utf-8")
+        self.assertIn(".history-item.loading", styles)
+
+    def test_a_one_off_network_blip_retries_once(self):
+        body = self.body()
+        self.assertIn('error?.code !== "network"', body)
+        self.assertIn('error?.code !== "timeout"', body)
+        self.assertEqual(body.count("/api/ai-learning/lessons/"), 2, "重试应该只有一次，不能变成无限重试")
+
+    def test_a_double_click_does_not_fire_two_requests(self):
+        self.assertIn("learningState.openingLessonId", self.body())
+
+
+class ServiceWorkerCacheTests(unittest.TestCase):
+    """Service Worker 三处会让「刚部署完第一次打开」表现得很怪的地方。"""
+
+    def worker(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "sw.js").read_text(encoding="utf-8")
+
+    def test_versioned_assets_are_not_matched_by_ignoring_the_query_string(self):
+        """统一 ignoreSearch: true 时，/static/x.js?v=新 会命中缓存里 v=旧 那份——
+        整套 ?v= 缓存失效机制在离线回退这条路径上等于没有。"""
+        worker = self.worker()
+        self.assertIn("function matchCached", worker)
+        self.assertIn('searchParams.has("v")', worker)
+        self.assertIn("ignoreSearch: !versioned", worker)
+
+    def test_failed_responses_are_never_written_into_the_shell_cache(self):
+        """来什么存什么的话，一次 404 会被存进壳缓存，之后每次离线回退都拿到
+        那份错误页，而且要等到下个版本换 CACHE_NAME 才会清掉。"""
+        worker = self.worker()
+        self.assertIn("response.ok", worker)
+        self.assertIn('response.type === "basic"', worker)
+
+    def test_one_missing_shell_file_cannot_block_the_whole_install(self):
+        """addAll 是全有全无的：SHELL 里只要有一个路径拼错，install 就 reject，
+        新 Service Worker 永远装不上，用户会一直被旧壳服务且没有任何提示。"""
+        worker = self.worker()
+        self.assertNotIn("cache.addAll(SHELL)", worker)
+        self.assertIn("cache.add(path).catch", worker)
+
+    def test_the_cache_name_tracks_the_release(self):
+        version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertIn(f'workbench-shell-v{version}', self.worker(), "缓存名没跟着版本走，旧壳不会被清掉")
+
+    def test_every_shell_entry_actually_exists(self):
+        """现在缺文件不再阻塞安装，但也不该让它悄悄缺着。"""
+        root = Path(__file__).resolve().parents[1]
+        worker = self.worker()
+        paths = re.findall(r'"(/static/[^"]+)"', worker)
+        missing = [path for path in paths if not (root / path.lstrip("/")).exists()]
+        self.assertEqual(missing, [], "SHELL 里登记了不存在的静态文件")
+
+
 class UndefinedCssVariableTests(unittest.TestCase):
     """知识库抽屉背景是透明的。
 
