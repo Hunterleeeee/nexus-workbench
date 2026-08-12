@@ -274,7 +274,14 @@ function setupProjectAgent() {
   panel.className = "project-agent-panel hidden";
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-label", "项目 Agent");
-  panel.innerHTML = `<header class="project-agent-head"><div><span class="project-agent-kicker">PROJECT AGENT</span><h2>项目 Agent</h2><p id="project-agent-subtitle">正在读取项目能力…</p></div><button class="project-agent-close" type="button" aria-label="关闭项目 Agent">×</button></header><div class="project-agent-toolbar"><select id="project-agent-sessions" aria-label="选择 Agent 会话"><option value="">新会话</option></select><button id="project-agent-new" type="button">新会话</button></div><div id="project-agent-capability" class="project-agent-capability"></div><div id="project-agent-quick-actions" class="project-agent-quick-actions" aria-label="项目快捷提问"></div><section class="project-agent-incoming" aria-label="待我处理"><div class="project-agent-incoming-head"><strong>待我处理</strong><span id="project-agent-incoming-summary">读取中…</span></div><div id="project-agent-incoming-list"><div class="project-agent-runs-empty">打开面板后显示其他项目交给我处理的事项</div></div></section><section class="project-agent-runs" aria-label="最近 Agent 运行"><div class="project-agent-runs-head"><strong>最近运行</strong><span id="project-agent-runs-summary">读取中…</span></div><div id="project-agent-runs-list"><div class="project-agent-runs-empty">打开面板后显示执行记录</div></div><div id="project-agent-run-detail" class="project-agent-run-detail" aria-live="polite" hidden></div></section><div id="project-agent-messages" class="project-agent-messages" role="log" aria-live="polite"><div class="project-agent-empty">这是这个项目自己的 Agent。它会读取本项目上下文，并保留本地会话。</div></div><form id="project-agent-form" class="project-agent-form"><textarea id="project-agent-input" rows="3" placeholder="问这个项目的 Agent…（Enter 发送，Shift+Enter 换行）"></textarea><div class="project-agent-form-foot"><span id="project-agent-message">全局 LLM · 会话保存在本机</span><button type="submit">发送</button></div></form><footer class="project-agent-handoff"><div><strong>转交给其他项目</strong><small id="project-agent-links">读取中…</small></div><div class="project-agent-handoff-row"><select id="project-agent-target" aria-label="选择要转交的项目"><option value="">选择要转交的项目</option></select><button id="project-agent-handoff-button" type="button">转交</button></div></footer>`;
+  // 布局约定：面板自己不滚动（overflow: hidden），只有对话区和「项目上下文」
+  // 抽屉两块可以滚。原来的写法是把能力说明、待办、运行记录、转交全部平铺在
+  // 对话上方，一起挤在一个会滚动的面板里——实测 1280×720 打开面板时，
+  // 光是这些说明性区块就占掉 634px，对话区被推到折叠线以下，输入框还要再往下
+  // 159px。也就是说「打开项目 Agent」之后既看不到对话也看不到输入框。
+  // 现在把说明性内容收进默认折叠的抽屉，对话区 flex:1 吃掉全部剩余空间，
+  // 输入框永远钉在底部。
+  panel.innerHTML = `<header class="project-agent-head"><div><span class="project-agent-kicker">PROJECT AGENT</span><h2>项目 Agent</h2><p id="project-agent-subtitle">正在读取项目能力…</p></div><button class="project-agent-close" type="button" aria-label="关闭项目 Agent">×</button></header><div class="project-agent-toolbar"><select id="project-agent-sessions" aria-label="选择 Agent 会话"><option value="">新会话</option></select><button id="project-agent-new" type="button">新会话</button><button id="project-agent-context-toggle" class="project-agent-context-toggle" type="button" aria-expanded="false" aria-controls="project-agent-context">项目上下文<span id="project-agent-context-badge" class="project-agent-context-badge" hidden>0</span></button></div><div id="project-agent-context" class="project-agent-context" hidden><div id="project-agent-capability" class="project-agent-capability"></div><section class="project-agent-incoming" aria-label="待我处理"><div class="project-agent-incoming-head"><strong>待我处理</strong><span id="project-agent-incoming-summary">读取中…</span></div><div id="project-agent-incoming-list"><div class="project-agent-runs-empty">打开面板后显示其他项目交给我处理的事项</div></div></section><section class="project-agent-runs" aria-label="最近 Agent 运行"><div class="project-agent-runs-head"><strong>最近运行</strong><span id="project-agent-runs-summary">读取中…</span></div><div id="project-agent-runs-list"><div class="project-agent-runs-empty">打开面板后显示执行记录</div></div><div id="project-agent-run-detail" class="project-agent-run-detail" aria-live="polite" hidden></div></section><footer class="project-agent-handoff"><div><strong>转交给其他项目</strong><small id="project-agent-links">读取中…</small></div><div class="project-agent-handoff-row"><select id="project-agent-target" aria-label="选择要转交的项目"><option value="">选择要转交的项目</option></select><button id="project-agent-handoff-button" type="button">转交</button></div></footer></div><div id="project-agent-messages" class="project-agent-messages" role="log" aria-live="polite"><div class="project-agent-empty">这是这个项目自己的 Agent。它会读取本项目上下文，并保留本地会话。</div></div><div id="project-agent-quick-actions" class="project-agent-quick-actions" aria-label="项目快捷提问"></div><form id="project-agent-form" class="project-agent-form"><textarea id="project-agent-input" rows="3" placeholder="问这个项目的 Agent…（Enter 发送，Shift+Enter 换行）"></textarea><div class="project-agent-form-foot"><span id="project-agent-message">全局 LLM · 会话保存在本机</span><button type="submit">发送</button></div></form>`;
   // 面板固定挂到 body；launcher 已在 page-actions 里（或独立悬浮球）时不再重复挂载。
   document.body.append(panel);
 
@@ -293,6 +300,23 @@ function setupProjectAgent() {
   const runsSummary = panel.querySelector("#project-agent-runs-summary");
   const targetSelect = panel.querySelector("#project-agent-target");
   const handoffButton = panel.querySelector("#project-agent-handoff-button");
+  const contextDrawer = panel.querySelector("#project-agent-context");
+  const contextToggle = panel.querySelector("#project-agent-context-toggle");
+  const contextBadge = panel.querySelector("#project-agent-context-badge");
+  // 抽屉里塞的是「有需要才看」的内容，默认折叠；但「待我处理」有真事项时
+  // 必须让人知道，否则折起来等于删掉——所以用一个数字角标顶出来。
+  const setContextOpen = (open) => {
+    contextDrawer.hidden = !open;
+    contextToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    contextToggle.classList.toggle("is-open", open);
+  };
+  contextToggle.addEventListener("click", () => setContextOpen(contextDrawer.hidden));
+  const setContextBadge = (count) => {
+    const value = Number(count) || 0;
+    contextBadge.hidden = value <= 0;
+    contextBadge.textContent = String(value);
+    contextToggle.classList.toggle("has-pending", value > 0);
+  };
   let agent = null;
   let sessionId = "";
   let currentSession = null;
@@ -320,6 +344,9 @@ function setupProjectAgent() {
   function renderMessages(items = []) {
     messages.innerHTML = items.length ? items.map((item) => `<div class="project-agent-message ${item.role === "user" ? "user" : "assistant"}"><strong>${item.role === "user" ? "你" : escapeHtml(agent?.name || "项目 Agent")}</strong><p>${escapeHtml(item.content)}</p>${item.role !== "user" ? agentResultContractMarkup(item.metadata?.result_contract) : ""}${item.metadata?.actions ? `<div class="project-agent-inline-actions">${agentActionMarkup(item.metadata.actions)}</div>` : ""}</div>`).join("") : '<div class="project-agent-empty">这是这个项目自己的 Agent。它会读取本项目上下文，并保留本地会话。</div>';
     messages.scrollTop = messages.scrollHeight;
+    // 快捷提问是「不知道能问什么」时的入口，聊起来之后就只是占位——
+    // 它现在紧贴输入框，留着会一直挤掉对话的高度。
+    quickActions.hidden = items.length > 0;
     const latest = [...items].reverse().find((item) => item.role === "assistant");
     lastAnswer = latest?.content || "";
   }
@@ -382,6 +409,7 @@ function setupProjectAgent() {
     const actionable = items.filter((item) => ["open", "blocked", "failed"].includes(item.status));
     const section = incomingList.closest(".project-agent-incoming");
     section?.classList.toggle("is-empty", !actionable.length);
+    setContextBadge(actionable.length);
     incomingSummary.textContent = actionable.length ? `${actionable.length} 条待接收` : "暂无待我处理";
     if (!actionable.length) {
       incomingList.innerHTML = '<div class="project-agent-runs-empty">没有需要这个 Agent 处理的交接。</div>';

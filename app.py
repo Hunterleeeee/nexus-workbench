@@ -11824,6 +11824,50 @@ def _react_cloud_dev_patch(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _react_cloud_dev_status(args: dict[str, Any]) -> dict[str, Any]:
+    """只读查看某个云开发工作区：识别到的项目标记、文件数、可用动作。
+
+    这个 handler 补的是一处「声明了但不存在」的能力：SUBAGENT_TOOL_MAP 里
+    cloud-dev 一直登记着 cloud_dev_status / _test / _build 三个工具，可
+    REACT_TOOLS 和 SUBAGENT_EXTRA_TOOLS 里一个都没有。subagent_tool_schemas
+    是按名字查表、查不到就跳过，于是这三个名字被静默丢掉——Agent 以为自己
+    有这些能力，实际连 schema 都没拿到。
+    """
+    project = str(args.get("project") or "workbench").strip() or "workbench"
+    result = cloud_dev.run_cloud_dev({"ok": True, "project": project, "action": "status"})
+    if result.get("status") != "ok":
+        return {"ok": False, "error": str(result.get("message") or result.get("status") or "读取失败")}
+    return {
+        "ok": True,
+        "project": result.get("project"),
+        "markers": result.get("markers") or [],
+        "file_count": result.get("file_count"),
+        "available_actions": result.get("available_actions") or [],
+    }
+
+
+def _react_cloud_dev_test(args: dict[str, Any]) -> dict[str, Any]:
+    """在云开发工作区跑固定的测试配方（不是任意命令）。
+
+    只跑 _recipe() 认得的那条固定命令，shell=False、环境最小化、有超时上限；
+    没有配方就直接拒绝，不去猜一条命令来执行。构建（build）按策略需要审批，
+    所以不做成可以自动调用的工具。
+    """
+    project = str(args.get("project") or "workbench").strip() or "workbench"
+    result = cloud_dev.run_cloud_dev({"ok": True, "project": project, "action": "test"})
+    if result.get("status") in {"not_configured", "unsupported", "rejected"}:
+        return {"ok": False, "error": str(result.get("message") or "该工作区没有可用的测试配方")}
+    return {
+        "ok": result.get("status") == "ok",
+        "project": result.get("project"),
+        "command": result.get("command"),
+        "exit_code": result.get("exit_code"),
+        "status": result.get("status"),
+        "output": clip(str(result.get("output") or ""), 4000),
+        "error": "" if result.get("status") == "ok" else f"测试未通过（{result.get('status')}）",
+    }
+
+
 def _react_work_items_read(args: dict[str, Any]) -> dict[str, Any]:
     """读取工作项：当前待办（open/running/blocked/failed）。"""
     limit = int(args.get("limit") or 8)
@@ -12036,7 +12080,7 @@ def react_tool_schemas() -> list[dict[str, Any]]:
 READ_ONLY_REACT_TOOLS = frozenset({
     "server_status", "sub2api_status", "knowledge_search", "inbox_read",
     "work_items_read", "aihot_read", "market_read", "doc_validate",
-    "doc_template", "crawl_fetch", "idea_read", "cid_read",
+    "doc_template", "crawl_fetch", "idea_read", "cid_read", "cloud_dev_status",
 })
 
 
@@ -12320,6 +12364,24 @@ SUBAGENT_EXTRA_TOOLS: dict[str, dict[str, Any]] = {
         },
         "handler": _react_cid_read,
     },
+    "cloud_dev_status": {
+        "type": "function",
+        "function": {
+            "name": "cloud_dev_status",
+            "description": "只读查看云开发工作区状态：识别到的项目标记、文件数、可用动作。适合问'云开发工作区什么情况/能跑哪些动作'。",
+            "parameters": {"type": "object", "properties": {"project": {"type": "string", "description": "工作区别名，默认 workbench"}}, "additionalProperties": False},
+        },
+        "handler": _react_cloud_dev_status,
+    },
+    "cloud_dev_test": {
+        "type": "function",
+        "function": {
+            "name": "cloud_dev_test",
+            "description": "在云开发工作区运行已配置的固定测试配方并返回结果。只跑识别到的固定命令，不接受任意命令；没有配方时直接拒绝。",
+            "parameters": {"type": "object", "properties": {"project": {"type": "string", "description": "工作区别名，默认 workbench"}}, "additionalProperties": False},
+        },
+        "handler": _react_cloud_dev_test,
+    },
     "aihot_feedback": {
         "type": "function",
         "function": {
@@ -12359,8 +12421,32 @@ SUBAGENT_TOOL_MAP: dict[str, list[str]] = {
     "cid-dashboard": ["cid_read", "work_items_read", "notify"],
     "embodied": ["crawl_fetch", "knowledge_search", "knowledge_write", "work_items_read", "notify"],
     "ai-learning": ["crawl_fetch", "knowledge_search", "knowledge_write", "work_items_read", "notify"],
-    "cloud-dev": ["cloud_dev_generate", "cloud_dev_patch", "cloud_dev_status", "cloud_dev_test", "cloud_dev_build", "work_items_read", "notify"],
+    # cloud_dev_build 按 cloud_dev_policy() 属于需要审批的动作，没有审批链路就
+    # 不能做成模型可以直接调的工具，所以这里不登记——留着只会又变成一个查不到
+    # handler、被静默丢掉的名字。
+    "cloud-dev": ["cloud_dev_generate", "cloud_dev_patch", "cloud_dev_status", "cloud_dev_test", "work_items_read", "notify"],
 }
+
+
+def assert_subagent_tools_exist() -> list[str]:
+    """SUBAGENT_TOOL_MAP 里每个名字都必须真有 handler。
+
+    subagent_tool_schemas 是查表跳过式的：查不到就当没有，不报错。这让
+    「登记了但没实现」可以一直躺在表里不被发现——cloud-dev 的三个工具就是
+    这么躺了很久的。启动时显式对一遍，宁可启动就喊，也不要运行时静默少半条腿。
+    """
+    missing = [
+        f"{project_id}:{name}"
+        for project_id, names in SUBAGENT_TOOL_MAP.items()
+        for name in names
+        if name not in REACT_TOOLS and name not in SUBAGENT_EXTRA_TOOLS
+    ]
+    if missing:
+        log.error("子 Agent 工具表登记了不存在的工具：%s", "、".join(missing))
+    return missing
+
+
+assert_subagent_tools_exist()
 
 
 # ---------------------------------------------------------------------------
@@ -13276,6 +13362,95 @@ def agent_action_notice(actions: list[dict[str, Any]]) -> str:
     return "\n".join(notices)
 
 
+async def run_agent_react_loop(
+    *,
+    project_id: str,
+    run_id: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    tool_cache: dict[str, Any] | None = None,
+    max_rounds: int = AGENT_MAX_TOOL_ROUNDS,
+) -> dict[str, Any]:
+    """跑一轮 ReAct：模型要工具就真执行，结果回喂，直到它给出结论。
+
+    抽成公用函数的理由是一条真实的能力断层：这段循环原本只长在总调度的子
+    Agent 分支里。从工作台问「市场怎么样」，市场 Agent 会真的去调 market_read；
+    可是从市场项目页直接跟同一个 Agent 说话，走的是另一条代码路径——一次
+    call_llm，一个工具都没有，只能对着一份可能已经过期的只读快照猜。同一个
+    Agent 换个入口就少了半条腿，而项目页恰恰是最常用的入口。
+
+    返回 {"answer": str, "tool_calls": [...], "rounds": int}；
+    每次工具调用都会写进 run 的事件流，回放里能看到它到底查了什么。
+    """
+    answer = ""
+    rounds = 0
+    executed: list[dict[str, Any]] = []
+    if not tools:
+        return {"answer": "", "tool_calls": executed, "rounds": 0}
+    working = list(messages)
+    while rounds < max_rounds:
+        body = await call_llm_with_tools(working, tools)
+        reply = ((body.get("choices") or [{}])[0]).get("message") or {}
+        content = str(reply.get("content") or "").strip()
+        tool_calls = reply.get("tool_calls") or []
+        if content:
+            answer = content
+        if not tool_calls:
+            break
+        working.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+        semaphore = asyncio.Semaphore(AGENT_MAX_PARALLEL_TOOL_CALLS)
+
+        async def _run_one(tool_call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+            fn = tool_call.get("function") or {}
+            name = str(fn.get("name") or "")
+            raw = fn.get("arguments")
+            try:
+                arguments = json.loads(raw or "{}") if isinstance(raw, str) else (raw or {})
+            except (TypeError, ValueError):
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            async with semaphore:
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(functools.partial(execute_react_tool, name, arguments, cache=tool_cache)),
+                        timeout=AGENT_TOOL_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("Agent %s 工具 %s 超时（%ss）", project_id, name, AGENT_TOOL_TIMEOUT_SECONDS)
+                    result = {"ok": False, "error": f"{name} 超过 {AGENT_TOOL_TIMEOUT_SECONDS} 秒未返回，已放弃本次调用，请换一个工具或直接基于已有信息作答"}
+                except Exception as exc:  # noqa: BLE001 - 单个工具失败要转成结果回喂，不能拖垮整轮
+                    log.warning("Agent %s 工具 %s 异常：%s", project_id, name, exc, exc_info=True)
+                    result = {"ok": False, "error": f"{name} 执行异常：{clip(str(exc), 300)}"}
+            return str(tool_call.get("id") or ""), name, result
+
+        outcomes = await asyncio.gather(*(_run_one(item) for item in tool_calls[:12]))
+        for call_id, name, result in outcomes:
+            executed.append({"tool": name, "ok": bool(result.get("ok")), "error": clip(str(result.get("error") or ""), 200)})
+            add_agent_run_event(
+                run_id,
+                "agent_tool_call",
+                f"{agent_display_name(project_id)} 调用工具 {name}。",
+                level="info" if result.get("ok") else "warning",
+                metadata={"tool": name, "result_ok": bool(result.get("ok")), "error": clip(str(result.get("error") or ""), 200)},
+            )
+            working.append({"role": "tool", "tool_call_id": call_id, "content": json.dumps(result, ensure_ascii=False)})
+        rounds += 1
+    if not answer:
+        # 工具轮次用尽却还没写出结论：再要一次不带工具的收敛回答，
+        # 而不是把「汇总中」这种半成品当作最终结果返回。
+        add_agent_run_event(run_id, "react_forced_summary", f"{agent_display_name(project_id)} 用满 {max_rounds} 轮工具仍未给出结论，改为强制收敛作答。", level="warning")
+        try:
+            answer = await call_llm(
+                [*working, {"role": "user", "content": "工具调用已达上限，现在不要再调用工具。请只基于以上已获得的工具结果直接给出结论；证据不足的部分明确标注为“未验证”。"}],
+                purpose="agent_forced_summary",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Agent %s 强制收敛作答失败：%s", project_id, exc)
+            answer = f"（已完成 {max_rounds} 轮工具探查，但未能形成结论：{clip(str(exc), 200)}）"
+    return {"answer": answer, "tool_calls": executed, "rounds": rounds}
+
+
 async def run_project_agent(
     *,
     project_id: str,
@@ -13310,9 +13485,34 @@ async def run_project_agent(
         if memory_context["text"]:
             messages.append({"role": "system", "content": f"用户长期记忆：\n{memory_context['text']}"})
         messages.extend({"role": item["role"], "content": item["content"]} for item in history[-MAX_CONVERSATION_MESSAGES:])
-        add_agent_run_event(run["id"], "llm_started", "正在调用全局 LLM。", metadata={"model": llm_settings().get("model", "")})
-        answer = await call_llm(messages, max_tokens=4000, temperature=0.25)
-        add_agent_run_event(run["id"], "llm_succeeded", "全局 LLM 已返回结果。", level="success")
+        # 项目页直接对话也走 ReAct：只读快照会滞后，问「现在怎么样」时必须
+        # 让 Agent 真去调工具取当下的数据，而不是照着快照复述。工具边界仍然是
+        # 这个项目自己声明的那一份，和总调度路径完全一致。
+        project_tools = subagent_tool_schemas(project_id)
+        tool_calls: list[dict[str, Any]] = []
+        if project_tools:
+            messages.insert(1, {
+                "role": "system",
+                "content": (
+                    "你可以调用工具获取真实数据后再回答；工具结果是回答的事实依据，不要编造，也不要把快照里的旧数据当成当前值。"
+                    f"可用工具：{'、'.join(item['function']['name'] for item in project_tools)}。"
+                    "涉及当前状态、额度、行情、网页内容、收件箱、知识库检索等场景，先调工具再下结论。"
+                ),
+            })
+        add_agent_run_event(run["id"], "llm_started", "正在调用全局 LLM。", metadata={"model": llm_settings().get("model", ""), "tools": len(project_tools)})
+        if project_tools:
+            loop_result = await run_agent_react_loop(
+                project_id=project_id,
+                run_id=run["id"],
+                messages=messages,
+                tools=project_tools,
+                tool_cache={},
+            )
+            answer = loop_result["answer"]
+            tool_calls = loop_result["tool_calls"]
+        else:
+            answer = await call_llm(messages, max_tokens=4000, temperature=0.25)
+        add_agent_run_event(run["id"], "llm_succeeded", "全局 LLM 已返回结果。", level="success", metadata={"tool_calls": len(tool_calls)})
         actions = materialize_agent_actions(project_id, message, answer, parent_run_id=run["id"])
         trace = agent_context_result_metadata({"project_context": project_context, "request_context": context or {}})
         execution_plan = build_agent_execution_plan(
@@ -13322,6 +13522,10 @@ async def run_project_agent(
             requested_tools=tool_boundary["accepted"],
             status="partial" if any(action.get("status") == "failed" for action in actions) else "succeeded",
         )
+        # 把「这轮实际调了哪些工具」记进计划里：回放时能看出结论是查出来的
+        # 还是模型自己想出来的，这是判断可信度最直接的一个信号。
+        execution_plan["tool_calls"] = tool_calls
+        execution_plan["tools_used"] = list(dict.fromkeys(item["tool"] for item in tool_calls))
         result_contract = agent_result_contract(
             project_id,
             answer,
@@ -14183,71 +14387,16 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
                 if child_memory_context["text"]:
                     react_messages.append({"role": "system", "content": f"用户长期记忆：\n{child_memory_context['text']}"})
                 react_messages.append({"role": "user", "content": f"总调度任务：\n{request.message}\n\n同一会话最近上下文：\n{conversation_block}\n\n明确意图：\n{intent or '未单独填写，请从任务中提炼并标记为推断'}\n\n用户额外上下文：\n{context_text}\n\n项目实时上下文（只读快照，可能滞后）：\n{project_context_text}{react_context_block}\n\n涉及当前状态、额度、行情、网页内容、收件箱等场景，请先调用对应工具获取最新真实数据，拿到结果后再按以下顺序回答：\n1. 一句话结论\n2. 已知事实与证据（带数据时间/来源）\n3. 判断、假设与不确定性\n4. 可直接执行的本地动作\n5. 需要我确认的动作\n6. 下一步（负责人 + 最小动作）"})
-                answer = ""
-                tool_rounds = 0
-                max_tool_rounds = AGENT_MAX_TOOL_ROUNDS
-                while tool_rounds < max_tool_rounds:
-                    react_body = await call_llm_with_tools(react_messages, child_tools)
-                    react_message = ((react_body.get("choices") or [{}])[0]).get("message") or {}
-                    react_content = str(react_message.get("content") or "").strip()
-                    tool_calls = react_message.get("tool_calls") or []
-                    if react_content:
-                        answer = react_content
-                    if not tool_calls:
-                        break
-                    react_messages.append({"role": "assistant", "content": react_content, "tool_calls": tool_calls})
-                    # 同一轮里的多个工具调用相互独立，并发执行；单个工具超时或
-                    # 失败都转成结构化结果回喂给模型，让它自己换路子，而不是让
-                    # 整个子 Agent 直接失败。
-                    tool_semaphore = asyncio.Semaphore(AGENT_MAX_PARALLEL_TOOL_CALLS)
-
-                    async def _run_one_tool(tool_call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
-                        fn = tool_call.get("function") or {}
-                        tool_name = str(fn.get("name") or "")
-                        raw_arguments = fn.get("arguments")
-                        try:
-                            tool_arguments = json.loads(raw_arguments or "{}") if isinstance(raw_arguments, str) else (raw_arguments or {})
-                        except (TypeError, ValueError):
-                            tool_arguments = {}
-                        if not isinstance(tool_arguments, dict):
-                            tool_arguments = {}
-                        async with tool_semaphore:
-                            try:
-                                result = await asyncio.wait_for(
-                                    asyncio.to_thread(functools.partial(execute_react_tool, tool_name, tool_arguments, cache=dispatch_tool_cache)),
-                                    timeout=AGENT_TOOL_TIMEOUT_SECONDS,
-                                )
-                            except asyncio.TimeoutError:
-                                log.warning("子 Agent %s 工具 %s 超时（%ss）", project_id, tool_name, AGENT_TOOL_TIMEOUT_SECONDS)
-                                result = {"ok": False, "error": f"{tool_name} 超过 {AGENT_TOOL_TIMEOUT_SECONDS} 秒未返回，已放弃本次调用，请换一个工具或直接基于已有信息作答"}
-                            except Exception as exc:
-                                log.warning("子 Agent %s 工具 %s 异常：%s", project_id, tool_name, exc, exc_info=True)
-                                result = {"ok": False, "error": f"{tool_name} 执行异常：{clip(str(exc), 300)}"}
-                        return str(tool_call.get("id") or ""), tool_name, result
-
-                    tool_outcomes = await asyncio.gather(*(_run_one_tool(item) for item in tool_calls[:12]))
-                    for tool_call_id, tool_name, tool_result in tool_outcomes:
-                        add_agent_run_event(
-                            child_run["id"],
-                            "agent_tool_call",
-                            f"{agent_display_name(project_id)} 调用工具 {tool_name}。",
-                            level="info" if tool_result.get("ok") else "warning",
-                            metadata={"tool": tool_name, "result_ok": bool(tool_result.get("ok")), "error": clip(str(tool_result.get("error") or ""), 200)},
-                        )
-                        react_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps(tool_result, ensure_ascii=False)})
-                    tool_rounds += 1
-                if not answer:
-                    # 工具轮次用尽却还没写出结论：再要一次不带工具的收敛回答，
-                    # 而不是把"汇总中"这种半成品当作子 Agent 的最终结果返回。
-                    add_agent_run_event(child_run["id"], "react_forced_summary", f"{agent_display_name(project_id)} 用满 {max_tool_rounds} 轮工具仍未给出结论，改为强制收敛作答。", level="warning")
-                    try:
-                        answer = await call_llm(
-                            [*react_messages, {"role": "user", "content": "工具调用已达上限，现在不要再调用工具。请只基于以上已获得的工具结果直接给出结论；证据不足的部分明确标注为“未验证”。"}],
-                            purpose="agent_forced_summary",
-                        )
-                    except Exception as exc:
-                        log.warning("子 Agent %s 强制收敛作答失败：%s", project_id, exc)
-                        answer = f"（已完成 {max_tool_rounds} 轮工具探查，但未能形成结论：{clip(str(exc), 200)}）"
+                # 循环本体见 run_agent_react_loop：项目页直接对话走的是同一份实现，
+                # 两条路径共用同一套工具边界、并发上限、超时兜底和留痕格式。
+                loop_result = await run_agent_react_loop(
+                    project_id=project_id,
+                    run_id=child_run["id"],
+                    messages=react_messages,
+                    tools=child_tools,
+                    tool_cache=dispatch_tool_cache,
+                )
+                answer = loop_result["answer"]
                 actions = materialize_agent_actions(project_id, request.message, answer, parent_run_id=child_run["id"])
                 child_trace = agent_context_result_metadata({"project_context": project_context, "request_context": request.context or {}})
                 child_plan = build_agent_execution_plan(project_id, request.message, intent=intent, requested_tools=child_tool_ids, route=route, status="completed")

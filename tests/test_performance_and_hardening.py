@@ -1487,6 +1487,255 @@ class BrowserTabStripTests(unittest.TestCase):
         self.assertIn('id="tab-strip-new"', self.markup())
 
 
+class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
+    """同一个 Agent，换个入口就少了半条腿。
+
+    从工作台问「市场怎么样」，市场 Agent 会真的调 market_read；可是从市场
+    项目页直接跟它说话，run_project_agent 走的是另一条路——一次 call_llm，
+    一个工具都没有，只能对着一份可能滞后的只读快照复述。项目页恰恰是最常用
+    的入口，所以这条路径必须也能真取数据。
+
+    修法是把总调度里那段 ReAct 循环抽成 run_agent_react_loop，两条路径共用。
+    """
+
+    def setUp(self):
+        self.events = []
+        patcher = patch.object(app, "add_agent_run_event", lambda *a, **k: self.events.append((a, k)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _reply(content="", tool_calls=None):
+        message = {"content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        return {"choices": [{"message": message}]}
+
+    async def test_loop_executes_the_tool_and_feeds_the_result_back(self):
+        seen = {}
+
+        def handler(args):
+            seen["args"] = args
+            return {"ok": True, "close": 12.34, "as_of": "2026-08-11"}
+
+        replies = [
+            self._reply("", [{"id": "c1", "function": {"name": "market_read", "arguments": "{\"code\": \"600519\"}"}}]),
+            self._reply("收盘 12.34，数据时间 2026-08-11。"),
+        ]
+        captured = {}
+
+        async def fake_call(messages, tools):
+            captured["messages"] = list(messages)
+            return replies.pop(0)
+
+        with patch.dict(app.REACT_TOOLS, {"market_read": {"handler": handler}}), \
+             patch.object(app, "call_llm_with_tools", fake_call):
+            result = await app.run_agent_react_loop(
+                project_id="market", run_id="r1",
+                messages=[{"role": "user", "content": "现在什么价"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+            )
+        self.assertEqual(seen["args"], {"code": "600519"}, "工具参数没有被真正解析并传下去")
+        self.assertIn("12.34", result["answer"])
+        self.assertEqual([item["tool"] for item in result["tool_calls"]], ["market_read"])
+        # 工具结果必须以 role=tool 回喂，否则模型看不到自己查到了什么。
+        self.assertTrue(any(m.get("role") == "tool" and "12.34" in m.get("content", "") for m in captured["messages"]))
+
+    async def test_a_failing_tool_becomes_a_result_instead_of_killing_the_turn(self):
+        def handler(args):
+            raise RuntimeError("上游炸了")
+
+        replies = [
+            self._reply("", [{"id": "c1", "function": {"name": "market_read", "arguments": "{}"}}]),
+            self._reply("取数失败，以下结论未验证。"),
+        ]
+
+        async def fake_call(messages, tools):
+            return replies.pop(0)
+
+        with patch.dict(app.REACT_TOOLS, {"market_read": {"handler": handler}}), \
+             patch.object(app, "call_llm_with_tools", fake_call):
+            result = await app.run_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "问"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+            )
+        self.assertIn("未验证", result["answer"])
+        self.assertFalse(result["tool_calls"][0]["ok"])
+
+    async def test_round_limit_forces_a_conclusion_rather_than_returning_nothing(self):
+        """模型一直要工具、从不写结论时，不能把空字符串当成答案返回。"""
+        def handler(args):
+            return {"ok": True}
+
+        async def fake_call(messages, tools):
+            return self._reply("", [{"id": "c", "function": {"name": "market_read", "arguments": "{}"}}])
+
+        async def fake_summary(messages, **kwargs):
+            return "已达工具上限，基于已有结果给出结论。"
+
+        with patch.dict(app.REACT_TOOLS, {"market_read": {"handler": handler}}), \
+             patch.object(app, "call_llm_with_tools", fake_call), \
+             patch.object(app, "call_llm", fake_summary):
+            result = await app.run_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "问"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+                max_rounds=2,
+            )
+        self.assertEqual(result["rounds"], 2)
+        self.assertIn("工具上限", result["answer"])
+        self.assertTrue(any(a[1] == "react_forced_summary" for a, _ in self.events))
+
+    async def test_every_tool_call_is_written_to_the_run_timeline(self):
+        """回放里看不到调了什么工具，就没法判断结论是查出来的还是编出来的。"""
+        replies = [
+            self._reply("", [{"id": "c1", "function": {"name": "market_read", "arguments": "{}"}}]),
+            self._reply("好了。"),
+        ]
+
+        async def fake_call(messages, tools):
+            return replies.pop(0)
+
+        with patch.dict(app.REACT_TOOLS, {"market_read": {"handler": lambda args: {"ok": True}}}), \
+             patch.object(app, "call_llm_with_tools", fake_call):
+            await app.run_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "问"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+            )
+        tool_events = [kwargs for args, kwargs in self.events if args[1] == "agent_tool_call"]
+        self.assertEqual(len(tool_events), 1)
+        self.assertEqual(tool_events[0]["metadata"]["tool"], "market_read")
+
+    def test_the_project_chat_path_actually_asks_for_tools(self):
+        """两条路径必须都调 run_agent_react_loop，否则又会各写一份、慢慢分叉。"""
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find("async def run_project_agent("):]
+        body = body[:body.find("\ndef handoff_title(")]
+        self.assertIn("subagent_tool_schemas(project_id)", body, "项目页对话没有取工具清单")
+        self.assertIn("run_agent_react_loop(", body)
+        self.assertEqual(source.count("await run_agent_react_loop("), 2, "总调度和项目页都应走这一份实现")
+
+    def test_the_project_chat_cannot_reach_beyond_its_declared_tools(self):
+        """能力放开的同时边界不能放开：可执行集合仍是这个项目自己声明的那一份。"""
+        for project_id, tools in app.SUBAGENT_TOOL_MAP.items():
+            with self.subTest(project=project_id):
+                names = {item["function"]["name"] for item in app.subagent_tool_schemas(project_id)}
+                self.assertEqual(names, set(tools))
+        self.assertEqual(app.subagent_tool_schemas("不存在的项目"), [], "未登记的项目不该拿到任何工具")
+
+    def test_no_agent_declares_a_tool_that_has_no_handler(self):
+        """subagent_tool_schemas 查不到就跳过，所以「登记了但没实现」会静默存在：
+        cloud-dev 的 cloud_dev_status/_test/_build 就这么躺在表里，Agent 以为自己
+        有这三样能力，实际连 schema 都拿不到。"""
+        self.assertEqual(app.assert_subagent_tools_exist(), [])
+
+    def test_build_stays_behind_approval_instead_of_becoming_a_callable_tool(self):
+        """cloud_dev_policy 把 build 列为需审批动作，就不能给模型一个直接调用的入口。"""
+        self.assertIn("build", app.cloud_dev.cloud_dev_policy()["approval_actions"])
+        self.assertNotIn("cloud_dev_build", app.REACT_TOOLS)
+        self.assertNotIn("cloud_dev_build", app.SUBAGENT_TOOL_MAP["cloud-dev"])
+
+    def test_cloud_dev_test_refuses_when_there_is_no_fixed_recipe(self):
+        """没有已识别的固定命令配方时必须直接拒绝，而不是自己猜一条命令去跑。"""
+        with patch.object(app.cloud_dev, "run_cloud_dev", lambda *a, **k: {"status": "unsupported", "message": "该工作区没有已识别的固定命令配方，未执行。"}):
+            result = app.execute_react_tool("cloud_dev_test", {"project": "workbench"})
+        self.assertFalse(result["ok"])
+        self.assertIn("未执行", result["error"])
+
+
+class ProjectAgentPanelLayoutTests(unittest.TestCase):
+    """项目 Agent 面板打开后看不到对话，也看不到输入框。
+
+    原来的结构是：能力说明、快捷提问、待我处理、最近运行全部平铺在对话上方，
+    整个面板 overflow-y: auto 一起滚。用 Chromium 量过（面板内容 961px）：
+    1280×720 下打开面板，对话区顶边已经在面板可视区之外，输入框还要再往下
+    159px——「打开项目 Agent」之后第一屏什么都干不了。
+
+    改成：面板自己不滚，说明性内容收进默认折叠的抽屉，对话区 flex:1 吃掉
+    剩余空间，输入框钉底。同一套测量：对话区 122px → 346px，输入框回到可视区内。
+    """
+
+    def script(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "project.js").read_text(encoding="utf-8")
+
+    def styles(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "project-agent.css").read_text(encoding="utf-8")
+
+    def template(self):
+        for line in self.script().splitlines():
+            if line.strip().startswith("panel.innerHTML = `"):
+                return line.strip()[len("panel.innerHTML = `"):-2]
+        self.fail("没有找到项目 Agent 面板的模板")
+
+    def rule(self, styles, selector, contains=""):
+        """同一个选择器可能出现在多条规则里（比如变量声明和布局各一条），
+        用 contains 挑出想要的那条。"""
+        head = selector + " {"
+        start = -1
+        while True:
+            start = styles.find(head, start + 1)
+            if start < 0:
+                self.fail(f"缺少规则 {selector}" + (f"（含 {contains}）" if contains else ""))
+            body = styles[start + len(head):styles.find("}", start)]
+            if not contains or contains in body:
+                return body
+
+    def test_panel_itself_does_not_scroll(self):
+        """面板一旦整体滚动，输入框就会被推出可视区——这是原来的根因。"""
+        rule = self.rule(self.styles(), ".project-agent-panel", contains="position: fixed")
+        self.assertIn("overflow: hidden", rule)
+        self.assertNotIn("overflow-y: auto", rule)
+        self.assertIn("height: min(", rule, "只给 max-height 的话面板会缩到内容高度，钉底就没意义")
+
+    def test_conversation_is_the_only_growing_region(self):
+        styles = self.styles()
+        messages = self.rule(styles, ".project-agent-messages")
+        self.assertIn("flex: 1 1 auto", messages)
+        self.assertIn("min-height: 0", messages, "grid 子项会把 flex 项撑开，必须显式归零")
+        self.assertNotIn("max-height: 38vh", messages, "对话区不该再被固定高度锁死")
+        fixed = self.rule(styles, ".project-agent-head, .project-agent-toolbar, .project-agent-quick-actions, .project-agent-form")
+        self.assertIn("flex: 0 0 auto", fixed)
+
+    def test_context_drawer_is_collapsed_by_default_and_capped(self):
+        template = self.template()
+        self.assertIn('<div id="project-agent-context" class="project-agent-context" hidden>', template)
+        drawer = self.rule(self.styles(), ".project-agent-context")
+        self.assertIn("max-height: 46%", drawer, "抽屉展开也不能把对话挤没")
+        self.assertIn("overflow-y: auto", drawer)
+        script = self.script()
+        self.assertIn("contextToggle.addEventListener", script)
+        self.assertIn('aria-controls="project-agent-context"', template)
+
+    def test_explanatory_blocks_moved_inside_the_drawer(self):
+        """能力说明/待办/运行记录/转交都属于「有需要才看」，不该占对话的高度。"""
+        template = self.template()
+        drawer = template[template.find('id="project-agent-context"'):]
+        drawer = drawer[:drawer.find('<div id="project-agent-messages"')]
+        for marker in ('id="project-agent-capability"', 'class="project-agent-incoming"',
+                       'class="project-agent-runs"', 'class="project-agent-handoff"'):
+            self.assertIn(marker, drawer, f"{marker} 应该在抽屉里")
+
+    def test_composer_is_the_last_block_in_the_panel(self):
+        """输入框后面再挂东西，它就不是钉底的了——转交区原来就挂在它后面。"""
+        template = self.template()
+        self.assertTrue(template.rstrip().endswith("</form>"), "输入框必须是面板最后一个区块")
+        self.assertLess(template.find('id="project-agent-messages"'), template.find('id="project-agent-form"'))
+
+    def test_pending_handoffs_are_still_visible_when_the_drawer_is_shut(self):
+        """折叠等于隐藏，所以待处理条数必须顶到抽屉按钮上，否则就是把功能删了。"""
+        script = self.script()
+        self.assertIn("setContextBadge(actionable.length)", script)
+        self.assertIn('id="project-agent-context-badge"', self.template())
+        badge = self.rule(self.styles(), ".project-agent-context-badge")
+        self.assertIn("background: var(--agent-accent)", badge)
+
+    def test_quick_actions_yield_once_the_conversation_starts(self):
+        script = self.script()
+        self.assertIn("quickActions.hidden = items.length > 0", script)
+        template = self.template()
+        self.assertLess(template.find('id="project-agent-messages"'), template.find('id="project-agent-quick-actions"'),
+                        "快捷提问应紧贴输入框，而不是压在对话上方")
+
+
 class EvidenceCardContrastTests(unittest.TestCase):
     """证据卡片在浅色主题下几乎读不出来。
 

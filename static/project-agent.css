@@ -8,13 +8,25 @@
 .project-agent-launcher-dot { width: 7px; height: 7px; background: #74d1b0; border-radius: 50%; box-shadow: 0 0 0 3px rgba(116,209,176,.16); }
 .project-agent-launcher-top { position: static; min-height: 34px; padding: 0 11px; box-shadow: none; border-radius: 8px; }
 .project-agent-launcher-top small { display: none; }
-.project-agent-panel { position: fixed; right: 24px; bottom: 76px; z-index: 19; display: flex; flex-direction: column; width: min(410px, calc(100vw - 36px)); max-height: min(690px, calc(100vh - 100px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; color: var(--agent-ink); background: var(--agent-surface); border: 1px solid var(--agent-line-strong); border-radius: 14px; box-shadow: 0 24px 62px rgba(0,0,0,.2); font-family: inherit; scrollbar-width: thin; }
+/* 面板本身不滚动：可滚的只有对话区和上下文抽屉。
+   之前面板是一个整体滚动的长条，说明性区块全平铺在对话上方，
+   1280×720 下打开面板时对话区已经在折叠线以下、输入框还要再往下 159px。 */
+.project-agent-panel { position: fixed; right: 24px; bottom: 76px; z-index: 19; display: flex; flex-direction: column; width: min(410px, calc(100vw - 36px)); height: min(690px, calc(100vh - 100px)); height: min(690px, calc(100dvh - 100px)); max-height: min(690px, calc(100vh - 100px)); overflow: hidden; overscroll-behavior: contain; color: var(--agent-ink); background: var(--agent-surface); border: 1px solid var(--agent-line-strong); border-radius: 14px; box-shadow: 0 24px 62px rgba(0,0,0,.2); font-family: inherit; scrollbar-width: thin; }
 .project-agent-panel.hidden { display: none; }
 .project-agent-panel.is-open { animation: agent-panel-pop .18s ease-out; }
 @keyframes agent-panel-pop { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
 /* 面板打开时锁住背景滚动：触屏在面板内滑动不再带动整页跳动（滑动 Bug 修复）。 */
 body[data-agent-panel-open] { overflow: hidden; }
-.project-agent-head, .project-agent-toolbar, .project-agent-capability, .project-agent-incoming, .project-agent-runs, .project-agent-form, .project-agent-handoff { flex: 0 0 auto; }
+.project-agent-head, .project-agent-toolbar, .project-agent-quick-actions, .project-agent-form { flex: 0 0 auto; }
+/* 上下文抽屉：默认折叠，展开也最多占面板的 46%，剩下的永远留给对话。 */
+.project-agent-context { flex: 0 1 auto; min-height: 0; max-height: 46%; overflow-y: auto; overscroll-behavior: contain; border-bottom: 1px solid var(--agent-line-strong); scrollbar-width: thin; }
+.project-agent-context[hidden] { display: none; }
+.project-agent-context > .project-agent-handoff { border-top: 1px solid var(--agent-line); }
+.project-agent-context-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.project-agent-context-toggle.is-open { color: var(--agent-ink); background: var(--agent-surface-muted); border-color: var(--agent-line-strong); }
+.project-agent-context-badge { display: inline-grid; place-items: center; min-width: 15px; height: 15px; padding: 0 4px; color: #fff; background: var(--agent-accent); border-radius: 999px; font-size: 8px; font-weight: 700; line-height: 1; }
+.project-agent-context-badge[hidden] { display: none; }
+.project-agent-quick-actions[hidden] { display: none; }
 .project-agent-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 16px 17px 13px; border-bottom: 1px solid var(--agent-line); }
 .project-agent-kicker { color: var(--agent-accent); font-size: 9px; font-weight: 800; letter-spacing: .13em; }
 .project-agent-head h2 { margin: 5px 0 3px; color: var(--agent-ink); font-size: 17px; line-height: 1.2; }
@@ -36,7 +48,7 @@ body[data-agent-panel-open] { overflow: hidden; }
 .project-agent-capability-details > div { margin-top: 7px; }
 .project-agent-capability-details strong { color: var(--agent-ink); font-size: 9px; }
 .project-agent-capability-details p { margin: 3px 0 0; color: var(--agent-muted); font-size: 9px; line-height: 1.5; }
-.project-agent-quick-actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 17px; background: var(--agent-surface); border-bottom: 1px solid var(--agent-line); }
+.project-agent-quick-actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 17px; background: var(--agent-surface); border-top: 1px solid var(--agent-line); }
 .project-agent-quick-actions:empty { display: none; }
 .project-agent-quick-actions::before { flex: 0 0 100%; color: var(--agent-faint); content: "从这里开始"; font-size: 9px; }
 .project-agent-quick-actions button { padding: 5px 7px; color: var(--agent-violet); background: color-mix(in srgb, var(--agent-violet) 7%, var(--agent-surface)); border: 1px solid color-mix(in srgb, var(--agent-violet) 23%, var(--agent-line)); border-radius: 6px; font: inherit; font-size: 9px; line-height: 1.2; cursor: pointer; transition: background .18s ease, border-color .18s ease, color .18s ease; }
@@ -103,7 +115,10 @@ body[data-agent-panel-open] { overflow: hidden; }
 .project-agent-citations { margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--agent-line); }
 .project-agent-citations p { margin: 4px 0 0; color: var(--agent-muted); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
 .project-agent-citations a { color: var(--agent-violet); }
-.project-agent-messages { display: grid; flex: 0 1 38vh; gap: 9px; min-height: 96px; max-height: 38vh; padding: 13px 17px; overflow-y: auto; overscroll-behavior: contain; color: var(--agent-muted); background: var(--agent-surface-muted); scrollbar-width: thin; }
+/* 对话区是唯一会长大的区块：面板高度减去头、工具条、抽屉、快捷提问、
+   输入框之后剩多少就占多少。min-height: 0 不能少，否则 grid 子项会把
+   flex 项撑到内容高度，又变回整体滚动。 */
+.project-agent-messages { display: grid; flex: 1 1 auto; align-content: start; gap: 9px; min-height: 0; padding: 13px 17px; overflow-y: auto; overscroll-behavior: contain; color: var(--agent-muted); background: var(--agent-surface-muted); scrollbar-width: thin; }
 .project-agent-message { max-width: 94%; padding: 9px 10px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 9px; font-size: 11px; line-height: 1.6; }
 .project-agent-message.user { justify-self: end; color: #fff; background: var(--agent-violet); border-color: var(--agent-violet); border-bottom-right-radius: 3px; }
 .project-agent-message.assistant { border-bottom-left-radius: 3px; }
@@ -164,15 +179,17 @@ body[data-project-id="crawl4ai"] .project-agent-panel {
 
 @media (max-width: 520px) {
   .project-agent-launcher { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); }
-  .project-agent-panel { right: 8px; bottom: 62px; width: calc(100vw - 16px); max-height: calc(100vh - 76px); border-radius: 12px; }
-  .project-agent-head, .project-agent-toolbar, .project-agent-capability, .project-agent-incoming, .project-agent-runs, .project-agent-form, .project-agent-handoff { padding-left: 12px; padding-right: 12px; }
+  /* 手机上按底部弹出的整页面板处理：小屏幕更需要把高度全给对话。 */
+  .project-agent-panel { top: 44px; right: 8px; bottom: 8px; left: 8px; width: auto; height: auto; max-height: none; border-radius: 12px; }
+  .project-agent-context { max-height: 52%; }
+  .project-agent-head, .project-agent-toolbar, .project-agent-capability, .project-agent-incoming, .project-agent-runs, .project-agent-quick-actions, .project-agent-form, .project-agent-handoff { padding-left: 12px; padding-right: 12px; }
   .project-agent-incoming-item { align-items: stretch; flex-direction: column; }
   .project-agent-incoming-item button { width: 100%; }
   .project-agent-form-foot, .project-agent-handoff-row { align-items: stretch; flex-direction: column; }
   .project-agent-form-foot button, .project-agent-handoff-row button { width: 100%; min-height: 34px; }
   .project-agent-form-foot span { white-space: normal; }
   .project-agent-capability-meta { align-items: start; flex-direction: column; gap: 4px; }
-  .project-agent-messages { max-height: 34vh; min-height: 84px; padding-left: 12px; padding-right: 12px; }
+  .project-agent-messages { padding-left: 12px; padding-right: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
