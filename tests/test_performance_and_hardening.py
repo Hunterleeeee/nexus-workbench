@@ -1201,3 +1201,47 @@ class ProductFormValidationTests(unittest.TestCase):
         block = script[script.find("function syncRequirementTypeFields"):]
         block = block[:block.find("\nfunction ")]
         self.assertIn("disabled = isDefect", block, "隐藏字段必须同时 disabled，否则会静默阻塞提交")
+
+
+class LearningHistoryTests(unittest.TestCase):
+    """学习记录此前只是一行标题，点不开——学过什么、当时怎么答的、批改说了什么全看不到。"""
+
+    def seed(self, connection, lesson_date, title, practice="我的练习", feedback='{"verdict":"达标","score":88,"reviewed_at":"2026-08-10T00:00:00+00:00"}'):
+        content = json.dumps(app.AI_LEARNING_CURRICULUM[0], ensure_ascii=False)
+        connection.execute(
+            """INSERT INTO ai_learning_lessons(track,lesson_date,day_index,module,title,content_json,source,status,
+               quiz_answer,quiz_correct,practice_output,reflection,confidence,note_artifact_id,feedback_json,
+               started_at,completed_at,created_at,updated_at)
+               VALUES('ai-transformation',?,1,'建立 AI 认知',?,?,'curriculum','completed',1,1,?,'复盘',4,0,?,'','',?,?)""",
+            (lesson_date, title, content, practice, feedback, lesson_date, lesson_date),
+        )
+
+    def test_history_lesson_returns_practice_and_feedback(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                self.seed(connection, "2026-08-08", "第一节", practice="第一节写的东西")
+                connection.commit()
+                lesson_id = int(connection.execute("SELECT id FROM ai_learning_lessons").fetchone()[0])
+            finally:
+                connection.close()
+            lesson = app.get_ai_learning_lesson_detail(lesson_id)["lesson"]
+        self.assertEqual(lesson["title"], "第一节")
+        self.assertEqual(lesson["practice_output"], "第一节写的东西", "回看时必须能看到当时写的练习")
+        self.assertEqual(lesson["feedback"]["verdict"], "达标", "回看时必须能看到当时的批改")
+        self.assertEqual(lesson["quiz_answer"], 1)
+
+    def test_missing_lesson_returns_404(self):
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            with self.assertRaises(app.HTTPException) as ctx:
+                app.get_ai_learning_lesson_detail(99999)
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_history_binding_is_delegated_on_the_container(self):
+        """条目每次渲染都会重建，绑在条目上会随之丢失；必须委托在容器上，
+        而且要在初始化时绑一次——不能挂在只有出错才会走到的分支里。"""
+        script = (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
+        self.assertIn("function setupLearningHistory", script)
+        self.assertIn("setupLearningHistory();", script.split("function setupAILearning")[1][:400])
