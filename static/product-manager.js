@@ -330,14 +330,23 @@ function syncRequirementTypeFields() {
 }
 
 function renderProjectOptions(projects = {}) {
+  const options = (projects.options || []).map((item) => `<option value="${escape(item.id)}">${escape(item.title)}</option>`).join("");
+  const selected = projects.selected || "";
   const select = $("#requirement-project");
-  if (!select) return;
-  const previous = select.value;
-  select.innerHTML = '<option value="">未归属</option>' + (projects.options || []).map((item) => `<option value="${escape(item.id)}">${escape(item.title)}</option>`).join("");
-  // 正在看某个项目时，新建的条目默认就归到它——否则每次都要再选一次，
-  // 而且很容易忘了选，结果东西全落进「未归属」。
-  const preferred = projects.selected || previous;
-  if (preferred && select.querySelector(`option[value="${CSS.escape(preferred)}"]`)) select.value = preferred;
+  if (select) {
+    const previous = select.value;
+    select.innerHTML = '<option value="">未归属</option>' + options;
+    // 正在看某个项目时，新建的条目默认就归到它——否则每次都要再选一次，
+    // 而且很容易忘了选，结果东西全落进「未归属」。
+    const preferred = selected || previous;
+    if (preferred && select.querySelector(`option[value="${CSS.escape(preferred)}"]`)) select.value = preferred;
+  }
+  // 页面顶部的全局项目切换：反馈 / 需求 / 原型 / 决策都按它过滤。
+  const filterSelect = $("#product-project-filter");
+  if (filterSelect) {
+    filterSelect.innerHTML = '<option value="">全部项目</option>' + options;
+    if (selected && filterSelect.querySelector(`option[value="${CSS.escape(selected)}"]`)) filterSelect.value = selected;
+  }
 }
 
 function renderProjectRollup(projects = {}) {
@@ -381,7 +390,14 @@ function renderProjectRollup(projects = {}) {
     const chip = event.target.closest("[data-project-filter]");
     if (!chip) return;
     state.projectFilter = chip.dataset.projectFilter || "";
+    const filterSelect = $("#product-project-filter");
+    if (filterSelect) filterSelect.value = state.projectFilter;
     await loadOverview();
+  });
+  // 顶部全局项目切换：切项目即切全部分类的数据。
+  $("#product-project-filter")?.addEventListener("change", (event) => {
+    state.projectFilter = event.target.value || "";
+    void loadOverview();
   });
   $("#project-rollup")?.addEventListener("submit", async (event) => {
     if (!event.target.closest("#project-form")) return;

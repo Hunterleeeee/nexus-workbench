@@ -26,6 +26,10 @@
 .product-tab.active svg { color: var(--pm-accent); }
 .product-tab.active em { color: var(--pm-accent); background: var(--pm-accent-soft); }
 .product-status { min-height: 27px; padding: 8px 2px 0; color: var(--muted); font-size: 10px; }
+.product-project-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 9px 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 11px; }
+.product-project-bar label { color: var(--muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.product-project-filter { max-width: 280px; min-height: 32px; padding: 0 10px; color: var(--ink); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; }
+.product-project-hint { overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .product-status[data-tone="success"] { color: var(--green); }
 .product-status[data-tone="error"] { color: var(--danger); }
 .product-panel[hidden] { display: none; }

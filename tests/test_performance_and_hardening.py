@@ -605,6 +605,33 @@ class UsageStatsAccuracyTests(unittest.TestCase):
         self.assertEqual(stats["calls"], metrics["calls"], "使用统计与 LLM 运行指标的调用次数口径不一致")
         self.assertEqual(stats["ok"], metrics["succeeded"], "两处的成功次数口径不一致")
 
+    def test_agent_runs_exclude_internal_kinds_from_the_count(self):
+        """dispatch_child/evidence_acceptance/manual_takeover/approval_decision
+        不是「智能体运行」：子调用双计、验收/审批只是动作。混进去会让
+        「运行次数」虚高（曾出现 282 条里近一半是水分）。"""
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                stamp = app.now_iso()
+                visible = [("chat", "succeeded"), ("idea_chat", "succeeded"), ("crawl", "failed"), ("handoff", "succeeded")]
+                internal = [("dispatch_child", "succeeded"), ("evidence_acceptance", "succeeded"),
+                            ("manual_takeover", "succeeded"), ("approval_decision", "failed")]
+                for kind, status in visible + internal:
+                    connection.execute(
+                        """INSERT INTO agent_runs(project_id, session_id, kind, title, status,
+                           request_json, result_json, error, attempt, max_attempts, created_at, updated_at)
+                           VALUES ('market','',?,?,?, '{}','{}','',1,2,?,?)""",
+                        (kind, kind, status, stamp, stamp),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+            stats = app.collect_usage_stats(30)
+        self.assertEqual(stats["totals"]["runs"], 4, "只有 4 次真实运行，内部记录不应计入")
+        daily_total = sum(item["runs"] for item in stats["daily_runs"])
+        self.assertEqual(daily_total, 4, "趋势图口径应与总数一致")
+
 
 class OrphanedCrawlRunTests(unittest.TestCase):
     """Crawl Worker 没启动时，任务会永远停在 queued，页面上显示"排队等待"。

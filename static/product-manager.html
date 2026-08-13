@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.176"></script>
+  <script src="/static/theme.js?v=0.3.177"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>产品作战室 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.176" />
-  <link rel="stylesheet" href="/static/product-manager.css?v=0.3.176" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.177" />
+  <link rel="stylesheet" href="/static/product-manager.css?v=0.3.177" />
 </head>
 <body data-project-id="product-manager">
   <div class="page-shell product-shell">
@@ -40,6 +40,12 @@
         <article><span>待评审</span><strong id="metric-review">—</strong><small>需要产品判断</small></article>
         <article class="metric-warning"><span>缺少证据</span><strong id="metric-evidence">—</strong><small>先补事实，再排优先级</small></article>
       </section>
+
+      <div class="product-project-bar" aria-label="按项目查看">
+        <label for="product-project-filter">当前项目</label>
+        <select id="product-project-filter" class="product-project-filter"><option value="">全部项目</option></select>
+        <span class="product-project-hint">反馈 / 需求 / 原型 / 决策都按项目切换；切项目即切数据。</span>
+      </div>
 
       <nav class="product-tabs" role="tablist" aria-label="产品作战室分区">
         <button class="product-tab active" type="button" role="tab" aria-selected="true" aria-controls="panel-today" data-product-tab="today">
@@ -209,9 +215,9 @@
     </main>
   </div>
 
-  <script src="/static/request.js?v=0.3.176"></script>
-  <script src="/static/llm-settings.js?v=0.3.176"></script>
-  <script src="/static/markdown.js?v=0.3.176"></script><script src="/static/project.js?v=0.3.176"></script>
-  <script src="/static/product-manager.js?v=0.3.176"></script>
+  <script src="/static/request.js?v=0.3.177"></script>
+  <script src="/static/llm-settings.js?v=0.3.177"></script>
+  <script src="/static/markdown.js?v=0.3.177"></script><script src="/static/project.js?v=0.3.177"></script>
+  <script src="/static/product-manager.js?v=0.3.177"></script>
 </body>
 </html>

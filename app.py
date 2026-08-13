@@ -550,13 +550,10 @@ def _public_projects_uncached() -> list[dict[str, Any]]:
     sub2api = load_sub2api_snapshot()
     market = load_market_snapshot()
     server = load_server_monitor_snapshot()
-    crawl_available = False
-    try:
-        import crawl4ai  # noqa: F401
-
-        crawl_available = True
-    except Exception:
-        log.debug("忽略异常（_public_projects_uncached）", exc_info=True)
+    # 用 find_spec 只查「是否安装」不执行导入——import crawl4ai 光导入就要
+    # 800ms+（async_webcrawler/async_database/async_logger 一堆依赖），而首页
+    # /api/projects 每次都要走这里，服务重启后的首个请求会白白慢近一秒。
+    crawl_available = importlib.util.find_spec("crawl4ai") is not None
     all_projects = load_projects()
     # 一次把所有项目的计数取齐，替代每张卡片各查一遍。
     activity_batch = project_activity_batch([str(item.get("id") or "") for item in all_projects] + ["crawl4ai"])
@@ -25589,6 +25586,13 @@ async def push_git_inventory(request: Request) -> dict[str, Any]:
 
 USAGE_WINDOW_CHOICES = (7, 30, 90)
 
+# 不算「智能体运行」的内部记录：dispatch_child 是总调度派生的子调用（与父 run
+# 双计）；evidence_approval 是联动验收基线；manual_takeover 是人工接管动作；
+# approval_decision 是审批按钮。这些混进 runs 会让统计虚高——曾出现 30 天
+# 282 条 run 里近一半是这三类。口径与 /api/trace/recent 保持一致，只多排
+# approval_decision。
+USAGE_EXCLUDED_RUN_KINDS = ("dispatch_child", "evidence_acceptance", "manual_takeover", "approval_decision")
+
 
 def _usage_since(days: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat()
@@ -25649,7 +25653,8 @@ def collect_usage_stats(days: int = 30) -> dict[str, Any]:
     connection = db_connection()
     try:
         for row in connection.execute(
-            "SELECT project_id, status, created_at FROM agent_runs WHERE created_at >= ?", (since,)
+            "SELECT project_id, status, created_at FROM agent_runs WHERE created_at >= ? AND kind NOT IN (?, ?, ?, ?)",
+            (since, *USAGE_EXCLUDED_RUN_KINDS),
         ):
             entry = bucket(row["project_id"])
             if entry is None:
@@ -25760,9 +25765,10 @@ def collect_usage_stats(days: int = 30) -> dict[str, Any]:
             {"date": str(row["day"]), "runs": int(row["runs"] or 0)}
             for row in connection.execute(
                 """SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS runs
-                   FROM agent_runs WHERE created_at >= ?
+                   FROM agent_runs
+                   WHERE created_at >= ? AND kind NOT IN (?, ?, ?, ?)
                    GROUP BY day ORDER BY day""",
-                (since,),
+                (since, *USAGE_EXCLUDED_RUN_KINDS),
             )
         ]
     finally:
@@ -25770,7 +25776,10 @@ def collect_usage_stats(days: int = 30) -> dict[str, Any]:
 
     entries = sorted(
         per_project.values(),
-        key=lambda item: (item["runs"] + item["work_items"] + item["artifacts"], item["last_used_at"]),
+        # runs 优先（用户感知的「在用」= 真的跑过），工作项/产物次之。
+        # 之前按 activity 混合排序，后台产生大量工作项的项目会压过
+        # 用户天天对话的项目，导致「真正在用的是」与直觉相反。
+        key=lambda item: (item["runs"], item["work_items"] + item["artifacts"], item["last_used_at"]),
         reverse=True,
     )
     for entry in entries:
@@ -31522,6 +31531,12 @@ def product_manager_overview(limit: int = 200, project_id: str = "") -> dict[str
     requirements = list_product_requirements(limit, project_filter)
     decisions = list_product_decisions(limit)
     prototypes = list_product_prototypes(limit)
+    if project_filter:
+        # 决策/原型本身没有 project_id，通过所属需求归属项目；未关联需求的
+        # （requirement_id=0，独立记录）在按项目过滤时不显示。
+        requirement_ids = {int(item["id"]) for item in requirements}
+        decisions = [item for item in decisions if int(item.get("requirement_id") or 0) in requirement_ids]
+        prototypes = [item for item in prototypes if int(item.get("requirement_id") or 0) in requirement_ids]
     active = [item for item in requirements if item.get("status") not in {"shipped", "paused"}]
     needs_evidence = [item for item in active if int(item.get("evidence_count") or 0) == 0]
     review_items = [item for item in requirements if item.get("status") == "review"]

@@ -1,9 +1,16 @@
 # 迭代记录
 
+## v0.3.177 · 2026-08-13
+
+- **首页加载优化**：`/api/projects` 热路径上的 `import crawl4ai` 改为 `importlib.util.find_spec` 只查安装不执行导入——crawl4ai 光导入要 800ms+（async_webcrawler/async_database 一堆依赖），服务重启后的首个首页请求实测从 ~880ms 降到 ~60ms。
+- **使用统计口径修正**：`agent_runs` 统计排除内部记录 `dispatch_child`（子调用双计）/`evidence_acceptance`（联动验收基线）/`manual_takeover`（人工接管）/`approval_decision`（审批动作）——曾出现 30 天 282 条 run 里近一半是这类水分；趋势图同口径。一句话统计「真正在用的」排序改为 runs 主导（之前按 运行+工作项+产物 混合排序，后台产生大量工作项的项目压过用户天天对话的项目）。
+- **产品作战室按项目经营**：页面顶部新增全局项目选择器（全部/各产品项目），反馈/需求/原型/决策全部 tab 随项目切换；后端 `overview?project_id=` 过滤补齐决策/原型（之前只过滤反馈/需求，决策/原型 tab 切项目后仍显示别家数据）。
+- 新增 2 项回归测试（统计口径排除内部 kind、作战室项目过滤包含决策/原型），全量 506 通过。
+
 ## v0.3.176 · 2026-08-13
 
 - **修复应用通知点击双重跳转**：桌面壳 `setWindowOpenHandler` 对 `window.open` 返回 deny（返回 null）但已开新标签，前端原逻辑误判为"打不开"走 `location.href` 兜底 → 「新页面 + 原页面」一起跳。统一改为 `WorkbenchUX.openTarget`：壳环境走 `desktopShell.openTab`，浏览器环境 `window.open`，仅非壳且弹窗被拦截才跳当前页（通知面板两处 + request.js 全局入口）。
-- **修复 AI 热点「商业/综合」筛选恒为 0**：映射表有 36kr→商业但源列表没有 36kr；「综合」只是未知域名兜底、所有源都被映射命中所以永不出现。新增源：钛媒体 `tmtpost.com/rss`→商业、新浪滚动新闻 `rss.sina.com.cn/tech/rollnews.xml`→综合（服务器实测分别可解析 19/15 条）。
+- **修复 AI 热点「商业/综合」筛选恒为 0**：映射表有 36kr→商业但源列表没有 36kr；「综合」只是未知域名兜底、所有源都被映射命中所以永不出现。新增源：钛媒体 `tmtpost.com/rss`→商业（实测解析 19 条）、中国新闻网 `chinanews.com.cn/rss/scroll-news.xml`→综合（实测解析 30 条今日新闻；曾先用新浪滚动新闻但它是 2018 年死 feed，实测 15 条全是旧闻后替换）。
 - **热点「阅读原文」提为显式按钮**：从「更多」菜单移出到卡片操作区，点击统一走 `openWorkbenchTarget`（壳内新标签），不再依赖 details 菜单；筛选无结果时状态栏提示"该领域暂无订阅源"。
 - 新增回归测试（默认源必须覆盖商业/综合标签），全量 504 通过。
 

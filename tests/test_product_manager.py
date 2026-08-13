@@ -179,6 +179,35 @@ class ProductManagerTests(unittest.TestCase):
         self.assertIn("Pinned version: `0.1.25`", notice)
         self.assertIn("tldraw", notice)
 
+    def test_overview_project_filter_applies_to_decisions_and_prototypes(self):
+        """按项目查看时，决策/原型必须跟着所属需求一起过滤——
+        否则「切到某项目，决策和原型 tab 还显示别家数据」就是逻辑不对。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_file = Path(temp_dir) / "workbench.db"
+            with patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+                project = str(app.create_product_project("量化助手")["id"])
+                other = str(app.create_product_project("文档工厂")["id"])
+                req_a = app.create_product_requirement(app.ProductRequirementRequest(
+                    title="量化需求", target_user="投研", problem="信号慢", outcome="更快",
+                    reach=10, impact=2, confidence=80, effort=4, project_id=project,
+                ))
+                req_b = app.create_product_requirement(app.ProductRequirementRequest(
+                    title="文档需求", target_user="写作者", problem="排版累", outcome="自动排版",
+                    reach=10, impact=2, confidence=80, effort=4, project_id=other,
+                ))
+                app.create_product_decision(app.ProductDecisionRequest(
+                    requirement_id=req_a["id"], title="量化决策", decision="先做回测",
+                ))
+                app.create_product_decision(app.ProductDecisionRequest(
+                    requirement_id=req_b["id"], title="文档决策", decision="先做模板",
+                ))
+                filtered = app.product_manager_overview(project_id=project)
+                everything = app.product_manager_overview()
+        self.assertEqual([item["title"] for item in filtered["decisions"]], ["量化决策"],
+                         "按项目过滤时决策应只显示该项目的")
+        self.assertEqual(len(everything["decisions"]), 2, "不过滤时两边的决策都在")
+        self.assertEqual(filtered["projects"]["selected"], project)
+
 
 if __name__ == "__main__":
     unittest.main()
