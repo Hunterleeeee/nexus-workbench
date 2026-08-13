@@ -286,6 +286,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .explore-field { margin-top: 9px; }
 .explore-field strong { display: block; margin-bottom: 3px; color: var(--learn-accent); font-size: 9px; font-weight: 750; letter-spacing: .05em; }
 .explore-field p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.explore-field ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.explore-field li { margin-bottom: 4px; }
+.explore-subnote { display: block; margin-top: 2px; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .explore-field ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .explore-field.caution strong { color: var(--learn-warm); }
 .explore-foot { margin-top: 11px; padding-top: 9px; border-top: 1px dashed var(--line); }

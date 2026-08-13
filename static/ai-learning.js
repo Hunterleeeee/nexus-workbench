@@ -609,7 +609,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.179", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.180", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 
@@ -715,8 +715,27 @@ const EXPLORE_FIELDS = [
   ["check", "自查一下你是否真懂"],
 ];
 
+function _exploreItemToText(item) {
+  // LLM 习惯把步骤/取舍/坑写成对象（text/title/content 等），
+  // 或者对象嵌套对象——抽到可读的「标题 + 补充」两段，纯字符串原样返回。
+  if (item == null) return "";
+  if (typeof item === "string") return learnEscape(item);
+  if (typeof item === "object") {
+    const head = item.text || item.title || item.content || item.body || item.description || item.answer || item.question || item.first_step || item.option || item.mistake || item.point || "";
+    const tail = item.detail || item.how_to_avoid || item.applicable || item.reason || item.scenario || "";
+    if (head && tail) return `${learnEscape(head)}<span class="explore-subnote">${learnEscape(tail)}</span>`;
+    if (head) return learnEscape(head);
+    return learnEscape(JSON.stringify(item));
+  }
+  return learnEscape(String(item));
+}
+
 function exploreValueMarkup(value) {
-  if (Array.isArray(value)) return `<ul>${value.map((item) => `<li>${learnEscape(item)}</li>`).join("")}</ul>`;
+  if (Array.isArray(value)) {
+    return `<ul>${value.map((item) => `<li>${_exploreItemToText(item)}</li>`).join("")}</ul>`;
+  }
+  if (value == null) return "";
+  if (typeof value === "object") return `<p>${_exploreItemToText(value)}</p>`;
   return `<p>${learnEscape(value)}</p>`;
 }
 

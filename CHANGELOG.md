@@ -1,5 +1,10 @@
 # 迭代记录
 
+## v0.3.180 · 2026-08-13
+
+- **修复主动学习结果「[object Object]」渲染**：`exploreValueMarkup` 之前对数组每项直接 `learnEscape(item)`，碰到 LLM 输出的对象结构（steps 每项 `{title, content}`、common_mistakes `{mistake, how_to_avoid}`、in_your_work `{first_step, scenario}` 等）就降级成 `[object Object]`。改为：识别字符串原样转、识别对象按 `text/title/content/mistake` 等字段抽 head（正文）+ `detail/how_to_avoid/applicable` 等抽 tail（补充说明，用小字呈现）。新增 `.explore-subnote` 样式区分主文与补充。
+- 全量 507 通过。
+
 ## v0.3.179 · 2026-08-13
 
 - **主动学习推荐升级为个性化**：LLM 结合用户档案（岗位/目标岗位/经验/关注方向/目标）、课程进度（已完成课程 + 课程大纲）、已问历史，现场生成贴合个人的推荐问题；1 小时缓存避免反复调用；未配置 LLM 或生成失败自动回落内置精选池。已探索排除升级为**模糊相似度**（去掉标点归一化 + 包含/相似度匹配）——LLM 换措辞（"什么是 RAG" vs "RAG 到底解决了什么"）也能识别，不会换一批又换回问过的。
