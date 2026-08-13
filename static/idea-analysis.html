@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.172"></script>
+  <script src="/static/theme.js?v=0.3.173"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>想法分析 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.172" />
-  <link rel="stylesheet" href="/static/idea-analysis.css?v=0.3.172" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.173" />
+  <link rel="stylesheet" href="/static/idea-analysis.css?v=0.3.173" />
 </head>
 <body>
   <div class="page-shell">
@@ -24,8 +24,9 @@
     </main>
   </div>
   <div id="evidence-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="evidence-overlay-title"><form id="evidence-form" class="modal"><div class="modal-head"><div><h2 id="evidence-overlay-title">记录验证证据</h2><p>把访谈原话、试用结果、竞品核查事实记下来，作为继续/停止判断的依据。</p></div><button class="icon-button" data-close-evidence type="button" aria-label="关闭">×</button></div><div class="form-stack"><label>标题<input id="evidence-title" placeholder="例如：访谈了 3 位酒店前台，都提到差评处理耗时" /></label><label>内容<textarea id="evidence-content" rows="4" placeholder="记录事实和原话，不写结论"></textarea></label><div class="two-col"><label>类别<select id="evidence-kind"><option value="market">市场</option><option value="interview">访谈</option><option value="competitor">竞品</option><option value="prototype">原型</option><option value="delivery">交付</option><option value="research">研究</option></select></label><label>证据倾向<select id="evidence-status"><option value="unverified">待验证</option><option value="supported">支持假设</option><option value="contradicted">反证</option><option value="partial">部分支持</option></select></label></div><label>来源（可选）<input id="evidence-source" placeholder="例如：2026-08-01 电话访谈" /></label></div><div class="modal-actions"><button class="secondary-button" data-close-evidence type="button">取消</button><button class="primary-button" type="submit">保存证据</button></div></form></div>
+  <div id="idea-result-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="idea-result-title"><div class="modal idea-result-modal"><div class="modal-head"><div><h2 id="idea-result-title">分析结果</h2><p>想法分析 Agent 对这次交接的初判。</p></div><button class="icon-button" data-close-idea-result type="button" aria-label="关闭">×</button></div><div id="idea-result-body" class="idea-result-body"><p class="md-p">读取中…</p></div><div class="modal-actions"><button class="secondary-button" data-close-idea-result type="button">关闭</button></div></div></div>
   <div id="interview-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="interview-overlay-title" aria-describedby="interview-overlay-description"><form id="interview-form" class="modal interview-modal"><div class="modal-head"><div><h2 id="interview-overlay-title">记录结构化访谈</h2><p id="interview-overlay-description">只记录具体问题和原话，不把一次访谈直接当成结论；后续可以在证据包里回放。</p></div><button class="icon-button" data-close-interview type="button" aria-label="关闭访谈记录">×</button></div><div class="form-stack"><label>参与者<input id="interview-participant" maxlength="160" autocomplete="off" placeholder="例如：某酒店前台负责人" required /></label><label>具体问题<textarea id="interview-question" rows="3" maxlength="2000" placeholder="例如：你最近一次处理差评花了多长时间？" required></textarea></label><label>原话 / 回答<textarea id="interview-answer" rows="5" maxlength="12000" placeholder="尽量保留原话、具体行为和上下文；不要只写“对方觉得不错”。" required></textarea></label><div class="two-col"><label>来源（可选）<input id="interview-source" maxlength="2000" autocomplete="off" placeholder="例如：2026-08-09 电话访谈 / 录音 03:12" /></label><label>证据状态<select id="interview-status"><option value="unverified">待验证</option><option value="supported">支持假设</option><option value="contradicted">反证</option><option value="partial">部分支持</option></select></label></div><p id="interview-form-message" class="modal-message" role="status" aria-live="polite"></p></div><div class="modal-actions"><button class="secondary-button" data-close-interview type="button">取消</button><button class="primary-button" type="submit">保存访谈</button></div></form></div>
-      <script src="/static/request.js?v=0.3.172"></script><script src="/static/markdown.js?v=0.3.172"></script><script src="/static/project.js?v=0.3.172"></script>
+      <script src="/static/request.js?v=0.3.173"></script><script src="/static/markdown.js?v=0.3.173"></script><script src="/static/project.js?v=0.3.173"></script>
   <script>
     let sessionId = "";
     let sessions = [];
@@ -34,6 +35,7 @@
     let modalReturnFocus = null;
     const sessionList = qs("#session-list");
     const opportunityList = qs("#idea-opportunity-list");
+    let opportunityItems = [];
     const chatLog = qs("#idea-chat-log");
     const planContent = qs("#plan-content");
     const planEmpty = qs("#plan-empty");
@@ -55,7 +57,7 @@
         const done = item.status === "done";
         const running = item.status === "running";
         const failed = item.status === "failed";
-        const action = done ? `<button class="opportunity-start done" type="button" data-open-session="${escapeHtml(result.idea_session_id || "")}" ${result.idea_session_id ? "" : "disabled"}>查看验证结果</button>` : `<button class="opportunity-start" type="button" data-start-opportunity="${escapeHtml(item.id)}" ${running ? "disabled" : ""}>${running ? "分析中…" : failed ? "重试验证" : "开始验证"}</button>`;
+        const action = done ? (result.idea_session_id ? `<button class="opportunity-start done" type="button" data-open-session="${escapeHtml(result.idea_session_id)}">查看验证结果</button>` : `<button class="opportunity-start done" type="button" data-show-result="${escapeHtml(item.id)}">查看分析结果</button>`) : `<button class="opportunity-start" type="button" data-start-opportunity="${escapeHtml(item.id)}" ${running ? "disabled" : ""}>${running ? "分析中…" : failed ? "重试验证" : "开始验证"}</button>`;
         return `<article class="opportunity-item ${done ? "is-done" : failed ? "is-failed" : ""}"><div class="opportunity-item-top"><span>${escapeHtml(item.source_agent_name || "项目 Agent")}</span><time>${escapeHtml(formatDate(item.updated_at || item.created_at))}</time></div><strong>${escapeHtml(signal.title || item.title)}</strong><p>${escapeHtml(signal.description || "已登记一条待验证机会")}</p><div class="opportunity-item-foot"><span class="opportunity-status">${done ? "已完成初判" : failed ? "上次失败" : running ? "正在分析" : "待领取"}</span>${action}</div></article>`;
       }).join("");
     }
@@ -210,7 +212,7 @@
       } catch (error) { setPlanOperation(`决策比较失败：${error.message}`, "error"); }
     }
     async function loadSessions() { const body = await requestJson("/api/idea-analysis/sessions"); sessions = body.sessions || []; renderSessions(); if (!sessionId && sessions.length) await openSession(sessions[0].id); }
-    async function loadOpportunities() { const body = await requestJson("/api/idea-analysis/opportunities"); renderOpportunities(body.items || []); }
+    async function loadOpportunities() { const body = await requestJson("/api/idea-analysis/opportunities"); opportunityItems = body.items || []; renderOpportunities(opportunityItems); }
     async function loadFollowups() { const summaryNode = qs("#followup-summary"); const list = qs("#followup-list"); if (!list) return; try { const body = await requestJson("/api/idea-analysis/followups?days=3"); const summary = body.summary || {}; const actionable = [...(body.tasks || [])].filter((item) => ["overdue", "due_soon"].includes(item.bucket)); if (summaryNode) summaryNode.textContent = `逾期 ${summary.overdue || 0} · 3 天内 ${summary.due_soon || 0} · 更晚 ${summary.later || 0}`; list.innerHTML = actionable.length ? actionable.slice(0, 8).map((item) => `<div class="followup-row ${escapeHtml(item.bucket || "later")}"><div><strong>${escapeHtml(item.title || "验证任务")}</strong><small>${escapeHtml(item.session_title || "未命名想法")} · 截止 ${escapeHtml(item.due_at || "未设置")}</small></div><span>${escapeHtml(item.bucket === "overdue" ? "已逾期" : `${item.days_remaining ?? "—"} 天内`)}</span></div>`).join("") : '<div class="plan-list-empty">未来 3 天没有到期任务，继续按计划验证即可。</div>'; } catch (error) { if (summaryNode) summaryNode.textContent = "读取失败"; list.innerHTML = `<div class="plan-list-empty">${escapeHtml(error.message)}</div>`; } }
     async function loadPlan(id = sessionId) { if (!id) { renderPlan({ plan: {} }); return; } const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(id)}/plan`); renderPlan(body); return body; }
     async function generatePlan() { if (!sessionId) { setPlanOperation("先描述一个想法，再生成验证工作台。", "error"); return; } generatePlanButton.disabled = true; generatePlanButton.textContent = "生成中…"; setPlanOperation("Agent 正在把对话拆成假设、任务和决策条件…"); try { const body = await requestJson(`/api/idea-analysis/sessions/${encodeURIComponent(sessionId)}/plan`, { method: "POST" }); sessionId = body.session?.id || sessionId; renderPlan(body); setVerdict(body.decision?.verdict || body.session?.summary?.verdict); setPlanOperation(`已生成 v${body.decision?.version || ""}：${body.plan?.hypotheses?.length || 0} 个假设、${body.plan?.tasks?.length || 0} 个验证任务。`, "success"); await Promise.all([loadSessions(), loadIdeaRuns(sessionId)]); } catch (error) { generatePlanButton.disabled = false; setPlanOperation(`生成失败：${error.message}；可在运行记录中重试。`, "error"); await loadPlan(sessionId).catch(() => {}); await loadIdeaRuns(sessionId).catch(() => {}); } }
@@ -233,7 +235,16 @@
     }
 
     sessionList.addEventListener("click", (event) => { const item = event.target.closest("[data-session-id]"); if (item) openSession(item.dataset.sessionId).catch((error) => setOperation(`读取会话失败：${error.message}`, "error")); });
-    opportunityList.addEventListener("click", (event) => { const start = event.target.closest("[data-start-opportunity]"); if (start) return startOpportunity(start); const open = event.target.closest("[data-open-session]"); if (open) openSession(open.dataset.openSession).catch((error) => setOperation(`打开会话失败：${error.message}`, "error")); });
+    opportunityList.addEventListener("click", (event) => { const start = event.target.closest("[data-start-opportunity]"); if (start) return startOpportunity(start); const open = event.target.closest("[data-open-session]"); if (open) openSession(open.dataset.openSession).catch((error) => setOperation(`打开会话失败：${error.message}`, "error")); const show = event.target.closest("[data-show-result]"); if (show) showIdeaResult(show.dataset.showResult); });
+    function showIdeaResult(workItemId) {
+      const item = opportunityItems.find((entry) => String(entry.id) === String(workItemId));
+      const answer = item?.result?.answer || item?.result?.summary || "（这次交接没有可展示的分析正文）";
+      const md = window.WorkbenchMarkdown;
+      document.querySelector("#idea-result-body").innerHTML = md ? md.render(answer) : `<p>${escapeHtml(answer)}</p>`;
+      document.querySelector("#idea-result-overlay").classList.remove("hidden");
+    }
+    document.querySelectorAll("[data-close-idea-result]").forEach((button) => button.addEventListener("click", () => document.querySelector("#idea-result-overlay").classList.add("hidden")));
+    document.querySelector("#idea-result-overlay")?.addEventListener("click", (event) => { if (event.target === document.querySelector("#idea-result-overlay")) document.querySelector("#idea-result-overlay").classList.add("hidden"); });
     qs("#new-session").addEventListener("click", startNewSession);
     generatePlanButton.addEventListener("click", generatePlan);
     qs("#idea-run-history").addEventListener("click", async (event) => { const button = event.target.closest("[data-idea-retry]"); if (!button) return; button.disabled = true; button.textContent = "重试中…"; try { const body = await requestJson(`/api/agent/idea-analysis/runs/${encodeURIComponent(button.dataset.ideaRetry)}/retry`, { method: "POST" }); sessionId = body.session?.id || sessionId; qs("#conversation-title").textContent = body.session?.title || "想法分析"; setVerdict(body.decision?.verdict || body.session?.summary?.verdict); renderMessages(body.messages || []); if (body.plan) renderPlan(body); setPlanOperation("已完成验证计划重试，旧版本仍保留。", "success"); setOperation("已完成重试。", "success"); await loadSessions(); await loadOpportunities(); await loadIdeaRuns(sessionId); } catch (error) { button.disabled = false; button.textContent = "重试"; setPlanOperation(`重试失败：${error.message}`, "error"); setOperation(`重试失败：${error.message}`, "error"); } });

@@ -9293,11 +9293,14 @@ def update_idea_session_summary(session_id: str, summary: dict[str, Any]) -> dic
 
 def idea_opportunity_work_items(limit: int = 30) -> list[dict[str, Any]]:
     """Return local opportunity handoffs waiting for the Venture Agent."""
+    # kind 不止 opportunity：收件箱路由到想法分析的工作项是 idea_review
+    # （aihot/cid 才是 opportunity）。只认 opportunity 会把收件箱来的交接
+    # 全部藏掉——用户从收件箱转给想法分析的任务，在想法分析页永远看不见。
     items = [
         item
         for item in list_work_items("all", "idea-analysis")
         if item.get("source_project") in {"aihot", "cid-dashboard", "inbox"}
-        and item.get("kind") == "opportunity"
+        and item.get("kind") in {"opportunity", "idea_review", "idea_followup"}
         and "idea-analysis" in {part.strip() for part in str(item.get("target_project", "")).split(",") if part.strip()}
     ]
     return items[: max(1, min(limit, 100))]

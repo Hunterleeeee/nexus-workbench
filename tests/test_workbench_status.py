@@ -316,6 +316,26 @@ class WorkbenchStatusTests(unittest.TestCase):
         self.assertEqual(health["data_as_of"], "2026-08-09T02:00:00+00:00")
         self.assertEqual(health["tone"], "danger")
 
+    def test_idea_opportunity_list_includes_inbox_idea_review_handoffs(self):
+        """收件箱路由到想法分析的工作项 kind 是 idea_review（aihot/cid 才是
+        opportunity）。只认 opportunity 会把收件箱的交接全藏掉——用户从收件箱
+        转给想法分析的任务，在想法分析页永远看不见。"""
+        items = [
+            {"id": 1, "source_project": "inbox", "kind": "idea_review", "target_project": "idea-analysis", "title": "收件箱想法"},
+            {"id": 2, "source_project": "aihot", "kind": "opportunity", "target_project": "idea-analysis", "title": "热点机会"},
+            {"id": 3, "source_project": "inbox", "kind": "opportunity", "target_project": "idea-analysis", "title": "收件箱机会"},
+            {"id": 4, "source_project": "inbox", "kind": "task", "target_project": "idea-analysis", "title": "不该出现"},
+            {"id": 5, "source_project": "inbox", "kind": "idea_review", "target_project": "market", "title": "目标不对"},
+        ]
+        with patch.object(app, "list_work_items", return_value=items):
+            result = app.idea_opportunity_work_items()
+        ids = [item["id"] for item in result]
+        self.assertIn(1, ids, "收件箱 idea_review 必须出现在想法分析机会列表")
+        self.assertIn(2, ids)
+        self.assertIn(3, ids)
+        self.assertNotIn(4, ids, "非机会 kind 不该出现")
+        self.assertNotIn(5, ids, "目标不是 idea-analysis 的不该出现")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
-@import url('/static/project-agent.css?v=0.3.172');
+@import url('/static/project-agent.css?v=0.3.173');
 
 :root {
   --bg: #f4f6f8;
@@ -427,6 +427,21 @@ input::placeholder, textarea::placeholder { color: #aeb7bf; }
 .md-inbox-preview .md-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
 .md-inbox-preview .md-table th, .md-inbox-preview .md-table td { padding: 5px 9px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .md-inbox-preview .md-table th { background: #f6f8fa; font-weight: 500; }
+.idea-result-modal { width: min(100%, 760px); max-height: 84vh; display: flex; flex-direction: column; }
+.idea-result-body { overflow: auto; padding: 14px 16px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.idea-result-body p.md-p { margin: 4px 0; line-height: 1.7; }
+.idea-result-body .md-h { margin: 9px 0 5px; font-weight: 500; }
+.idea-result-body .md-list { margin: 4px 0; padding-left: 20px; }
+.idea-result-body .md-list li { margin: 2px 0; overflow-wrap: anywhere; }
+.idea-result-body .md-code-block { position: relative; margin: 8px 0; }
+.idea-result-body .md-code { margin: 0; padding: 9px 11px; background: #f6f8fa; border: 1px solid var(--line); border-radius: 7px; overflow-x: hidden; }
+.idea-result-body .md-code code { display: block; color: #24292f; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.idea-result-body .md-copy { position: absolute; top: 5px; right: 5px; padding: 2px 8px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 5px; font-size: 9px; cursor: pointer; opacity: 0; transition: opacity .15s ease; }
+.idea-result-body .md-code-block:hover .md-copy { opacity: 1; }
+.idea-result-body .md-table-wrap { overflow-x: hidden; border: 1px solid var(--line); border-radius: 7px; margin: 8px 0; }
+.idea-result-body .md-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+.idea-result-body .md-table th, .idea-result-body .md-table td { padding: 5px 9px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.idea-result-body .md-table th { background: #f6f8fa; font-weight: 500; }
 @media (max-width: 760px) {
   .inbox-compose-grid { grid-template-columns: 1fr; }
   .inbox-compose-preview { min-height: 180px; max-height: 34vh; }
