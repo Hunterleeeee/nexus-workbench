@@ -118,7 +118,7 @@ _AIHOT_DEFAULT_SOURCES = (
     "https://rss.eastmoney.com/rss_partener.xml,"
     "https://dedicated.wallstreetcn.com/rss.xml,"
     "https://www.tmtpost.com/rss,"
-    "https://rss.sina.com.cn/tech/rollnews.xml"
+    "https://www.chinanews.com.cn/rss/scroll-news.xml"
 )
 AIHOT_SOURCES = [url.strip() for url in os.getenv("WORKBENCH_AIHOT_SOURCES", _AIHOT_DEFAULT_SOURCES).split(",") if url.strip()] or [AIHOT_FEED_URL]
 
@@ -133,7 +133,7 @@ _AIHOT_DOMAIN_BY_HOST = {
     "eastmoney.com": "财经",
     "wallstreetcn.com": "财经",
     "tmtpost.com": "商业",
-    "sina.com.cn": "综合",
+    "chinanews.com.cn": "综合",
 }
 
 
