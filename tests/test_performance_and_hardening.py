@@ -2267,6 +2267,23 @@ class ActiveLearningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("AI 热点", str(ctx.exception.detail))
 
+    def test_every_configured_feed_host_has_a_domain_label(self):
+        """每个已配置的 RSS 源都必须能打出领域标签，否则该领域筛选恒为空。
+
+        商业/综合曾长期为 0：映射表里有 36kr→商业 但源列表没有 36kr，
+        而「综合」只是未知域名的兜底，所有源都被映射命中了就永远不出现。
+        """
+        hosts = [
+            app._hostname(url)
+            for url in app._AIHOT_DEFAULT_SOURCES.split(",")
+            if "aihot.today" not in url and "hnrss.org" not in url
+        ]
+        self.assertTrue(hosts, "至少要有非 AI 专属源")
+        labels = {app._aihot_domain(host) for host in hosts}
+        self.assertIn("商业", labels, "默认源必须包含商业类订阅（如钛媒体）")
+        self.assertIn("综合", labels, "默认源必须包含综合/新闻类订阅（如新浪滚动新闻）")
+        self.assertTrue(all(label in {"科技", "财经", "商业", "综合"} for label in labels), f"未知领域标签：{labels}")
+
     def test_hotspot_prompt_carries_the_real_items_and_forbids_invention(self):
         captured = {}
 

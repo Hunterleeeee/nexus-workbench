@@ -6,7 +6,7 @@ const workbenchRequestJson = window.WorkbenchUX?.requestJson || (async (url, opt
   return body;
 });
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.175"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.176"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
   const topbar = document.querySelector(".topbar-right, .top-actions");
   if (!topbar || topbar.querySelector("[data-theme-toggle]")) return;
   const theme = window.WorkbenchTheme;
@@ -24,7 +24,7 @@ setupThemeToggle();
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistrations()
     .then((registrations) => Promise.all(registrations.filter((registration) => registration.scope === `${location.origin}/static/`).map((registration) => registration.unregister())))
-    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.175", { scope: "/" }))
+    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.176", { scope: "/" }))
     .catch(() => {});
 }
 const icons = {
@@ -969,10 +969,9 @@ function setupNotifications() {
     if (openLink) {
       event.preventDefault();
       const href = openLink.getAttribute("href") || "/";
-      const target = window.open(href, "_blank", "noopener");
+      openWorkbenchTarget(href);
       try { await markNotificationRead(openLink.dataset.notificationOpen); } catch (error) { setNotificationFeedback(error.message, "error"); }
       closePanel();
-      if (!target) window.location.href = href;
       return;
     }
     const selectButton = event.target.closest("[data-notification-select]");
@@ -981,10 +980,9 @@ function setupNotifications() {
       const item = notificationState.items.find((entry) => String(entry.id) === String(id));
       // 有目标页面的通知：点一下直接打开，未读自动标记已读。
       if (item?.href && item.href !== "/" && item.href !== "#") {
-        const target = window.open(item.href, "_blank", "noopener");
+        openWorkbenchTarget(item.href);
         try { await markNotificationRead(id); } catch (error) { setNotificationFeedback(error.message, "error"); }
         closePanel();
-        if (!target) window.location.href = item.href;
         return;
       }
       // 没有目标页面的通知（如纯提醒）：展开详情。

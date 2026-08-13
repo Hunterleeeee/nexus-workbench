@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.175"></script>
+  <script src="/static/theme.js?v=0.3.176"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>AI 热点研究 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.175" />
-  <link rel="stylesheet" href="/static/aihot.css?v=0.3.175" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.176" />
+  <link rel="stylesheet" href="/static/aihot.css?v=0.3.176" />
 </head>
 <body>
   <div class="page-shell">
@@ -39,7 +39,7 @@
       </section>
     </main>
   </div>
-      <script src="/static/request.js?v=0.3.175"></script><script src="/static/markdown.js?v=0.3.175"></script><script src="/static/project.js?v=0.3.175"></script>
+      <script src="/static/request.js?v=0.3.176"></script><script src="/static/markdown.js?v=0.3.176"></script><script src="/static/project.js?v=0.3.176"></script>
   <script>
     const feedList = qs("#feed-list");
     const feedStatus = qs("#feed-status");
@@ -95,7 +95,8 @@
           </div>
           <div class="signal-actions signal-primary-actions">
             <button class="opportunity-button ${opportunityDone ? "done" : ""}" data-opportunity="${opportunityDone ? "done" : "create"}" type="button" ${opportunityDone ? "disabled" : ""}>${opportunityDone ? "已交给想法分析" : "交给想法分析"}</button>
-            <details class="signal-more" title="更多操作"><summary>更多</summary><div class="signal-more-menu">${opportunityDone ? `<button class="opportunity-button review" data-review-opportunity="${escapeHtml(id)}" type="button">记录复盘</button>` : ""}${item.link ? `<a href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer">阅读原文 ↗</a>` : ""}</div></details>
+            ${item.link ? `<a class="read-original" href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer" data-read-link="${escapeHtml(item.link)}">阅读原文 ↗</a>` : ""}
+            <details class="signal-more" title="更多操作"><summary>更多</summary><div class="signal-more-menu">${opportunityDone ? `<button class="opportunity-button review" data-review-opportunity="${escapeHtml(id)}" type="button">记录复盘</button>` : ""}</div></details>
           </div>
         </article>`;
       }).join("");
@@ -110,9 +111,10 @@
       try {
         const query = encodeURIComponent(qs("#feed-search").value.trim());
         const body = await requestJson(`/api/aihot/feed?mode=${encodeURIComponent(currentMode)}&q=${query}&refresh=${refresh}&domain=${encodeURIComponent(currentDomain)}`);
-        renderFeed(body.feed?.items || [], { stale: body.feed?.stale, items_total: body.feed?.items_total, fetched_at: body.feed?.fetched_at, query: qs("#feed-search").value.trim() });
+        const items = body.feed?.items || [];
+        renderFeed(items, { stale: body.feed?.stale, items_total: body.feed?.items_total, fetched_at: body.feed?.fetched_at, query: qs("#feed-search").value.trim() });
         feedSource.textContent = body.feed?.stale ? `来源：aihot.today · 使用上次快照（${body.feed.error || "同步失败"}）` : `来源：aihot.today · ${body.feed?.fetched_at ? formatDate(body.feed.fetched_at) : "已同步"} · 反馈只保存在本机`;
-        setFeedStatus(`${body.feed?.items?.length || 0} 条结果`);
+        setFeedStatus(`${items.length} 条结果${currentDomain && currentDomain !== "all" && !items.length ? ` · 「${currentDomain}」领域暂无订阅源，可切换「全部」查看` : ""}`);
       } catch (error) {
         setFeedStatus(error.message, "error");
         feedList.innerHTML = `<div class="empty-state">读取失败：${escapeHtml(error.message)}<br><button class="secondary-button retry-feed" type="button">重新读取</button></div>`;
@@ -213,6 +215,12 @@
     feedList.addEventListener("click", async (event) => {
       const retry = event.target.closest(".retry-feed");
       if (retry) return loadFeed();
+      const readLink = event.target.closest("[data-read-link]");
+      if (readLink) {
+        event.preventDefault();
+        window.openWorkbenchTarget?.(readLink.dataset.readLink || readLink.getAttribute("href") || "");
+        return;
+      }
       const button = event.target.closest("button");
       const card = button?.closest("[data-item-id]");
       if (!button || !card) return;

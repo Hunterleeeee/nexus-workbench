@@ -32,6 +32,8 @@
 .select-signal.active { color: var(--violet) !important; font-weight: 700; }
 .signal-primary-actions { justify-content: flex-start; }
 .signal-primary-actions a { margin-left: auto; padding: 4px 0; }
+.read-original { padding: 5px 8px; color: var(--muted) !important; background: var(--surface-muted) !important; border: 1px solid var(--line) !important; border-radius: 6px !important; font-weight: 600; }
+.read-original:hover { color: var(--accent) !important; border-color: var(--line-strong) !important; }
 .opportunity-button { padding: 5px 7px; color: var(--violet) !important; background: #f0efff !important; font-weight: 700; }
 .opportunity-button:hover { background: #e5e2ff !important; }
 .opportunity-button.done { color: var(--green) !important; background: #eaf7f2 !important; }

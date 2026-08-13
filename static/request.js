@@ -189,9 +189,24 @@
     wbShowRetry(host, message, retryLabel = "重新加载") {
       if (host) host.innerHTML = retryMarkup(message, retryLabel);
     },
+    // 统一打开工作台内部/外部链接：桌面壳里 window.open 被 setWindowOpenHandler
+    // deny（返回 null）但壳已经开了新标签，此时绝不能走 location.href 兜底，
+    // 否则「新页面 + 原页面」一起跳。壳环境走 desktopShell.openTab（开内部标签），
+    // 浏览器环境 window.open；只有非壳环境且弹窗被浏览器拦截时才跳当前页。
+    openTarget(href) {
+      const url = String(href || "/");
+      if (window.desktopShell && typeof window.desktopShell.openTab === "function") {
+        void window.desktopShell.openTab(url);
+        return true;
+      }
+      if (window.open(url, "_blank", "noopener")) return true;
+      if (!window.desktopShell) { window.location.href = url; return true; }
+      return false;
+    },
   });
 
   // 统一全局入口：所有页面（含 /crawl4ai 同时加载 app.js + project.js 的场景）
   // 只从这里取 requestJson，避免多个脚本在全局重复声明同名函数。
   window.requestJson = requestJson;
+  window.openWorkbenchTarget = (href) => (window.WorkbenchUX?.openTarget ? window.WorkbenchUX.openTarget(href) : false);
 })();
