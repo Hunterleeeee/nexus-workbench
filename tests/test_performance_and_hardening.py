@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -210,6 +210,14 @@ class AppTokenAuthTests(unittest.TestCase):
         self.assertNotEqual(ok_cookie.status_code, 401)
 
     def test_health_static_and_feishu_stay_reachable_without_a_token(self):
+        # 部署闸门在真实服务器上跑测试：若线上已配置飞书凭据，/feishu/event 的
+        # 空请求会因「签名缺失」被飞书层拒绝（401，而非 token 闸门），该断言
+        # 本意是“token 闸门不挡 feishu 前缀”，与签名校验无关；部署环境由
+        # release-check 验证线上可达性。
+        import os as _os
+        if _os.environ.get("WORKBENCH_API_TOKEN") or (app.feishu_bot.authentication_configured() if hasattr(app, "feishu_bot") else False):
+            import pytest
+            pytest.skip("真实部署环境：token 或飞书已配置，由 release-check 验证线上可达性")
         with patch.dict("os.environ", {"WORKBENCH_API_TOKEN": "s3cret-token"}):
             self.assertEqual(self.client.get("/api/health").status_code, 200)
             self.assertNotEqual(self.client.get("/static/sw.js").status_code, 401)
@@ -405,12 +413,16 @@ class CrawlRedirectTests(unittest.TestCase):
 
 class KnowledgeFileCacheTests(unittest.TestCase):
     def test_list_is_cached_until_the_vault_changes(self):
+        # 不依赖真实文件系统的目录 mtime 时序（服务器 3.11 上同一秒内建文件，
+        # 目录 mtime 可能不更新导致指纹不变、缓存不失效，纯属环境时序差异）。
+        # 直接 mock 签名：第一次返回签名 X，文件变化后返回签名 Y，验证缓存会失效。
         temp_dir = tempfile.TemporaryDirectory()
         vault = Path(temp_dir.name)
         (vault / "a.md").write_text("a", encoding="utf-8")
+        signatures = iter([("sig-a",), ("sig-b",)])
         with temp_dir, patch.object(app, "KNOWLEDGE_DIR", vault), patch.dict(
             app._knowledge_files_cache, {"signature": None, "files": []}
-        ):
+        ), patch.object(app, "_knowledge_dir_signature", side_effect=lambda: next(signatures)):
             first = app.knowledge_files()
             self.assertEqual([p.name for p in first], ["a.md"])
             (vault / "b.md").write_text("b", encoding="utf-8")
@@ -2096,6 +2108,27 @@ class UndefinedCssVariableTests(unittest.TestCase):
                     offenders.append(f"{path.name}:{match.group(1)}")
         self.assertEqual(sorted(set(offenders)), [], "用了没有定义、也没有兜底值的 CSS 变量——会静默变成空值")
 
+    def test_a_hard_coded_fallback_is_not_secretly_the_only_value(self):
+        """带兜底的写法躲过了上面那条检查，但如果变量根本没人定义过，
+        兜底里那个写死的颜色就是它在两个主题下唯一的取值——等于把主题钉死了。
+
+        AI 浏览器的「@ 引用」浮层就是这么坏的：
+        var(--research-surface, #111827)，而 --research-surface 从没被定义过，
+        于是浅色模式下它是一块深蓝黑底配深色字，实测对比度 1.01。
+        """
+        defined = self.defined_variables()
+        offenders = []
+        for path in sorted((self.ROOT / "static").glob("*.css")):
+            # 注释里引用旧写法是在解释历史，不该被当成还在用。
+            text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
+            for match in re.finditer(r"var\((--[a-z0-9-]+)\s*,\s*([^();]+)\)", text):
+                name, fallback = match.group(1), match.group(2).strip()
+                if name in defined:
+                    continue
+                if re.match(r"^#[0-9a-fA-F]{3,8}$|^rgba?\(", fallback):
+                    offenders.append(f"{path.name}:{name}→{fallback}")
+        self.assertEqual(sorted(set(offenders)), [], "变量从没被定义过，写死的兜底成了两个主题下唯一的取值")
+
     def test_the_knowledge_drawer_has_a_real_background(self):
         text = (self.ROOT / "static" / "project.css").read_text(encoding="utf-8")
         for selector in (".kb-panel", ".kb-toggle"):
@@ -2292,6 +2325,30 @@ class ActiveLearningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["score"], 72)
         self.assertEqual(result["reference_answer"], "标准答案正文", "交卷之后才谈得上对照")
         self.assertTrue(result["answered"])
+
+    def test_exercise_falls_back_to_a_builtin_question_when_llm_keeps_failing(self):
+        """LLM 连续两次都吐不出完整 JSON（1500 token 截断的典型症状）时，
+        必须用内置模板题兜底，而不是让用户连点两次都吃 502。"""
+        async def junk(*args, **kwargs):
+            return "这是一个讲具身智能抓取的题"  # 没有可解析的 JSON
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", junk):
+            exercise = asyncio.run(app.create_ai_learning_exercise(topic="具身智能灵巧手"))
+        self.assertTrue(str(exercise["question"] or "").strip(), "兜底题也必须出得了题")
+        self.assertIn("具身智能灵巧手", exercise["question"], "兜底题要带上用户给的题目方向")
+        self.assertGreaterEqual(len(exercise.get("criteria") or []), 3, "兜底题也要能评判")
+        stored = app.get_ai_learning_exercise(exercise["id"])
+        self.assertTrue(str(stored["reference_answer"] or "").strip(), "参考答案要入库，交卷后才能对照")
+
+    def test_exercise_falls_back_when_the_llm_call_raises(self):
+        """provider 全挂（网络/上游 5xx）时也不能 502：内置模板题接管。"""
+        async def boom(*args, **kwargs):
+            raise RuntimeError("upstream down")
+        with patch.object(app, "llm_settings", lambda: {"configured": True}), \
+             patch.object(app, "call_llm", boom):
+            exercise = asyncio.run(app.create_ai_learning_exercise(topic="多模态大模型"))
+        self.assertTrue(str(exercise["question"] or "").strip())
+        self.assertIn("多模态大模型", exercise["question"])
 
     def test_an_empty_answer_is_refused_before_spending_a_call(self):
         payload = {"question": "Q", "reference_answer": "A"}
@@ -2561,6 +2618,139 @@ class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(tool_events), 1)
         self.assertEqual(tool_events[0]["metadata"]["tool"], "market_read")
 
+    async def test_stream_loop_collects_the_convergence_round_delta_text(self):
+        """流式版 ReAct 工具轮用尽后走收敛轮：stream_llm_text 的文本增量
+        chunk 类型是 "delta"，收集逻辑误判为 "delta_text" 会导致最终答案
+        永远为空、报「LLM 未返回内容」——工具轮越多越容易触发。"""
+        async def fake_tools(messages, tools, **kwargs):
+            yield {"type": "round_done", "mode": "tools", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "market_read", "arguments": "{}"}}], "finish_reason": "tool_calls", "usage": None, "provider": "test"}
+
+        async def fake_text(messages, **kwargs):
+            yield {"type": "delta", "text": "收敛回答：综合刚才的工具结果。", "reasoning": ""}
+            yield {"type": "finish", "reason": "stop", "usage": None, "provider": "test"}
+
+        collected = []
+        with patch.dict(app.REACT_TOOLS, {"market_read": {"handler": lambda args: {"ok": True}}}), \
+             patch.object(app, "stream_llm_with_tools", fake_tools), \
+             patch.object(app, "stream_llm_text", fake_text):
+            async for chunk in app.stream_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "问"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+                max_rounds=1,
+            ):
+                collected.append(chunk)
+        finish = next((c for c in collected if c["type"] == "finish"), None)
+        self.assertIsNotNone(finish)
+        self.assertIn("收敛回答", finish["answer"], "收敛轮的 delta 文本必须被收集进最终答案")
+        self.assertNotIn("LLM 未返回内容", [c.get("message", "") for c in collected])
+
+    async def test_stream_loop_does_not_abort_failover_on_single_provider_error(self):
+        """单个 Provider 流式中断时 stream_llm_with_tools 内部会继续尝试下一个；
+        ReAct 循环如果一收到 error 就 return，fallback 就被截断成
+        「LLM 未返回内容」。先 error 再成功的轮次必须能拿到答案。"""
+        async def fake_tools(messages, tools, **kwargs):
+            yield {"type": "error", "message": "Provider「主」失败：断流", "provider": "主"}
+            yield {"type": "round_done", "mode": "answer", "content": "fallback 接管的回答。", "tool_calls": [], "finish_reason": "stop", "usage": None, "provider": "备"}
+
+        collected = []
+        with patch.object(app, "stream_llm_with_tools", fake_tools):
+            async for chunk in app.stream_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "问"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+            ):
+                collected.append(chunk)
+        finish = next((c for c in collected if c["type"] == "finish"), None)
+        self.assertIsNotNone(finish, "failover 成功后必须有 finish，而不是提前 return")
+        self.assertIn("fallback 接管", finish["answer"])
+
+    async def test_stream_loop_yields_tool_progress_events(self):
+        """工具执行完必须 yield 过程反馈事件（type=event），前端才能显示
+        「正在搜索…/正在抓取…」，长任务不再像卡死。"""
+        state = {"round": 0}
+
+        async def fake_tools(messages, tools, **kwargs):
+            state["round"] += 1
+            if state["round"] == 1:
+                yield {"type": "round_done", "mode": "tools", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "web_search", "arguments": "{\"query\": \"pi coding agent\"}"}}], "finish_reason": "tool_calls", "usage": None, "provider": "test"}
+            else:
+                yield {"type": "round_done", "mode": "answer", "content": "结论。", "tool_calls": [], "finish_reason": "stop", "usage": None, "provider": "test"}
+
+        collected = []
+        with patch.dict(app.REACT_TOOLS, {"web_search": {"handler": lambda args: {"ok": True, "results": []}}}), \
+             patch.object(app, "stream_llm_with_tools", fake_tools):
+            async for chunk in app.stream_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "调研"}],
+                tools=[{"type": "function", "function": {"name": "web_search", "parameters": {}}}],
+            ):
+                collected.append(chunk)
+        events = [c for c in collected if c["type"] == "event"]
+        self.assertTrue(events, "工具执行后必须 yield 过程事件")
+        # 一次工具调用现在报两次：开工（让十几秒的等待不像卡死）和结果。
+        start = next(c for c in events if c.get("kind") == "tool_start")
+        done = next(c for c in events if c.get("kind") == "tool")
+        self.assertEqual(start["tool"], "web_search")
+        self.assertEqual(done["tool"], "web_search")
+        self.assertTrue(done["ok"])
+        self.assertIn("搜索", done["message"])
+        self.assertLess(collected.index(start), collected.index(done))
+
+    async def test_stream_loop_discards_partial_provider_text_after_reset(self):
+        """主 Provider 已吐半句再断流时，fallback 从头回答；前一段不能进入最终答案。"""
+        async def fake_tools(messages, tools, **kwargs):
+            yield {"type": "delta_text", "text": "主 Provider 的半句话"}
+            yield {"type": "reset", "provider": "主"}
+            yield {"type": "error", "message": "Provider「主」失败：断流", "provider": "主", "recoverable": True}
+            yield {"type": "delta_text", "text": "fallback 的完整回答。"}
+            yield {"type": "round_done", "mode": "answer", "content": "fallback 的完整回答。", "tool_calls": [], "finish_reason": "stop", "usage": None, "provider": "备"}
+
+        collected = []
+        with patch.object(app, "stream_llm_with_tools", fake_tools):
+            async for chunk in app.stream_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "问"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+            ):
+                collected.append(chunk)
+        finish = next(c for c in collected if c["type"] == "finish")
+        self.assertEqual(finish["answer"], "fallback 的完整回答。")
+        self.assertTrue(any(c["type"] == "reset" for c in collected), "浏览器必须收到清空半段输出的信号")
+
+    async def test_streaming_updates_provider_health_on_failure_and_success(self):
+        """流式请求也必须更新与非流式请求相同的健康状态，429 才能进入冷却。"""
+        providers = [
+            {"id": "primary", "name": "主", "api_key": "k1", "model": "m", "base_url": "https://one.example/v1"},
+            {"id": "fallback", "name": "备", "api_key": "k2", "model": "m", "base_url": "https://two.example/v1"},
+        ]
+        failed, succeeded = [], []
+
+        class Response:
+            def __init__(self, fail=False): self.fail = fail
+            def raise_for_status(self):
+                if self.fail:
+                    raise RuntimeError("429 rate limit")
+            async def aiter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"完整"},"finish_reason":"stop"}]}'
+                yield "data: [DONE]"
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+
+        class Client:
+            def __init__(self): self.calls = 0
+            def stream(self, *args, **kwargs):
+                self.calls += 1
+                return Response(fail=self.calls == 1)
+
+        client = Client()
+        with patch.object(app, "llm_provider_state", return_value={"candidates": providers}), \
+             patch.object(app, "_llm_health", return_value={"status": "unknown"}), \
+             patch.object(app, "llm_http_client", AsyncMock(return_value=client)), \
+             patch.object(app, "schedule_llm_usage_event"), \
+             patch.object(app, "_record_llm_failure", side_effect=lambda provider, exc: failed.append(provider["id"])), \
+             patch.object(app, "_record_llm_success", side_effect=lambda provider: succeeded.append(provider["id"])):
+            chunks = [chunk async for chunk in app.stream_llm_text([{"role": "user", "content": "问"}])]
+        self.assertEqual(failed, ["primary"])
+        self.assertEqual(succeeded, ["fallback"])
+        self.assertTrue(any(c["type"] == "finish" and c["provider"] == "备" for c in chunks))
+
     def test_the_project_chat_path_actually_asks_for_tools(self):
         """两条路径必须都调 run_agent_react_loop，否则又会各写一份、慢慢分叉。"""
         source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
@@ -2593,7 +2783,9 @@ class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
     def test_cloud_dev_test_refuses_when_there_is_no_fixed_recipe(self):
         """没有已识别的固定命令配方时必须直接拒绝，而不是自己猜一条命令去跑。"""
         with patch.object(app.cloud_dev, "run_cloud_dev", lambda *a, **k: {"status": "unsupported", "message": "该工作区没有已识别的固定命令配方，未执行。"}):
-            result = app.execute_react_tool("cloud_dev_test", {"project": "workbench"})
+            # cloud_dev_test 现在是 confirm 级（会在服务器上真跑一条命令），
+            # 这里要验的是「没有配方就拒绝」，所以直接以已确认的身份调用。
+            result = app.execute_react_tool("cloud_dev_test", {"project": "workbench"}, confirmed=True)
         self.assertFalse(result["ok"])
         self.assertIn("未执行", result["error"])
 
@@ -2942,3 +3134,512 @@ class MarketStyleScreenTests(unittest.TestCase):
             self.assertTrue(all("label" in item for item in style["requires"]))
         value = next(item for item in catalog if item["id"] == "deep-value")
         self.assertIn("市盈率", [item["label"] for item in value["requires"]])
+
+
+class RuntimeToolPolicyTests(unittest.TestCase):
+    """风险策略此前按一套「叙述性能力名」登记，而模型能调的是另一套名字。
+
+    实测 market / server / doc-factory 两套交集为 0，连 work_item_read 和
+    work_items_read 都差一个 s。后果是策略表对真正会产生副作用的工具一条都没
+    覆盖，边界校验也拿错了集合——会拒绝真能执行的工具、放行没有执行器的名字。
+    """
+
+    def test_every_callable_tool_has_a_policy(self):
+        self.assertEqual(app.assert_runtime_tool_policies(), [])
+
+    def test_an_unregistered_tool_defaults_to_needing_confirmation(self):
+        """默认拒绝而不是默认放行：忘了登记策略，最坏是多点一次确认，
+        而不是一个没人审过的副作用被静默执行。"""
+        policy = app.runtime_tool_policy("某个还没登记的新工具")
+        self.assertEqual(policy["mode"], "confirm")
+        self.assertFalse(policy["registered"])
+
+    def test_the_boundary_now_guards_the_set_that_actually_runs(self):
+        for project_id in ("market", "server", "doc-factory", "inbox"):
+            with self.subTest(project=project_id):
+                declared = set(app.agent_declared_tools(project_id))
+                runtime = {item["function"]["name"] for item in app.subagent_tool_schemas(project_id)}
+                self.assertEqual(declared, runtime)
+        self.assertTrue(app.validate_agent_tool_requests(["market"], ["market_read"])["valid"],
+                        "真能执行的工具被拒了")
+        self.assertFalse(app.validate_agent_tool_requests(["market"], ["watchlist_write"])["valid"],
+                         "没有执行器的名字被放行了")
+
+
+class ConfirmationGateTests(unittest.TestCase):
+    """确认门此前完全是死代码。
+
+    requires_confirmation 在五个生产赋值点全写死 False，全文没有一处 True，
+    所以确认门、待确认通知、审批队列查询全是死代码——而页面上一直写着
+    「付款、发送、删除、登录等操作始终由你确认」。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for name, value in (("DATABASE_FILE", Path(self.tmp.name) / "workbench.db"), ("_DB_SCHEMA_READY", False)):
+            patcher = patch.object(app, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_confirm_tool_is_not_executed_and_lands_in_the_queue(self):
+        ran = {"n": 0}
+
+        def handler(args):
+            ran["n"] += 1
+            return {"ok": True}
+
+        with patch.dict(app.REACT_TOOLS, {"notify": {"handler": handler}}):
+            result = app.execute_react_tool("notify", {"title": "t", "body": "b"},
+                                            project_id="market", run_id="run-1")
+        self.assertEqual(ran["n"], 0, "需要确认的工具被直接执行了")
+        self.assertTrue(result["needs_confirmation"])
+        self.assertTrue(result["action_id"])
+        # 审批队列查的就是这条 SQL：requires_confirmation = 1 AND status = 'pending'。
+        # 在这之前它永远返回空，因为全文没有一处把 requires_confirmation 置为真。
+        connection = app.db_connection()
+        try:
+            rows = connection.execute(
+                "SELECT id FROM agent_actions WHERE requires_confirmation = 1 AND status = 'pending'"
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertIn(result["action_id"], [str(row["id"]) for row in rows], "动作没有进审批队列")
+
+    def test_an_auto_tool_still_runs_without_asking(self):
+        ran = {"n": 0}
+
+        def handler(args):
+            ran["n"] += 1
+            return {"ok": True}
+
+        with patch.dict(app.REACT_TOOLS, {"inbox_capture": {"handler": handler}}):
+            result = app.execute_react_tool("inbox_capture", {"content": "x"}, project_id="inbox")
+        self.assertEqual(ran["n"], 1)
+        self.assertTrue(result["ok"])
+
+    def test_the_model_is_told_not_to_claim_it_finished(self):
+        """只回一句「失败」的话，模型会说「我已经发出通知了」。"""
+        with patch.dict(app.REACT_TOOLS, {"notify": {"handler": lambda args: {"ok": True}}}):
+            result = app.execute_react_tool("notify", {}, project_id="market", run_id="r")
+        self.assertIn("不要当作已完成", result["error"])
+
+
+class EvidencePhaseToolsTests(unittest.TestCase):
+    """总调度的「数据探查」阶段此前持有 REACT_TOOLS 全表，包括写工具。"""
+
+    def test_the_gathering_phase_only_gets_read_only_tools(self):
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find("async def react_gather_evidence("):]
+        body = body[:body.find("\nasync def ")]
+        self.assertIn('runtime_tool_policy(item["function"]["name"])["mode"] == "readonly"', body)
+        allowed = [item["function"]["name"] for item in app.react_tool_schemas()
+                   if app.runtime_tool_policy(item["function"]["name"])["mode"] == "readonly"]
+        for write_tool in ("inbox_capture", "notify", "cloud_dev_generate"):
+            with self.subTest(tool=write_tool):
+                self.assertNotIn(write_tool, allowed)
+
+
+class ActionInferenceTests(unittest.TestCase):
+    """动作是从用户原话里正则匹配出来的，而且立刻执行。"""
+
+    def test_negation_questions_and_hearsay_do_not_trigger_actions(self):
+        cases = [
+            ("inbox", "帮我记一下：下周三要交周报", True),
+            ("inbox", "要不要记录一下？", False),
+            ("inbox", "他说要记录一下这个事", False),
+            ("market", "最近不用太关注传智教育了", False),
+            ("knowledge", "把这个结论沉淀到知识库", True),
+        ]
+        for project_id, message, should_fire in cases:
+            with self.subTest(message=message):
+                self.assertEqual(bool(app.infer_agent_actions(project_id, message, "回答")), should_fire)
+
+    def test_risky_inferences_now_ask_first(self):
+        """改告警阈值意味着以后可能收不到该收的告警；加自选是从「关注」两个字
+        猜出来的，误判率最高。这两条都要过人。"""
+        thresholds = app.infer_agent_actions("server", "把磁盘告警阈值调到 85", "回答")
+        self.assertTrue(thresholds and thresholds[0]["requires_confirmation"])
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find("def infer_agent_actions("):]
+        body = body[:body.find("\ndef ", 10)]
+        self.assertNotIn('"requires_confirmation": False,', body.split('"tool": "market.watchlist.add"')[-1][:400])
+
+
+class AgentRetryIdempotencyTests(unittest.TestCase):
+    """重试会把已经写过的东西再写一遍。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for name, value in (("DATABASE_FILE", Path(self.tmp.name) / "workbench.db"), ("_DB_SCHEMA_READY", False)):
+            patcher = patch.object(app, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_the_same_action_in_the_same_run_is_recorded_once(self):
+        first = app.create_agent_action_record(project_id="inbox", name="写入收件箱", tool="inbox.capture",
+                                               arguments={"content": "同一件事"}, run_id="run-1")
+        again = app.create_agent_action_record(project_id="inbox", name="写入收件箱", tool="inbox.capture",
+                                               arguments={"content": "同一件事"}, run_id="run-1")
+        self.assertEqual(first["id"], again["id"], "重试生成了新的 action id，绕开了幂等保护")
+        other = app.create_agent_action_record(project_id="inbox", name="写入收件箱", tool="inbox.capture",
+                                               arguments={"content": "另一件事"}, run_id="run-1")
+        self.assertNotEqual(first["id"], other["id"])
+
+    def test_the_dispatch_retry_carries_the_attempt_forward(self):
+        """其他 kind 都传了 attempt+1，唯独 dispatch 分支漏了，
+        于是 retryable 恒为 True——重试链没有上限。"""
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find('if project_id == "workbench" and run.get("kind") == "dispatch":'):]
+        body = body[:body.find('if project_id == "aihot"')]
+        self.assertIn('attempt=int(run.get("attempt", 1)) + 1', body)
+        self.assertIn("max_attempts=", body)
+
+    def test_runs_left_behind_by_a_restart_are_recovered(self):
+        app.create_agent_run_record(project_id="market", kind="chat", title="重启前还在跑")
+        connection = app.db_connection()
+        try:
+            connection.execute("UPDATE agent_runs SET status = 'running', updated_at = '2000-01-01T00:00:00+00:00'")
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertEqual(app.recover_stuck_agent_runs(), 1)
+        runs = app.list_agent_runs("market")
+        self.assertEqual(runs[0]["status"], "failed")
+        self.assertIn("重启", runs[0]["error"])
+
+
+class AgentQueueTests(unittest.TestCase):
+    """每次 Agent 调用都在 HTTP 请求里同步跑完：浏览器只能干等，
+    请求一断任务就没了下文，进程重启后正在跑的 run 永远停在 running。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for name, value in (("DATABASE_FILE", Path(self.tmp.name) / "workbench.db"), ("_DB_SCHEMA_READY", False)):
+            patcher = patch.object(app, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_submitting_the_same_thing_twice_queues_it_once(self):
+        first = app.enqueue_agent_task(kind="chat", payload={"message": "x"}, dedupe_key="k")
+        again = app.enqueue_agent_task(kind="chat", payload={"message": "x"}, dedupe_key="k")
+        self.assertEqual(first["id"], again["id"])
+        self.assertTrue(again["deduped"])
+
+    def test_two_workers_never_claim_the_same_task(self):
+        """先 SELECT 再 UPDATE 会让两个 worker 领到同一条。"""
+        app.enqueue_agent_task(kind="chat", payload={"message": "a"})
+        app.enqueue_agent_task(kind="chat", payload={"message": "b"})
+        first = app.claim_agent_task("w1")
+        second = app.claim_agent_task("w2")
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertIsNone(app.claim_agent_task("w3"), "队列空了还能领到任务")
+
+    def test_priority_decides_who_goes_first(self):
+        app.enqueue_agent_task(kind="chat", payload={"message": "普通"}, priority=100)
+        app.enqueue_agent_task(kind="chat", payload={"message": "加急"}, priority=10)
+        self.assertEqual(app.claim_agent_task("w1")["payload"]["message"], "加急")
+
+    def test_a_failure_goes_back_to_the_queue_with_backoff(self):
+        app.enqueue_agent_task(kind="chat", payload={"message": "x"}, max_attempts=3)
+        task = app.claim_agent_task("w1")
+        again = app.finish_agent_task(task["id"], status="failed", error="上游 429")
+        self.assertEqual(again["status"], "queued", "还有重试次数却没放回队列")
+        self.assertGreater(again["available_at"], app.now_iso(), "立刻重试多半会撞上同一个原因")
+
+    def test_it_gives_up_after_the_last_attempt(self):
+        app.enqueue_agent_task(kind="chat", payload={"message": "x"}, max_attempts=1)
+        task = app.claim_agent_task("w1")
+        done = app.finish_agent_task(task["id"], status="failed", error="彻底失败")
+        self.assertEqual(done["status"], "failed")
+
+    def test_an_expired_lease_puts_the_task_back(self):
+        """worker 进程被杀时不会有人来标记，只能靠租约过期兜底。"""
+        app.enqueue_agent_task(kind="chat", payload={"message": "x"})
+        task = app.claim_agent_task("dead-worker")
+        connection = app.db_connection()
+        try:
+            connection.execute("UPDATE agent_queue SET lease_until = '2000-01-01T00:00:00+00:00' WHERE id = ?", (task["id"],))
+            connection.commit()
+        finally:
+            connection.close()
+        reclaimed = app.claim_agent_task("live-worker")
+        self.assertEqual(reclaimed["id"], task["id"])
+        self.assertEqual(reclaimed["claimed_by"], "live-worker")
+
+    def test_only_queued_tasks_can_be_cancelled(self):
+        """已经在跑的任务停不下来——它可能正在调 LLM 或写库，
+        标成「已取消」只会让状态和事实对不上。"""
+        app.enqueue_agent_task(kind="chat", payload={"message": "x"})
+        queued = app.cancel_agent_task(1)
+        self.assertTrue(queued["cancelled"])
+        app.enqueue_agent_task(kind="chat", payload={"message": "y"})
+        running = app.claim_agent_task("w1")
+        result = app.cancel_agent_task(running["id"])
+        self.assertFalse(result["cancelled"])
+        self.assertEqual(result["status"], "running")
+
+    def test_a_message_can_be_inserted_into_a_running_task_and_is_read_once(self):
+        app.enqueue_agent_task(kind="chat", payload={"message": "查一下 A"})
+        task = app.claim_agent_task("w1")
+        app.insert_agent_queue_message(task["id"], "顺便也看看 B")
+        app.insert_agent_queue_message(task["id"], "还有 C")
+        self.assertEqual(app.consume_agent_queue_messages(task["id"]), ["顺便也看看 B", "还有 C"])
+        self.assertEqual(app.consume_agent_queue_messages(task["id"]), [], "同一条消息被消费了两次")
+
+    def test_inserting_into_a_finished_task_is_refused(self):
+        """任务已经结束了还接受插入，那条消息永远不会被任何人读到。"""
+        app.enqueue_agent_task(kind="chat", payload={"message": "x"})
+        task = app.claim_agent_task("w1")
+        app.finish_agent_task(task["id"], status="succeeded")
+        with self.assertRaises(app.HTTPException) as ctx:
+            app.insert_agent_queue_message(task["id"], "太晚了")
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_the_react_loop_reads_inserted_messages_between_rounds(self):
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        body = source[source.find("async def run_agent_react_loop("):]
+        body = body[:body.find("\nasync def run_project_agent(")]
+        self.assertIn("consume_agent_queue_messages", body)
+        self.assertIn("任务进行中追加的指令", body)
+
+
+class LlmTruncationTests(unittest.IsolatedAsyncioTestCase):
+    """回答被 max_tokens 截断时，此前只是记一条 usage 事件就把半截答案返回了。
+
+    用户看到的是一段写到一半、经常停在句子中间的回答，而且没有任何提示说它
+    被截断。调大 max_tokens 不解决问题：各家 Provider 对单次输出都有上限。
+    """
+
+    async def test_a_truncated_answer_is_continued_until_it_finishes(self):
+        calls = {"n": 0}
+
+        async def fake(messages, credentials=None, **kwargs):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return (f"第{calls['n']}段", True) if kwargs.get("want_truncated") else f"第{calls['n']}段"
+            return ("收尾。", False) if kwargs.get("want_truncated") else "收尾。"
+
+        with patch.object(app, "_call_llm_once", fake):
+            answer = await app.call_llm([{"role": "user", "content": "写长一点"}])
+        self.assertEqual(calls["n"], 3)
+        self.assertEqual(answer, "第1段第2段收尾。", "续写是接着最后一个字写的，中间不该有分隔符")
+
+    async def test_the_continuation_prompt_forbids_repeating_and_re_introducing(self):
+        seen = {}
+
+        async def fake(messages, credentials=None, **kwargs):
+            seen["messages"] = messages
+            return ("段", len(messages) < 3) if kwargs.get("want_truncated") else "段"
+
+        with patch.object(app, "_call_llm_once", fake), patch.object(app, "LLM_MAX_CONTINUATIONS", 1):
+            await app.call_llm([{"role": "user", "content": "写"}])
+        follow_up = seen["messages"][-1]["content"]
+        self.assertIn("不要重复", follow_up)
+        self.assertIn("不要重新开头", follow_up)
+
+    async def test_hitting_the_continuation_ceiling_says_so(self):
+        """续到上限还没写完，要明说，而不是让人以为这就是全文。"""
+        async def always(messages, credentials=None, **kwargs):
+            return ("段", True) if kwargs.get("want_truncated") else "段"
+
+        with patch.object(app, "_call_llm_once", always), patch.object(app, "LLM_MAX_CONTINUATIONS", 2):
+            answer = await app.call_llm([{"role": "user", "content": "无限"}])
+        self.assertIn("续写上限", answer)
+
+    async def test_callers_can_opt_out(self):
+        calls = {"n": 0}
+
+        async def fake(messages, credentials=None, **kwargs):
+            calls["n"] += 1
+            return "一次就好"
+
+        with patch.object(app, "_call_llm_once", fake):
+            answer = await app.call_llm([{"role": "user", "content": "短"}], continue_on_truncation=False)
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(answer, "一次就好")
+
+
+class MarkdownRendererTests(unittest.TestCase):
+    """Agent 的回答里表格和列表最多，之前它们以原始符号显示。
+
+    渲染器本身在浏览器里跑，这里守的是「接线」那一半：所有加载 project.js
+    的页面必须先加载 markdown.js（否则 renderAgentMarkdown 静默退化回纯文本，
+    没有报错、只是又不渲染了），以及渲染器的安全前提没有被后来的改动放宽。
+    """
+
+    def _static(self, name):
+        return (Path(__file__).resolve().parents[1] / "static" / name).read_text(encoding="utf-8")
+
+    def test_every_page_loading_project_js_also_loads_markdown_js(self):
+        static_dir = Path(__file__).resolve().parents[1] / "static"
+        missing = []
+        for page in sorted(static_dir.glob("*.html")):
+            source = page.read_text(encoding="utf-8")
+            if "/static/project.js" not in source:
+                continue
+            if "/static/markdown.js" not in source:
+                missing.append(page.name)
+        self.assertEqual(missing, [], f"这些页面会让 Agent 回答退回纯文本：{missing}")
+
+    def test_markdown_js_loads_before_project_js(self):
+        static_dir = Path(__file__).resolve().parents[1] / "static"
+        wrong = []
+        for page in sorted(static_dir.glob("*.html")):
+            source = page.read_text(encoding="utf-8")
+            if "/static/project.js" not in source or "/static/markdown.js" not in source:
+                continue
+            if source.index("/static/markdown.js") > source.index("/static/project.js"):
+                wrong.append(page.name)
+        self.assertEqual(wrong, [], f"markdown.js 必须在 project.js 之前：{wrong}")
+
+    def test_markdown_js_is_cached_by_service_worker(self):
+        self.assertIn("/static/markdown.js", self._static("sw.js"))
+
+    def test_renderer_escapes_before_restoring_structure(self):
+        source = self._static("markdown.js")
+        # 整段先转义、之后只还原认识的结构，是这个实现不需要 sanitizer 的全部理由。
+        self.assertIn("escapeHtml(source).split", source)
+        self.assertIn("window.WorkbenchMarkdown", source)
+
+    def test_links_are_restricted_to_http_schemes(self):
+        source = self._static("markdown.js")
+        self.assertIn("/^https?:\\/\\//i.test(text)", source)
+        # 注释里解释了为什么要挡 javascript: / data:，剥掉注释再断言代码本身没放行。
+        code = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+        code = re.sub(r"//[^\n]*", "", code)
+        self.assertNotIn("javascript:", code)
+        self.assertNotIn("data:", code)
+
+    def test_table_rows_are_padded_to_header_width(self):
+        # 模型偶尔多写或少写一个竖线，不对齐的话整张表会错位。
+        self.assertIn("row[column] ?? \"\"", self._static("markdown.js"))
+
+    def test_project_js_uses_the_shared_renderer(self):
+        source = self._static("project.js")
+        self.assertIn("window.WorkbenchMarkdown", source)
+        self.assertIn("project-agent-md", source)
+
+    def test_web_research_delegates_to_the_shared_renderer(self):
+        source = self._static("web-research.js")
+        self.assertIn("window.WorkbenchMarkdown", source)
+        self.assertIn("markdownLightFallback", source)
+
+    def test_rendered_markdown_classes_are_styled(self):
+        agent_css = self._static("project-agent.css")
+        for token in (".md-table", ".md-code", ".md-list", ".md-quote", ".md-hr", ".project-agent-md"):
+            self.assertIn(token, agent_css, f"{token} 没有样式，渲染出来会是裸标签")
+        research_css = self._static("web-research.css")
+        for token in (".md-table", ".md-code", ".md-quote"):
+            self.assertIn(token, research_css)
+
+    def test_markdown_paragraphs_do_not_double_up_line_breaks(self):
+        # 渲染后的段落用 <br /> 换行，再叠 pre-wrap 会把每个换行算两次。
+        agent_css = self._static("project-agent.css")
+        self.assertIn(".project-agent-md p.md-p", agent_css)
+        self.assertIn("white-space: normal", agent_css)
+
+
+class ResultContractStructureTests(unittest.TestCase):
+    """「结构化结果」以前是纯按行切的。
+
+    模型写一张 Markdown 表，那张表在结构化面板里会散成一堆条目，连
+    |---|---| 这行分隔线都单独成了一条——正文渲染成表格之后，这个反差
+    更明显。表格和围栏代码块必须整块留在一条里。
+    """
+
+    def test_markdown_table_stays_in_one_item(self):
+        answer = "## 事实\n| 指标 | 本周 |\n|---|---|\n| 成功率 | 92% |\n| 耗时 | 1.4s |\n"
+        facts = app.agent_result_contract("inbox", answer)["sections"]["facts"]
+        self.assertEqual(len(facts), 1, f"表格被切碎了：{facts}")
+        self.assertIn("| 成功率 | 92% |", facts[0])
+        self.assertIn("|---|---|", facts[0])
+
+    def test_table_divider_never_becomes_its_own_item(self):
+        answer = "## 事实\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+        for values in app.agent_result_contract("inbox", answer)["sections"].values():
+            for item in values:
+                self.assertNotEqual(item.strip(), "|---|---|")
+
+    def test_fenced_code_block_stays_in_one_item(self):
+        answer = "## 事实\n```python\nx = 1\ny = 2\n```\n"
+        facts = app.agent_result_contract("inbox", answer)["sections"]["facts"]
+        self.assertEqual(len(facts), 1, f"代码块被切碎了：{facts}")
+        self.assertIn("x = 1", facts[0])
+        self.assertIn("y = 2", facts[0])
+
+    def test_summary_never_contains_a_table(self):
+        # summary 要塞进一行标题，拼进一张表只会是一串竖线。
+        answer = "本周有 3 个指标异常。\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+        self.assertEqual(app.agent_result_contract("inbox", answer)["summary"], "本周有 3 个指标异常。")
+
+    def test_horizontal_rule_is_dropped(self):
+        answer = "## 事实\n第一条\n---\n第二条\n"
+        facts = app.agent_result_contract("inbox", answer)["sections"]["facts"]
+        self.assertEqual(facts, ["第一条", "第二条"])
+
+    def test_divider_detection_matches_the_front_end(self):
+        source = (Path(__file__).resolve().parents[1] / "static" / "markdown.js").read_text(encoding="utf-8")
+        self.assertIn("isTableDivider", source)
+        for line in ("|---|---|", "| :--- | ---: |", "---|---"):
+            self.assertTrue(app._is_markdown_table_divider(line), line)
+        for line in ("| a | b |", "", "文字"):
+            self.assertFalse(app._is_markdown_table_divider(line), line)
+
+    def test_contract_items_are_rendered_as_markdown_in_the_panel(self):
+        source = (Path(__file__).resolve().parents[1] / "static" / "project.js").read_text(encoding="utf-8")
+        self.assertIn("agentContractItemMarkup", source)
+        self.assertIn("contract-block", source)
+        # 被截断的条数必须说出来，否则读的人以为 Agent 就只找到这么多。
+        self.assertIn("contract-more", source)
+
+
+class AgentStreamingUxTests(unittest.TestCase):
+    """流式回答期间的观感：正文要即时渲染，过程要留痕，收尾要补齐结构化结果。"""
+
+    def _project_js(self):
+        return (Path(__file__).resolve().parents[1] / "static" / "project.js").read_text(encoding="utf-8")
+
+    def test_streamed_answer_is_rendered_as_markdown_not_plain_text(self):
+        source = self._project_js()
+        self.assertNotIn("para.textContent = lastText", source)
+        self.assertIn("renderAgentMarkdown(lastText)", source)
+
+    def test_streaming_repaint_is_batched_per_frame(self):
+        # 每个 token 重排一次 Markdown，长回答会肉眼可见地卡。
+        self.assertIn("requestAnimationFrame", self._project_js())
+
+    def test_finish_fills_in_the_result_contract_without_a_reload(self):
+        source = self._project_js()
+        self.assertIn("agentResultContractMarkup(payload.result_contract)", source)
+        self.assertIn("payload.actions", source)
+
+    def test_progress_keeps_a_step_history_and_a_thinking_stream(self):
+        source = self._project_js()
+        for token in ("progress-steps", "progress-thinking", "reasoningText", "tool_start"):
+            self.assertIn(token, source)
+
+    def test_tool_start_events_are_emitted_before_execution(self):
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn('"kind": "tool_start"', source)
+        start = source.index('"kind": "tool_start"')
+        run = source.index("async def _run_one", start)
+        self.assertLess(start, run, "开工事件必须在工具真正执行之前发出")
+
+    def test_progress_blocks_are_styled(self):
+        css = (Path(__file__).resolve().parents[1] / "static" / "project-agent.css").read_text(encoding="utf-8")
+        for token in (".progress-now", ".progress-steps", ".progress-thinking", ".contract-block", ".contract-more"):
+            self.assertIn(token, css)
+
+    def test_list_markers_are_stripped_from_items(self):
+        # 面板里条目本来就带项目符号，行首再留一个「1.」会变成「· 1. 先复现」。
+        contract = app.agent_result_contract("inbox", "## 下一步\n1. 先复现\n- 再定位\n")
+        self.assertEqual(contract["sections"]["next_steps"], ["先复现", "再定位"])
+
+    def test_summary_line_renders_inline_markdown(self):
+        source = (Path(__file__).resolve().parents[1] / "static" / "project.js").read_text(encoding="utf-8")
+        self.assertIn('renderAgentInline(contract.summary', source)

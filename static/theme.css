@@ -1,5 +1,30 @@
 :root { color-scheme: light; }
 
+/* Shared interaction and recovery primitives. Every route loads this file via
+   theme.js, including standalone pages that do not use project.css. */
+.skip-link { position: fixed; top: 8px; left: 8px; z-index: 10000; max-width: calc(100vw - 16px); padding: 9px 12px; color: #fff; background: #17212b; border: 2px solid #fff; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.2); font-size: 13px; font-weight: 700; text-decoration: none; transform: translateY(calc(-100% - 16px)); }
+.skip-link:focus { transform: translateY(0); outline: 3px solid var(--accent, var(--platform-blue, #3b82f6)); outline-offset: 2px; }
+[tabindex="-1"]:focus { outline: none; }
+:where(button, a[href], input, select, textarea, summary):focus-visible { outline: 3px solid color-mix(in srgb, var(--accent, var(--platform-blue, #3b82f6)) 36%, transparent); outline-offset: 2px; }
+:where(button, input, select, textarea)[disabled], :where(button, input, select, textarea)[aria-disabled="true"] { cursor: not-allowed; opacity: .58; }
+button[aria-busy="true"] { cursor: wait; opacity: .72; }
+img, svg, video, canvas { max-width: 100%; }
+pre, code, .wb-retry-state, [role="alert"] { overflow-wrap: anywhere; }
+.visually-hidden, .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+.wb-retry-state { display: grid; justify-items: start; gap: 6px; padding: 16px; color: var(--muted, var(--platform-muted, #5d6b77)); background: var(--surface-muted, var(--platform-soft, #f8fafb)); border: 1px solid var(--line, var(--platform-line, #dfe5e9)); border-radius: 9px; }
+.wb-retry-state strong { color: var(--ink, var(--platform-ink, #17212b)); }
+.wb-retry-state p { margin: 0; line-height: 1.55; }
+
+@media (max-width: 420px) {
+  body { overflow-wrap: anywhere; }
+  :where(button, input, select, textarea) { max-width: 100%; }
+  .theme-toggle { flex: 0 0 auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
 .theme-toggle { min-height: 30px; padding: 0 9px; color: var(--muted, var(--platform-muted, #5d6b77)); background: var(--surface, var(--panel, var(--platform-panel, #fff))); border: 1px solid var(--line, var(--platform-line, #dfe5e9)); border-radius: 7px; font-size: 10px; font-weight: 650; cursor: pointer; }
 .theme-toggle:hover { color: var(--ink, var(--text, var(--platform-ink, #17212b))); border-color: var(--violet, var(--accent, var(--platform-blue, #3b82f6))); }
 .theme-toggle:focus-visible { outline: 2px solid var(--accent, var(--platform-blue, #3b82f6)); outline-offset: 2px; }
@@ -16,6 +41,12 @@ html[data-theme="light"] {
   --accent: #3b82f6; --accent-soft: #e6f1ff; --orange: #3b82f6; --orange-soft: #e6f1ff;
   --violet: #6f61c9; --violet-soft: #f0efff; --teal: #17866d; --teal-soft: #e8f7f1;
   --green: #238b72; --blue: #3f6fc5; --blue-soft: #dde9f9; --danger: #bd4d49; --red: #bd4d49;
+  /* 这几个变量被页面样式引用、却从来没有人定义过，于是 var(--x, 兜底) 里的
+     写死值成了它唯一的取值——在两个主题下都是同一个颜色。最刺眼的是
+     --research-surface 兜底写的是 #111827（深蓝黑），所以 AI 浏览器的
+     「@ 引用」浮层在浅色模式下是一块深色底 + 深色字，完全读不出来。
+     在这里补齐，兜底就永远不会生效。 */
+  --card: #ffffff; --card-2: #f4f7fb; --line-2: #edf1f6; --accent-line: #c5d8ff;
   --platform-bg: #f4f6f8; --platform-panel: #ffffff; --platform-soft: #f8fafb;
   --platform-ink: #17212b; --platform-muted: #66727d; --platform-faint: #7d8994;
   --platform-line: #dfe5e9; --platform-line-strong: #c9d2d8;
@@ -36,6 +67,7 @@ html[data-theme="dark"] {
   --accent: #6ea8ff; --accent-soft: #14233c; --orange: #6ea8ff; --orange-soft: #14233c;
   --violet: #aaa0f3; --violet-soft: #26243f; --teal: #6fd3b0; --teal-soft: #162b28;
   --green: #6fd3a8; --blue: #89b4ef; --blue-soft: #17243a; --danger: #e88a84; --red: #e88a84;
+  --card: #111820; --card-2: #151e28; --line-2: #202d39; --accent-line: #2c4670;
   --platform-bg: #0d1117; --platform-panel: #111820; --platform-soft: #151e28;
   --platform-ink: #eff5f5; --platform-muted: #aab7c1; --platform-faint: #7f8f9b;
   --platform-line: #273442; --platform-line-strong: #3b4b59;

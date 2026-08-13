@@ -376,14 +376,14 @@ class LlmConfigTests(unittest.TestCase):
         self.assertEqual(empty_plan_contract["execution_plan"], {})
 
     def test_agent_execution_plan_rejects_undeclared_tools_and_records_boundary(self):
-        with patch.object(app, "agent_detail", return_value={"tools": ["knowledge.search"]}), patch.object(
-            app, "llm_settings", return_value={"configured": True}
-        ):
+        # 同样改用可执行的那套名字。
+        with patch.dict(app.SUBAGENT_TOOL_MAP, {"knowledge": ["knowledge_search"]}), \
+             patch.object(app, "llm_settings", return_value={"configured": True}):
             plan = app.build_agent_execution_plan(
                 "knowledge",
                 "查找行情相关笔记",
                 intent="检索并核对已有知识",
-                requested_tools=["knowledge.search", "server.restart"],
+                requested_tools=["knowledge_search", "server.restart"],
                 route={"mode": "explicit", "confidence": 0.96},
                 status="succeeded",
             )
@@ -394,18 +394,18 @@ class LlmConfigTests(unittest.TestCase):
         self.assertEqual(plan["steps"][0]["status"], "completed")
 
     def test_agent_tool_boundary_is_fail_closed_across_dispatch_targets(self):
-        def fake_detail(project_id, **_kwargs):
-            return {"tools": {"knowledge": ["knowledge_search"], "doc-factory": ["document_validate"]}.get(project_id, [])}
-
-        with patch.object(app, "agent_detail", side_effect=fake_detail), patch.object(
-            app, "llm_settings", return_value={"configured": True}
-        ):
+        # 边界要按「真正能执行的那套名字」判定。以前这里桩的是 agent_detail
+        # （AGENT_REGISTRY 的叙述性能力名），而模型实际能调的是 SUBAGENT_TOOL_MAP
+        # 里的另一套——两套在 market/server/doc-factory 上交集为 0，于是校验会
+        # 拒绝真能执行的工具、放行没有执行器的名字。
+        with patch.dict(app.SUBAGENT_TOOL_MAP, {"knowledge": ["knowledge_search"], "doc-factory": ["doc_validate"]}), \
+             patch.object(app, "llm_settings", return_value={"configured": True}):
             boundary = app.validate_agent_tool_requests(
                 ["knowledge", "doc-factory"],
-                ["knowledge_search", "document_validate", "server_restart"],
+                ["knowledge_search", "doc_validate", "server_restart"],
             )
         self.assertFalse(boundary["valid"])
-        self.assertEqual(boundary["accepted"], ["knowledge_search", "document_validate"])
+        self.assertEqual(boundary["accepted"], ["knowledge_search", "doc_validate"])
         self.assertEqual(boundary["rejected"], ["server_restart"])
 
     def test_agent_tool_boundary_accepts_empty_request_without_inventing_tools(self):

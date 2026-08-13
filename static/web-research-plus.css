@@ -1,6 +1,6 @@
 /* AI-browser add-ons: tab rail, @ mentions, screenshot cards, agent panel. */
 
-.tab-rail { min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--research-border, rgba(148, 163, 184, 0.22)); }
+.tab-rail { min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--browser-line); }
 .tab-rail-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .55; }
 .tab-rail-new { border: 0; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; color: inherit; opacity: .7; }
 .tab-rail-new:hover { opacity: 1; }
@@ -21,7 +21,12 @@
 .mention-chip button { border: 0; background: transparent; cursor: pointer; color: inherit; opacity: .6; font-size: 13px; line-height: 1; }
 .mention-chip button:hover { opacity: 1; }
 
-.mention-popup { position: absolute; z-index: 40; max-height: 260px; overflow-y: auto; margin: 4px 12px; border-radius: 12px; border: 1px solid var(--research-border, rgba(148, 163, 184, .3)); background: var(--research-surface, #111827); box-shadow: 0 12px 32px rgba(2, 6, 23, .35); min-width: 240px; }
+/* 这里原来写的是 var(--research-surface, #111827)。--research-surface 整个项目
+   里没有任何地方定义过，而这个页面又不加载 theme.css，所以那个写死的深蓝黑
+   #111827 就是它在两个主题下唯一的取值——浅色模式下「@ 引用」浮层是一块深色底
+   配深色字，实测对比度 1.01，等于什么都看不见。
+   改用本页自己的 --browser-* 调色板，它在浅深两套下都有定义。 */
+.mention-popup { position: absolute; z-index: 40; max-height: 260px; overflow-y: auto; margin: 4px 12px; border-radius: 12px; border: 1px solid var(--browser-line); background: var(--browser-surface); box-shadow: 0 12px 32px rgba(2, 6, 23, .35); min-width: 240px; color: var(--browser-ink); }
 .mention-option { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: inherit; padding: 9px 12px; cursor: pointer; }
 .mention-option:hover { background: rgba(148, 163, 184, .16); }
 .mention-option strong { display: block; font-size: 13px; font-weight: 600; }
@@ -29,13 +34,13 @@
 .mention-loading { padding: 12px; font-size: 12px; opacity: .6; }
 
 .chat-shot { margin: 10px 0; }
-.chat-shot img { width: 100%; border-radius: 10px; border: 1px solid var(--research-border, rgba(148, 163, 184, .25)); display: block; }
+.chat-shot img { width: 100%; border-radius: 10px; border: 1px solid var(--browser-line); display: block; }
 .chat-shot small { display: block; margin-top: 6px; font-size: 11.5px; opacity: .6; line-height: 1.5; }
 
 .agent-boundary { margin: 10px 0 14px; font-size: 12px; opacity: .6; line-height: 1.6; }
 .agent-result { margin-top: 8px; }
 .agent-answer p { font-size: 14px; line-height: 1.75; }
-.agent-sources { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--research-border, rgba(148, 163, 184, .2)); }
+.agent-sources { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--browser-line); }
 .agent-sources h4 { margin: 0 0 8px; font-size: 12px; opacity: .6; font-weight: 600; }
 .agent-sources ol { margin: 0; padding-left: 20px; display: grid; gap: 5px; font-size: 13px; }
 .agent-progress ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12.5px; opacity: .7; }

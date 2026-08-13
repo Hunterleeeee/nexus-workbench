@@ -43,6 +43,26 @@ class WorkbenchStatusTests(unittest.TestCase):
         self.assertEqual(response.headers.get("service-worker-allowed"), "/")
         self.assertIn("no-cache", response.headers.get("cache-control", ""))
         self.assertIn(f'CACHE_NAME = "workbench-shell-v{version}"', response.text)
+        for route in (
+            "/projects/inbox", "/projects/knowledge", "/projects/doc-factory",
+            "/projects/sub2api", "/projects/market", "/projects/server",
+            "/projects/aihot", "/projects/ai-learning", "/projects/embodied",
+            "/projects/idea-analysis", "/projects/product-manager",
+            "/projects/cid-dashboard", "/projects/web-research", "/projects/cloud-dev",
+        ):
+            self.assertIn(f'"{route}"', response.text, route)
+
+    def test_favicon_uses_the_existing_workbench_icon(self):
+        async def request():
+            transport = httpx.ASGITransport(app=app.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                return await client.get("/favicon.ico")
+
+        response = asyncio.run(request())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("content-type"), "image/png")
+        self.assertIn("max-age=86400", response.headers.get("cache-control", ""))
+        self.assertTrue(response.content.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_shared_frontend_request_contract_is_loaded_and_user_friendly(self):
         root = Path(__file__).resolve().parents[1]
@@ -98,6 +118,11 @@ class WorkbenchStatusTests(unittest.TestCase):
         self.assertIn("/api/market/convertible-bonds", market_js)
         self.assertIn("/api/market/valuation-percentile", market_js)
         self.assertIn("/api/market/ai-scan", market_js)
+        sync_dependents = market_js.split("function syncMarketDependents(market) {", 1)[1].split("\n}\nfunction renderQuotes", 1)[0]
+        self.assertNotIn("loadAIScan(", sync_dependents)
+        self.assertIn('$("#ai-scan-form").addEventListener("submit", async (event) => {', market_js)
+        self.assertIn('await loadAIScan($("#ai-scan-question").value.trim())', market_js)
+        self.assertIn("不会在打开页面时自动调用 AI", market)
         self.assertIn("/api/market/backtest/walk-forward", market_js)
         self.assertIn("/api/market/sampling", market_js)
         self.assertIn("legacy-tools", market)
@@ -106,6 +131,21 @@ class WorkbenchStatusTests(unittest.TestCase):
         self.assertIn('id="cloud-readiness"', cloud_dev)
         self.assertIn("WORKBENCH_FEISHU_APP_ID/SECRET", cloud_dev)
         self.assertIn("WORKBENCH_FEISHU_VERIFY_TOKEN/ENCRYPT_KEY", cloud_dev)
+
+    def test_every_product_page_gets_shared_accessibility_primitives(self):
+        root = Path(__file__).resolve().parents[1]
+        theme_js = (root / "static" / "theme.js").read_text(encoding="utf-8")
+        theme_css = (root / "static" / "theme.css").read_text(encoding="utf-8")
+        self.assertIn('stylesheet.dataset.workbenchTheme = "true"', theme_js)
+        self.assertIn('skip.textContent = "跳到主要内容"', theme_js)
+        self.assertIn('node.setAttribute("aria-live", error ? "assertive" : "polite")', theme_js)
+        self.assertIn('node.setAttribute("aria-label", fallback)', theme_js)
+        self.assertIn('node.setAttribute("aria-modal", "true")', theme_js)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", theme_css)
+        self.assertIn(".skip-link:focus", theme_css)
+        for page in sorted((root / "static").glob("*.html")):
+            source = page.read_text(encoding="utf-8")
+            self.assertIn("/static/theme.js", source, page.name)
 
     def test_frontend_project_and_platform_recovery_hooks_are_present(self):
         root = Path(__file__).resolve().parents[1]
@@ -194,6 +234,29 @@ class WorkbenchStatusTests(unittest.TestCase):
             result = app.project_audit("inbox")
         self.assertEqual(result["agents"][0]["quality"]["total"], 4)
         self.assertEqual(result["agents"][0]["quality"]["source_completeness_rate"], 0.5)
+
+    def test_every_declared_agent_tool_has_an_auditable_policy(self):
+        missing = {
+            project_id: sorted(set(detail.get("tools", [])) - set(app.AGENT_TOOL_POLICIES))
+            for project_id, detail in app.AGENT_REGISTRY.items()
+        }
+        self.assertEqual({key: value for key, value in missing.items() if value}, {})
+
+    def test_every_project_agent_can_do_web_research(self):
+        """每个项目 Agent 都要能上网调研：web_search（搜索）+ web_fetch（抓正文）。
+        文档 Agent 写深度分析类文档时没有上网能力，只能声称"交接给网页研究 Agent"，
+        而交接不落地（actions 为空）——用户干等。这是防回归测试。"""
+        for project_id in app.AGENT_REGISTRY:
+            if project_id == "workbench":
+                continue
+            schema_names = [item["function"]["name"] for item in app.subagent_tool_schemas(project_id)]
+            self.assertIn("web_search", schema_names, f"{project_id} 缺少 web_search")
+            declared = app.agent_declared_tools(project_id)
+            self.assertIn("web_search", declared, f"{project_id} 能力声明缺少 web_search")
+            self.assertIn("web_fetch", declared, f"{project_id} 能力声明缺少 web_fetch")
+            self.assertIn("web_search", app.AGENT_TOOL_POLICIES)
+            self.assertTrue(app.AGENT_TOOL_POLICIES["web_search"]["enabled"])
+            self.assertTrue(app.AGENT_TOOL_POLICIES["web_fetch"]["enabled"])
 
     def test_public_project_health_exposes_counts_source_and_data_time(self):
         activity = {

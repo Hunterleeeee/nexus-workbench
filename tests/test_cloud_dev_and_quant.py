@@ -575,6 +575,62 @@ class QuantResearchTests(unittest.TestCase):
         self.assertEqual(result["status"], "invalid")
         self.assertIn("step_size", result["message"])
 
+    def test_research_card_uses_tencent_kline_instead_of_waiting_for_snapshots(self):
+        """个股研究卡必须吃真实历史 K 线：新加自选当天就能算回测，
+        而不是等本地快照慢慢积累（否则研究卡永远样本不足）。"""
+        klines = [{"date": (datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=index)).strftime("%Y-%m-%d"), "close": 100 + index * 2} for index in range(42)]
+        quote = {"symbol": "sh600519", "name": "贵州茅台", "price": 184.0, "change_pct": 1.2, "open": 182.0, "volume": 1000}
+
+        async def exercise():
+            with patch.object(app, "fetch_market_quotes", return_value=[quote]), \
+                 patch.object(app, "_tencent_kline", return_value=klines):
+                return await app.market_research_card("600519")
+
+        result = asyncio.run(exercise())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data_source"], "tencent-kline")
+        self.assertEqual(result["backtests"]["momentum"]["sample_count"], 42, "回测必须用历史K线样本")
+        self.assertEqual(result["backtests"]["mean_reversion"]["sample_count"], 42)
+        self.assertEqual(result["walkforward"]["sample_count"], 42, "样本外验证也要用历史K线")
+        self.assertIn("腾讯日K", result["note"])
+
+    def test_research_card_falls_back_to_fund_nav_history_for_otc_funds(self):
+        """场外基金在腾讯接口查不到（sz 前缀还被误判为可查）：研究卡要
+        用东财历史净值兜底，基金不能永远"没有历史数据"。"""
+        navs = [{"date": (datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=index)).strftime("%Y-%m-%d"), "close": 1.5 + index * 0.01} for index in range(42)]
+        fund_quote = {"symbol": "012345", "name": "某混合基金", "price": 1.91, "change_pct": 0.3, "source": "fund-nav", "nav_date": "2026-03-01"}
+
+        async def exercise():
+            with patch.object(app, "fetch_market_quotes", return_value=[]), \
+                 patch.object(app, "_tencent_kline", return_value=[]), \
+                 patch.object(app, "fetch_fund_nav", return_value=fund_quote), \
+                 patch.object(app, "fetch_fund_nav_history", return_value=navs):
+                return await app.market_research_card("012345")
+
+        result = asyncio.run(exercise())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data_source"], "fund-nav-history")
+        self.assertEqual(result["quote"]["name"], "某混合基金", "基金行情要用东财净值兜底")
+        self.assertEqual(result["backtests"]["momentum"]["sample_count"], 42, "基金回测必须用净值历史")
+        self.assertIn("东财基金净值", result["note"])
+
+    def test_research_card_uses_local_history_when_remote_history_is_unavailable(self):
+        """两家外部历史源都暂时不可用时，不能用空列表覆盖已经积累的本地快照。"""
+        local_points = self._points(30)
+        quote = {"symbol": "sh600519", "name": "贵州茅台", "price": 129.0, "change_pct": 0.2}
+
+        async def exercise():
+            with patch.object(app, "fetch_market_quotes", return_value=[quote]), \
+                 patch.object(app, "_tencent_kline", return_value=[]), \
+                 patch.object(app, "fetch_fund_nav_history", return_value=[]), \
+                 patch.object(app, "market_backtest_samples", return_value=(local_points, [])):
+                return await app.market_research_card("600519")
+
+        result = asyncio.run(exercise())
+        self.assertEqual(result["backtests"]["momentum"]["sample_count"], 30)
+        self.assertEqual(result["backtests"]["momentum"]["status"], "ok")
+        self.assertEqual(result["data_source"], "")
+
     def test_walk_forward_api_returns_research_artifact(self):
         points = self._points(42)
         snapshot = {"checked_at": points[-1]["checked_at"], "source": "fixture", "quotes": []}

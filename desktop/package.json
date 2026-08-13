@@ -1,11 +1,12 @@
 {
   "name": "workbench-desktop",
-  "version": "0.3.153",
+  "version": "0.3.167",
   "private": true,
   "description": "Workbench desktop shell",
   "main": "main.cjs",
   "scripts": {
     "verify": "node verify.mjs",
+    "test:frontend": "node --test ../tests/request_stream.test.mjs",
     "package": "electron-builder --mac --arm64",
     "package:intel": "electron-builder --mac --x64"
   },

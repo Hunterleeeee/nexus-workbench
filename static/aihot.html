@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.157"></script>
+  <script src="/static/theme.js?v=0.3.167"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>AI 热点研究 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.157" />
-  <link rel="stylesheet" href="/static/aihot.css?v=0.3.157" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.167" />
+  <link rel="stylesheet" href="/static/aihot.css?v=0.3.167" />
 </head>
 <body>
   <div class="page-shell">
@@ -19,7 +19,7 @@
       <section class="page-heading"><div><div class="eyebrow">AI 热点研究</div><h1>AI 热点研究</h1><p class="lede">把公开资讯压成真正值得看的信号；你可以挑几条消息，让 Agent 继续解释、比较和发现机会。</p></div><div class="page-kpi"><strong id="feed-count">—</strong><span>条当前信号</span></div></section>
       <section class="aihot-layout">
         <section class="card panel feed-panel">
-          <div class="filter-row"><div class="filter-buttons" role="tablist" aria-label="热点筛选"><button class="filter-button active" data-mode="useful" type="button">有用</button><button class="filter-button" data-mode="latest" type="button">最新</button><button class="filter-button" data-mode="opportunity" type="button">商机线索</button></div><button id="refresh-feed" class="secondary-button" type="button">同步</button></div><div id="opportunity-review" class="opportunity-review" hidden></div>
+          <div class="filter-row"><div class="filter-buttons" role="tablist" aria-label="热点筛选"><button class="filter-button active" data-mode="useful" type="button">有用</button><button class="filter-button" data-mode="latest" type="button">最新</button><button class="filter-button" data-mode="opportunity" type="button">商机线索</button></div><div class="filter-buttons filter-domains" role="tablist" aria-label="领域筛选"><button class="filter-button active" data-domain="all" type="button">全部</button><button class="filter-button" data-domain="ai" type="button">AI</button><button class="filter-button" data-domain="科技" type="button">科技</button><button class="filter-button" data-domain="财经" type="button">财经</button><button class="filter-button" data-domain="商业" type="button">商业</button><button class="filter-button" data-domain="综合" type="button">综合</button></div><button id="refresh-feed" class="secondary-button" type="button">同步</button></div><div id="opportunity-review" class="opportunity-review" hidden></div>
           <div class="feed-search"><input id="feed-search" placeholder="搜索 AI 新闻、公司、产品或标签…" aria-label="搜索 AI 热点" /><button id="search-feed" class="secondary-button" type="button">搜索</button></div>
           <div class="feed-status"><span id="feed-status">正在读取公开资讯…</span><span id="feed-source">来源：aihot.today · 反馈只保存在本机</span></div>
           <div class="feed-tools"><button id="digest-feed" class="secondary-button" type="button">生成摘要与主题聚类</button><button id="insights-feed" class="secondary-button" type="button">洞察</button></div>
@@ -31,6 +31,7 @@
           <div class="panel-head"><div><h2>AI 热点研究 Agent</h2><small>选消息，再问它</small></div><span class="agent-state"><i></i> 在线</span></div>
           <div class="agent-prompt">它会区分新闻事实、判断和待验证假设，并从真实需求、用户、付费可能和 7 天验证切入。</div>
           <div class="agent-quick-actions" aria-label="热点研究快捷提问"><button type="button" data-agent-prompt="从当前筛选结果里挑出最值得关注的 3 条，并说明理由">挑 3 条最重要</button><button type="button" data-agent-prompt="从已选消息里找 3 个适合个人开发者验证的机会">找个人机会</button><button type="button" data-agent-prompt="判断当前消息中哪些是事实、哪些只是推断或营销话术">区分事实与噪音</button></div>
+          <div id="selected-tags" class="selected-tags" hidden></div>
           <div id="chat-log" class="chat-log"><div class="chat-message assistant"><strong>AI 热点研究 Agent</strong><p>你可以问我：哪些消息值得关注？这条新闻背后有什么产品机会？哪些只是噱头？</p></div></div>
           <form id="aihot-chat-form" class="chat-form"><textarea id="aihot-chat-input" rows="4" placeholder="例如：从已选消息里找 3 个适合个人开发者验证的机会"></textarea><div class="chat-form-foot"><span id="selected-note">未选择消息，将使用当前筛选结果</span><button class="primary-button" type="submit">开始分析</button></div></form>
           <section class="project-agent-runs" aria-label="AI 热点 Agent 运行"><div class="project-agent-runs-head"><strong>Agent 运行记录</strong><span id="aihot-run-summary">读取中…</span></div><div id="aihot-run-history"><div class="project-agent-runs-empty">分析后会显示运行状态、失败原因和重试入口。</div></div></section>
@@ -38,13 +39,14 @@
       </section>
     </main>
   </div>
-      <script src="/static/request.js?v=0.3.157"></script><script src="/static/project.js?v=0.3.157"></script>
+      <script src="/static/request.js?v=0.3.167"></script><script src="/static/markdown.js?v=0.3.167"></script><script src="/static/project.js?v=0.3.167"></script>
   <script>
     const feedList = qs("#feed-list");
     const feedStatus = qs("#feed-status");
     const feedSource = qs("#feed-source");
     const selected = new Set();
     let currentMode = "useful";
+    let currentDomain = "all";
     let currentItems = [];
     let sessionId = "";
     let statusTimer = null;
@@ -56,9 +58,20 @@
       if (tone === "success") statusTimer = window.setTimeout(() => { feedStatus.dataset.tone = ""; }, 3200);
     }
 
+    function renderSelectedTags() {
+      const host = qs("#selected-tags");
+      if (!host) return;
+      const items = currentItems.filter((item) => selected.has(String(item.id)));
+      if (!items.length) { host.hidden = true; host.innerHTML = ""; return; }
+      host.hidden = false;
+      host.innerHTML = '<span class="selected-tags-label">已选入对话</span>' + items.map((item) =>
+        `<button type="button" class="selected-tag" data-untag="${escapeHtml(item.id)}" title="点击移出对话">${escapeHtml(String(item.title || "").slice(0, 22))} ×</button>`
+      ).join("") + '<button type="button" class="selected-clear" data-clear-selected>清空</button>';
+    }
     function renderFeed(items, context = {}) {
       currentItems = items || [];
       qs("#feed-count").textContent = currentItems.length;
+      renderSelectedTags();
       if (!currentItems.length) {
         const hasQuery = Boolean(context.query || (qs("#feed-search").value || "").trim());
         const notSynced = context.stale || (!context.items_total && !context.fetched_at);
@@ -72,7 +85,7 @@
         const feedback = item.feedback || {};
         const opportunityDone = Boolean(item.opportunity_work_item_id);
         return `<article class="signal-card ${selected.has(id) ? "selected" : ""}" data-item-id="${escapeHtml(id)}">
-          <div class="signal-top"><span class="signal-source">${escapeHtml(item.source)}</span>${item.change === "new" ? '<span class="signal-new">新</span>' : ""}<span class="signal-time">${escapeHtml(formatDate(item.published_at))}</span></div>
+          <div class="signal-top"><span class="signal-domain domain-${escapeHtml((item.domain || "综合"))}">${escapeHtml(item.domain || "综合")}</span><span class="signal-source">${escapeHtml(item.source)}</span>${item.change === "new" ? '<span class="signal-new">新</span>' : ""}<span class="signal-time">${escapeHtml(formatDate(item.published_at))}</span></div>
           <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.description || "暂无中文摘要")}</p>
           <div class="signal-bottom"><span class="signal-tags">${(item.tags || []).slice(0, 3).map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}</span><span class="signal-score">重要度 ${escapeHtml(item.importance || 0)} · 机会 ${escapeHtml(item.opportunity_score?.score ?? 0)} 分 · 来源 ${escapeHtml(item.source_score ?? 3)}/5${item.source_votes ? `（${item.source_votes > 0 ? "+" : ""}${escapeHtml(item.source_votes)}）` : ""}</span></div>
           <div class="signal-actions signal-feedback-actions" aria-label="给这条热点反馈">
@@ -96,7 +109,7 @@
       setFeedStatus(refresh ? "正在同步最新资讯…" : "正在读取公开资讯…");
       try {
         const query = encodeURIComponent(qs("#feed-search").value.trim());
-        const body = await requestJson(`/api/aihot/feed?mode=${encodeURIComponent(currentMode)}&q=${query}&refresh=${refresh}`);
+        const body = await requestJson(`/api/aihot/feed?mode=${encodeURIComponent(currentMode)}&q=${query}&refresh=${refresh}&domain=${encodeURIComponent(currentDomain)}`);
         renderFeed(body.feed?.items || [], { stale: body.feed?.stale, items_total: body.feed?.items_total, fetched_at: body.feed?.fetched_at, query: qs("#feed-search").value.trim() });
         feedSource.textContent = body.feed?.stale ? `来源：aihot.today · 使用上次快照（${body.feed.error || "同步失败"}）` : `来源：aihot.today · ${body.feed?.fetched_at ? formatDate(body.feed.fetched_at) : "已同步"} · 反馈只保存在本机`;
         setFeedStatus(`${body.feed?.items?.length || 0} 条结果`);
@@ -117,6 +130,10 @@
     document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
       document.querySelectorAll("[data-mode]").forEach((item) => item.classList.remove("active"));
       button.classList.add("active"); currentMode = button.dataset.mode; loadFeed(); renderOpportunityReview();
+    }));
+    document.querySelectorAll("[data-domain]").forEach((button) => button.addEventListener("click", () => {
+      document.querySelectorAll("[data-domain]").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active"); currentDomain = button.dataset.domain; loadFeed();
     }));
     async function renderOpportunityReview() {
       const el = qs("#opportunity-review");
@@ -175,6 +192,24 @@
       }
     });
 
+    // 标签栏（聊天区顶部）的移除/清空按钮：它们不在 feedList 内，
+    // 必须单独绑定点击监听，否则点「×」和「清空」没有任何反应。
+    qs("#selected-tags")?.addEventListener("click", (event) => {
+      const tag = event.target.closest("[data-untag]");
+      if (tag) {
+        selected.delete(String(tag.dataset.untag));
+        renderFeed(currentItems);
+        renderSelectedTags();
+        return;
+      }
+      const clear = event.target.closest("[data-clear-selected]");
+      if (clear) {
+        selected.clear();
+        renderFeed(currentItems);
+        renderSelectedTags();
+        return;
+      }
+    });
     feedList.addEventListener("click", async (event) => {
       const retry = event.target.closest(".retry-feed");
       if (retry) return loadFeed();
@@ -185,6 +220,7 @@
       if (button.classList.contains("select-signal")) {
         if (selected.has(id)) selected.delete(id); else selected.add(id);
         renderFeed(currentItems);
+        renderSelectedTags();
         return;
       }
       if (button.dataset.vote) {
@@ -221,7 +257,7 @@
       } catch (e) { state.className = "agent-state warn"; state.innerHTML = "<i></i> 状态未知"; }
     }
     qs("#aihot-run-history").addEventListener("click", async (event) => { const button = event.target.closest("[data-aihot-retry]"); if (!button) return; button.disabled = true; button.textContent = "重试中…"; try { const body = await requestJson(`/api/agent/aihot/runs/${encodeURIComponent(button.dataset.aihotRetry)}/retry`, { method: "POST" }); sessionId = body.session?.id || sessionId; appendChat("assistant", body.answer || "重试完成，但没有返回分析结果"); await loadAihotRuns(); } catch (error) { button.disabled = false; button.textContent = "重试"; appendChat("assistant", `重试失败：${error.message}`); } });
-    qs("#aihot-chat-form").addEventListener("submit", async (event) => { event.preventDefault(); const input = qs("#aihot-chat-input"); const message = input.value.trim(); if (!message) return; input.value = ""; appendChat("user", message); const button = event.currentTarget.querySelector("button[type=submit]"); button.disabled = true; button.textContent = "分析中…"; try { const body = await requestJson("/api/aihot/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message, mode: currentMode, item_ids: [...selected] }) }); sessionId = body.session?.id || sessionId; appendChat("assistant", body.answer || "没有返回分析结果"); await loadAihotRuns(); } catch (error) { appendChat("assistant", `分析失败：${error.message}`); await loadAihotRuns().catch(() => {}); } finally { button.disabled = false; button.textContent = "开始分析"; } });
+    qs("#aihot-chat-form").addEventListener("submit", async (event) => { event.preventDefault(); const input = qs("#aihot-chat-input"); const message = input.value.trim(); if (!message) return; const sentItemIds = [...selected]; input.value = ""; appendChat("user", message); const button = event.currentTarget.querySelector("button[type=submit]"); button.disabled = true; button.textContent = "分析中…"; const log = qs("#chat-log"); const bubble = document.createElement("div"); bubble.className = "chat-message assistant"; bubble.innerHTML = "<strong>AI 热点研究 Agent</strong><p></p>"; log.appendChild(bubble); const para = bubble.querySelector("p"); let lastText = ""; try { if (window.WorkbenchUX?.fetchStream) { await window.WorkbenchUX.fetchStream("/api/aihot/chat", { session_id: sessionId, message, mode: currentMode, item_ids: sentItemIds, stream: true }, { onDelta: (text) => { if (text) { lastText += text; para.textContent = lastText; log.scrollTop = log.scrollHeight; } }, onReset: () => { lastText = ""; para.textContent = "备用 Provider 正在重新分析…"; }, onFinish: (payload) => { if (payload.session_id) sessionId = payload.session_id; }, onError: (msg, payload) => { if (!payload?.recoverable && !lastText) para.textContent = `分析失败：${msg}`; } }); } else { const body = await requestJson("/api/aihot/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message, mode: currentMode, item_ids: sentItemIds }) }); sessionId = body.session?.id || sessionId; para.textContent = body.answer || "没有返回分析结果"; } await loadAihotRuns(); } catch (error) { if (!lastText) para.textContent = `分析失败：${error.message}`; await loadAihotRuns().catch(() => {}); } finally { button.disabled = false; button.textContent = "开始分析"; } selected.clear(); renderSelectedTags(); qs("#selected-note").textContent = "未选择消息，将使用当前筛选结果"; renderFeed(currentItems); });
     document.querySelectorAll("[data-agent-prompt]").forEach((button) => button.addEventListener("click", () => { qs("#aihot-chat-input").value = button.dataset.agentPrompt || ""; qs("#aihot-chat-input").focus(); }));
     loadAihotRuns().catch(() => {});
     loadFeed();

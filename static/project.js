@@ -10,7 +10,7 @@ function formatDate(value) {
 }
 
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.157"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.167"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
   const theme = window.WorkbenchTheme;
   if (!theme) document.documentElement.dataset.theme = localStorage.getItem("workbench-theme") === "dark" ? "dark" : "light";
   const actions = document.querySelector(".page-actions, .actions, .bar-right, .topbar-right");
@@ -107,6 +107,27 @@ function projectIdFromPage() {
   return "";
 }
 
+// Agent 的回答是 Markdown：表格、列表、代码块都靠它表达结构，
+// 而原来是 escapeHtml 之后当纯文本显示，竖线和星号全露在外面。
+// 渲染走 markdown.js（先整体转义，再只还原认识的结构），没加载到就退回纯文本。
+function renderAgentMarkdown(content) {
+  const markdown = window.WorkbenchMarkdown;
+  if (markdown) return markdown.render(content);
+  return `<p>${escapeHtml(content)}</p>`;
+}
+function renderAgentInline(content) {
+  const markdown = window.WorkbenchMarkdown;
+  if (markdown) return markdown.renderInline(content);
+  return escapeHtml(content);
+}
+// 「结构化结果」里的一条：服务端已经把表格和代码块整块保留下来了（带换行），
+// 这种整块的东西不能塞进 <li>，否则表格会被列表符号顶得东倒西歪。
+function agentContractItemMarkup(item) {
+  const text = typeof item === "string" ? item : JSON.stringify(item);
+  if (text.includes("\n")) return `<div class="contract-block project-agent-md">${renderAgentMarkdown(text)}</div>`;
+  return `<li>${renderAgentInline(text)}</li>`;
+}
+
 function agentActionMarkup(actions = []) {
   return actions.map((action) => {
     const label = action.name || action.tool || "Agent 动作";
@@ -131,7 +152,18 @@ function agentResultContractMarkup(contract = {}) {
   const labels = { facts: "事实", judgement: "判断", evidence: "证据", risks: "风险", actions: "动作", next_steps: "下一步" };
   const entries = Object.entries(labels).filter(([key]) => Array.isArray(sections[key]) && sections[key].length);
   if (!contract?.summary && !entries.length) return "";
-  const body = entries.map(([key, label]) => `<div><strong>${label}</strong><ul>${sections[key].slice(0, 8).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`).join("");
+  // 每节最多展示 8 条，但要把「还剩多少」说出来：以前是直接 slice 掉的，
+  // 页面上看不出被截过，读的人会以为 Agent 就只找到这么多。
+  const body = entries.map(([key, label]) => {
+    const all = sections[key];
+    const shown = all.slice(0, 8);
+    const inlineItems = shown.filter((item) => !String(item).includes("\n"));
+    const blockItems = shown.filter((item) => String(item).includes("\n"));
+    const list = inlineItems.length ? `<ul>${inlineItems.map(agentContractItemMarkup).join("")}</ul>` : "";
+    const blocks = blockItems.map(agentContractItemMarkup).join("");
+    const more = all.length > shown.length ? `<small class="contract-more">另有 ${all.length - shown.length} 条，见上面的完整回答</small>` : "";
+    return `<div><strong>${label}</strong>${list}${blocks}${more}</div>`;
+  }).join("");
   const citations = (contract.citations || []).slice(0, 8).map((item) => item.type === "url" ? `<a href="${escapeHtml(item.value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.label || item.value)}</a>` : `<span>${escapeHtml(item.value)}</span>`).join(" · ");
   const refs = (contract.source_refs || []).slice(0, 8).map((item) => { const label = `${item.label || item.id || "未命名来源"}${item.data_as_of ? ` · ${item.data_as_of}` : ""}`; return String(item.locator || "").startsWith("http") ? `<a href="${escapeHtml(item.locator)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : `<span>${escapeHtml(label)}</span>`; }).join(" · ");
   const review = contract.needs_review ? `<span class="agent-contract-review">需复核：${escapeHtml((contract.review_reasons || []).join("、") || "证据不足")}</span>` : "";
@@ -144,13 +176,13 @@ function agentResultContractMarkup(contract = {}) {
   // 可以让 Agent 的回答无端偏一个方向，而页面上此前只显示「使用了 N 条」——
   // 看不到是哪几条，更看不到它凭什么被选中。把它摊开，并且就地能关掉。
   const memoryPanel = contract.memory_refs?.length
-    ? `<div class="project-agent-memories"><strong>本轮用到的记忆</strong>${contract.memory_refs.map((item) => `<div class="agent-memory-ref" data-memory-ref="${escapeHtml(item.id)}"><div><p>${escapeHtml(item.content)}</p><small>${escapeHtml(item.reason || "已确认记忆")}${item.scope === "project" ? ` · 项目 ${escapeHtml(item.project_id || "")}` : " · 全局"}</small></div><button type="button" data-memory-drop="${escapeHtml(item.id)}" title="不再让这条记忆参与回答">别用这条</button></div>`).join("")}</div>`
+    ? `<div class="project-agent-memories"><strong>本轮用到的记忆</strong>${contract.memory_refs.map((item) => `<div class="agent-memory-ref" data-memory-ref="${escapeHtml(item.id)}"><div><div class="project-agent-md">${renderAgentMarkdown(item.content)}</div><small>${escapeHtml(item.reason || "已确认记忆")}${item.scope === "project" ? ` · 项目 ${escapeHtml(item.project_id || "")}` : " · 全局"}</small></div><button type="button" data-memory-drop="${escapeHtml(item.id)}" title="不再让这条记忆参与回答">别用这条</button></div>`).join("")}</div>`
     : "";
   const memoryUpdateTrace = contract.memory_updates?.length ? `本轮发现 ${contract.memory_updates.length} 条记忆` : "";
   const memoryContext = contract.memory_context || {};
   const memoryBudgetTrace = memoryContext.chars ? `记忆上下文 ${Number(memoryContext.chars)} 字${Number(memoryContext.calls) > 1 ? ` / ${Number(memoryContext.calls)} 次调用` : ""}` : "";
   const trace = [contract.data_as_of ? `数据时间：${escapeHtml(contract.data_as_of)}` : "", refs ? `来源：${refs}` : "", coverageText, memoryTrace, memoryBudgetTrace, memoryUpdateTrace, planTrace, contract.artifact_ids?.length ? `Artifact ${contract.artifact_ids.length} 份` : "", contract.work_item_ids?.length ? `WorkItem ${contract.work_item_ids.length} 条` : "", contract.relation_ids?.length ? `Relation ${contract.relation_ids.length} 条` : "", review, contract.replay?.href ? `<a href="${escapeHtml(contract.replay.href)}" target="_blank" rel="noopener noreferrer">查看 Run 回放</a>` : ""].filter(Boolean).join(" · ");
-  return `<details class="project-agent-result-contract"><summary>结构化结果 · ${escapeHtml(contract.summary || "查看结论与证据")}</summary>${body || `<p>${escapeHtml(contract.summary || "暂无结构化摘要")}</p>`}${memoryPanel}${citations ? `<div class="project-agent-citations"><strong>可回溯来源</strong><p>${citations}</p></div>` : ""}${trace ? `<div class="project-agent-citations"><strong>审计链</strong><p>${trace}</p></div>` : ""}</details>`;
+  return `<details class="project-agent-result-contract"><summary>结构化结果 · ${renderAgentInline(contract.summary || "查看结论与证据")}</summary>${body || `<p>${escapeHtml(contract.summary || "暂无结构化摘要")}</p>`}${memoryPanel}${citations ? `<div class="project-agent-citations"><strong>可回溯来源</strong><p>${citations}</p></div>` : ""}${trace ? `<div class="project-agent-citations"><strong>审计链</strong><p>${trace}</p></div>` : ""}</details>`;
 }
 
 function setupIncomingHandoffQueue(projectId, host) {
@@ -236,20 +268,21 @@ function setupProjectAgent() {
   // use the same global settings and handoff APIs, but should not show two chat boxes.
   if (document.querySelector("#aihot-chat-form, #idea-chat-form")) {
     setupProjectHandoff(projectId);
-    // 顶部统一入口：点击滚动到内嵌 Agent 面板并聚焦输入框，与其他项目页体验一致。
-    const topActions = document.querySelector(".page-actions, .topbar .actions, .bar .bar-right");
+    // 右下角悬浮入口：点击滚动到内嵌 Agent 面板并聚焦输入框（与其他项目页一致，不占顶部）。
     const agentHost = document.querySelector("#aihot-chat-form, #idea-chat-form");
-    if (topActions && agentHost) {
+    if (agentHost) {
       const anchor = document.createElement("button");
       anchor.type = "button";
-      anchor.className = "project-agent-launcher project-agent-launcher-top";
-      anchor.innerHTML = '<span class="project-agent-launcher-dot"></span><span>问这个项目的 AI</span><small>去提问</small>';
+      anchor.className = "project-agent-launcher";
+      anchor.setAttribute("aria-label", "问这个项目的 AI");
+      anchor.setAttribute("title", "问这个项目的 AI");
+      anchor.innerHTML = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true" style="width:19px;height:19px"><path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4.2 3.6A.8.8 0 0 1 3.4 19V6a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7.5 9h9M7.5 12.5h5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
       anchor.addEventListener("click", () => {
         agentHost.scrollIntoView({ behavior: "smooth", block: "center" });
         const input = agentHost.querySelector("textarea");
         window.setTimeout(() => input?.focus(), 350);
       });
-      topActions.prepend(anchor);
+      document.body.append(anchor);
     }
     if (new URLSearchParams(window.location.search).get("focus") === "agent") {
       window.setTimeout(() => {
@@ -261,21 +294,14 @@ function setupProjectAgent() {
     return;
   }
   const launcher = document.createElement("button");
-  // 覆盖三种项目页顶部结构：标准 page-actions、Sub2API 的 topbar>.actions、CID 的 bar>.bar-right。
-  const topActions = document.querySelector(".page-actions, .topbar .actions, .bar .bar-right");
-  if (topActions) {
-    // 显眼入口：放进项目页顶部操作区，普通用户一进页面就能看到。
-    launcher.className = "project-agent-launcher project-agent-launcher-top";
-    launcher.setAttribute("aria-expanded", "false");
-    launcher.innerHTML = '<span class="project-agent-launcher-dot"></span><span>问这个项目的 AI</span><small>打开</small>';
-    topActions.prepend(launcher);
-  } else {
-    // 兜底：右下角悬浮球。
-    launcher.className = "project-agent-launcher";
-    launcher.setAttribute("aria-expanded", "false");
-    launcher.innerHTML = '<span class="project-agent-launcher-dot"></span><span>项目 Agent</span><small>打开</small>';
-    document.body.append(launcher);
-  }
+  // 右下角悬浮入口：不再放进顶部操作区（用户反馈想问 AI 时得滑回顶部）。
+  // 无论页面顶部结构如何，统一固定在右下角，点击展开浮层面板。
+  launcher.className = "project-agent-launcher";
+  launcher.setAttribute("aria-expanded", "false");
+  launcher.setAttribute("aria-label", "问这个项目的 AI");
+  launcher.setAttribute("title", "问这个项目的 AI");
+  launcher.innerHTML = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true" style="width:19px;height:19px"><path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4.2 3.6A.8.8 0 0 1 3.4 19V6a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7.5 9h9M7.5 12.5h5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+  document.body.append(launcher);
   const panel = document.createElement("section");
   panel.className = "project-agent-panel hidden";
   panel.setAttribute("role", "dialog");
@@ -348,7 +374,7 @@ function setupProjectAgent() {
     }
   }
   function renderMessages(items = []) {
-    messages.innerHTML = items.length ? items.map((item) => `<div class="project-agent-message ${item.role === "user" ? "user" : "assistant"}"><strong>${item.role === "user" ? "你" : escapeHtml(agent?.name || "项目 Agent")}</strong><p>${escapeHtml(item.content)}</p>${item.role !== "user" ? agentResultContractMarkup(item.metadata?.result_contract) : ""}${item.metadata?.actions ? `<div class="project-agent-inline-actions">${agentActionMarkup(item.metadata.actions)}</div>` : ""}</div>`).join("") : '<div class="project-agent-empty">这是这个项目自己的 Agent。它会读取本项目上下文，并保留本地会话。</div>';
+    messages.innerHTML = items.length ? items.map((item) => `<div class="project-agent-message ${item.role === "user" ? "user" : "assistant"}"><strong>${item.role === "user" ? "你" : escapeHtml(agent?.name || "项目 Agent")}</strong><div class="project-agent-md">${renderAgentMarkdown(item.content)}</div>${item.role !== "user" ? agentResultContractMarkup(item.metadata?.result_contract) : ""}${item.metadata?.actions ? `<div class="project-agent-inline-actions">${agentActionMarkup(item.metadata.actions)}</div>` : ""}</div>`).join("") : '<div class="project-agent-empty">这是这个项目自己的 Agent。它会读取本项目上下文，并保留本地会话。</div>';
     messages.scrollTop = messages.scrollHeight;
     // 快捷提问是「不知道能问什么」时的入口，聊起来之后就只是占位——
     // 它现在紧贴输入框，留着会一直挤掉对话的高度。
@@ -484,15 +510,87 @@ function setupProjectAgent() {
     const send = form.querySelector("button[type=submit]");
     send.disabled = true; send.setAttribute("aria-busy", "true"); input.value = ""; status.textContent = "Agent 正在读取项目上下文…";
     messages.insertAdjacentHTML("beforeend", `<div class="project-agent-message user"><strong>你</strong><p>${escapeHtml(message)}</p></div>`); messages.scrollTop = messages.scrollHeight;
-    const thinking = document.createElement("div");
-    thinking.className = "project-agent-message assistant project-agent-thinking";
-    thinking.innerHTML = "<strong>项目 Agent</strong><p><i></i><i></i><i></i>正在读取项目上下文并执行工具…</p>";
-    messages.appendChild(thinking); messages.scrollTop = messages.scrollHeight;
+    const bubble = document.createElement("div");
+    bubble.className = "project-agent-message assistant";
+    bubble.innerHTML = '<strong>项目 Agent</strong><div class="project-agent-md" data-stream-body></div>';
+    messages.appendChild(bubble); messages.scrollTop = messages.scrollHeight;
+    // 过程反馈分两块：
+    //   progress —— 现在正在做什么（一行，一直被覆盖）
+    //   steps    —— 已经做过哪些步骤（累积，可折叠）
+    // 之前只有前者，于是一个跑了七八轮工具的任务，结束后完全看不出它到底
+    // 走过哪些步、在哪一步慢；而模型的思考流则整个被丢掉了。
+    const progress = document.createElement("div");
+    progress.className = "project-agent-progress";
+    progress.hidden = true;
+    progress.innerHTML = '<p class="progress-now"><i></i><i></i><i></i><span></span></p><details class="progress-steps" hidden><summary>已完成 0 步</summary><ol></ol></details><details class="progress-thinking" hidden><summary>思考过程</summary><pre></pre></details>';
+    messages.insertBefore(progress, bubble);
+    const progressNow = progress.querySelector(".progress-now span");
+    const stepsBox = progress.querySelector(".progress-steps");
+    const stepsList = stepsBox.querySelector("ol");
+    const thinkingBox = progress.querySelector(".progress-thinking");
+    const thinkingPre = thinkingBox.querySelector("pre");
+    const body_ = bubble.querySelector("[data-stream-body]");
+    let lastText = "";
+    let reasoningText = "";
+    let stepCount = 0;
+    // 每个 token 都重排一次 Markdown 会让长回答肉眼可见地卡；用 rAF 合并，
+    // 一帧最多渲染一次。
+    let painting = false;
+    const paint = () => {
+      if (painting) return;
+      painting = true;
+      requestAnimationFrame(() => {
+        painting = false;
+        const nearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
+        body_.innerHTML = renderAgentMarkdown(lastText);
+        if (nearBottom) messages.scrollTop = messages.scrollHeight;
+      });
+    };
     try {
-      const body = await requestJson(`/api/agent/${encodeURIComponent(projectId)}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message, context: { source: window.location.pathname } }) });
-      sessionId = body.session?.id || sessionId; currentSession = body.session; sessionSelect.innerHTML = '<option value="">新会话</option>' + (await requestJson(`/api/agent/${encodeURIComponent(projectId)}/sessions`)).sessions.map((session) => `<option value="${escapeHtml(session.id)}">${escapeHtml(session.title)}</option>`).join(""); sessionSelect.value = sessionId;
-      renderMessages(body.messages || []); renderCapability(body.agent, body.links); await Promise.all([loadRuns(), loadIncomingWorkItems()]); status.textContent = body.run?.status === "partial" ? "已完成 · 有动作失败，请查看最近运行" : "已完成 · 结果和会话已保存";
-    } catch (error) { thinking.remove(); messages.insertAdjacentHTML("beforeend", `<div class="project-agent-message assistant error"><strong>系统提示</strong><p>${escapeHtml(error.message)}</p></div>`); await loadRuns().catch(() => {}); status.textContent = error.message; } finally { send.disabled = false; send.removeAttribute("aria-busy"); }
+      const body = await window.WorkbenchUX?.fetchStream(`/api/agent/${encodeURIComponent(projectId)}/chat`, { session_id: sessionId, message, context: { source: window.location.pathname }, stream: true }, {
+        onEvent: (ev) => {
+          if (!ev?.message) return;
+          progress.hidden = false;
+          progressNow.textContent = ev.message;
+          messages.scrollTop = messages.scrollHeight;
+          // tool_start 只改「正在做什么」那一行；已完成列表只记结果，
+          // 否则每个工具会占两行，跑十几轮之后清单本身就没法看了。
+          if (ev.kind === "tool_start") return;
+          stepCount += 1;
+          const step = document.createElement("li");
+          step.textContent = ev.message;
+          if (ev.ok === false) step.className = "failed";
+          stepsList.appendChild(step);
+          stepsBox.hidden = false;
+          stepsBox.querySelector("summary").textContent = `已完成 ${stepCount} 步`;
+          messages.scrollTop = messages.scrollHeight;
+        },
+        onDelta: (text, reasoning) => {
+          if (reasoning) { reasoningText += reasoning; thinkingBox.hidden = false; thinkingPre.textContent = reasoningText; }
+          if (!text) return;
+          lastText += text;
+          if (!progress.hidden) progressNow.textContent = "正在生成回答…";
+          paint();
+        },
+        onReset: () => { lastText = ""; reasoningText = ""; thinkingPre.textContent = ""; body_.innerHTML = '<p class="md-p">备用 Provider 正在重新回答…</p>'; },
+        onFinish: async (payload) => {
+          progress.hidden = true;
+          if (payload.session_id) sessionId = payload.session_id;
+          currentSession = { id: sessionId };
+          if (payload.agent) renderCapability(payload.agent, payload.agent.links);
+          // 收尾时用完整回答重画一次，并把结构化结果和动作接上——
+          // 以前这两块要等下次打开会话才出现，用户看到的永远是「只有正文」。
+          const answer = payload.answer || lastText;
+          if (answer) lastText = answer;
+          bubble.innerHTML = `<strong>${escapeHtml(agent?.name || "项目 Agent")}</strong><div class="project-agent-md">${renderAgentMarkdown(lastText)}</div>${agentResultContractMarkup(payload.result_contract)}${payload.actions?.length ? `<div class="project-agent-inline-actions">${agentActionMarkup(payload.actions)}</div>` : ""}`;
+          messages.scrollTop = messages.scrollHeight;
+        },
+        onError: (msg, payload) => { if (!payload?.recoverable && !lastText) { bubble.classList.add("error"); body_.innerHTML = `<p class="md-p">${escapeHtml(msg)}</p>`; } progress.hidden = true; },
+      }) || await requestJson(`/api/agent/${encodeURIComponent(projectId)}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message, context: { source: window.location.pathname } }) });
+      if (!window.WorkbenchUX?.fetchStream) { sessionId = body.session?.id || sessionId; currentSession = body.session; renderMessages(body.messages || []); renderCapability(body.agent, body.links); }
+      sessionSelect.innerHTML = '<option value="">新会话</option>' + (await requestJson(`/api/agent/${encodeURIComponent(projectId)}/sessions`)).sessions.map((session) => `<option value="${escapeHtml(session.id)}">${escapeHtml(session.title)}</option>`).join(""); sessionSelect.value = sessionId;
+      await Promise.all([loadRuns(), loadIncomingWorkItems()]); status.textContent = "已完成 · 结果和会话已保存";
+    } catch (error) { progress.hidden = true; if (!lastText) { bubble.classList.add("error"); body_.innerHTML = `<p class="md-p">${escapeHtml(error.message)}</p>`; } await loadRuns().catch(() => {}); status.textContent = error.message; } finally { send.disabled = false; send.removeAttribute("aria-busy"); }
   });
   runsList.addEventListener("click", async (event) => {
     const retryButton = event.target.closest("[data-run-retry]");

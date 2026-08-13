@@ -1281,7 +1281,8 @@ if (!hasSingleInstanceLock) {
     try {
       const { session } = require("electron");
       const defaultSession = session.defaultSession;
-      await defaultSession.clearCache();
+      // 注意：不再 clearCache()——静态资源 URL 带 ?v=版本号，磁盘缓存不会挡更新，
+      // 反而能大幅加速页面加载。真正会挡更新的是 Service Worker，这里只清它。
       await defaultSession.clearStorageData({ storages: ["serviceworkers", "cachestorage"] });
     } catch (_) {
       // 清缓存失败不阻塞启动

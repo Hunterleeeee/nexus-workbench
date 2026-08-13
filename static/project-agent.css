@@ -1,7 +1,7 @@
 /* Standalone Agent surface for project pages with their own visual theme. */
 .project-agent-launcher,
 .project-agent-panel { --agent-surface: var(--surface, var(--panel, #fff)); --agent-surface-muted: var(--surface-muted, var(--raised, #f8fafb)); --agent-ink: var(--ink, #17212b); --agent-muted: var(--muted, #65727e); --agent-faint: var(--faint, #9aa5ae); --agent-line: var(--line, #e2e7eb); --agent-line-strong: var(--line-strong, #cfd8df); --agent-accent: var(--accent, #3b82f6); --agent-violet: var(--violet, #6763ce); --agent-green: var(--green, #238b72); }
-.project-agent-launcher { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 13px; color: #fff; background: var(--agent-ink); border: 1px solid var(--agent-ink); border-radius: 999px; box-shadow: 0 10px 24px rgba(0,0,0,.2); font: inherit; font-size: 11px; font-weight: 700; line-height: 1.2; cursor: pointer; transition: transform .18s ease, background .18s ease, box-shadow .18s ease; }
+.project-agent-launcher { position: fixed; right: 22px; bottom: 22px; z-index: 20; display: grid; place-items: center; width: 48px; height: 48px; padding: 0; color: #fff; background: var(--agent-ink); border: 1px solid var(--agent-ink); border-radius: 50%; box-shadow: 0 10px 24px rgba(0,0,0,.2); font: inherit; cursor: pointer; transition: transform .18s ease, background .18s ease, box-shadow .18s ease; }
 .project-agent-launcher:hover, .project-agent-launcher[aria-expanded="true"] { background: var(--agent-accent); border-color: var(--agent-accent); box-shadow: 0 12px 28px rgba(238,112,77,.23); transform: translateY(-2px); }
 .project-agent-launcher[aria-expanded="true"] { opacity: 0; pointer-events: none; transform: translateY(6px); }
 .project-agent-launcher small { color: rgba(255,255,255,.72); font-size: 9px; font-weight: 500; }
@@ -131,6 +131,28 @@ body[data-agent-panel-open] { overflow: hidden; }
 .project-agent-message strong { display: block; margin-bottom: 3px; color: var(--agent-ink); font-size: 10px; }
 .project-agent-message.user strong { color: rgba(255,255,255,.78); }
 .project-agent-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 过程反馈：正在做什么（一行）+ 做过哪些步（可折叠）+ 思考流（可折叠）。
+   三块都刻意做得比气泡轻，免得过程比结论还抢眼。 */
+.project-agent-progress { justify-self: start; display: grid; gap: 4px; max-width: 94%; min-width: 0; padding: 3px 2px 0; color: var(--agent-muted); font-size: 10px; }
+.project-agent-progress .progress-now { display: flex; align-items: center; gap: 5px; margin: 0; }
+.project-agent-progress .progress-now i { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--agent-violet); opacity: .45; animation: agent-dot 1.1s ease-in-out infinite; }
+.project-agent-progress .progress-now i:nth-child(2) { animation-delay: .16s; }
+.project-agent-progress .progress-now i:nth-child(3) { animation-delay: .32s; }
+.project-agent-progress .progress-now span { min-width: 0; overflow-wrap: anywhere; }
+.project-agent-progress details > summary { color: var(--agent-faint); font-size: 9px; cursor: pointer; list-style: none; }
+.project-agent-progress details > summary::-webkit-details-marker { display: none; }
+.project-agent-progress details > summary::before { content: "▸ "; }
+.project-agent-progress details[open] > summary::before { content: "▾ "; }
+.project-agent-progress details > summary:hover { color: var(--agent-ink); }
+.project-agent-progress .progress-steps ol { margin: 4px 0 0; padding-left: 18px; }
+.project-agent-progress .progress-steps li { margin: 2px 0; font-size: 9px; overflow-wrap: anywhere; }
+.project-agent-progress .progress-steps li.failed { color: #eb8b82; }
+/* 思考流可能很长，给它一个上限自己滚，不要把整个对话区顶下去。 */
+.project-agent-progress .progress-thinking pre { max-height: 160px; margin: 4px 0 0; padding: 7px 8px; overflow: auto; color: var(--agent-faint); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 6px; font: 9px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 结构化结果里的表格/代码块：服务端整块保留，这里就不能再让它跟着 <li> 走。 */
+.project-agent-result-contract .contract-block { margin: 5px 0 0; }
+.project-agent-result-contract .contract-more { display: block; margin-top: 4px; color: var(--agent-faint); font-size: 9px; }
 .project-agent-empty { align-self: center; padding: 19px 12px; color: var(--agent-faint); text-align: center; font-size: 10px; line-height: 1.65; }
 .project-agent-inline-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .project-agent-action { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 5px; font-size: 9px; }
@@ -208,3 +230,35 @@ body[data-project-id="crawl4ai"] .project-agent-panel {
 .agent-memory-ref button { flex: 0 0 auto; padding: 3px 6px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 5px; font: inherit; font-size: 8px; cursor: pointer; }
 .agent-memory-ref button:hover { color: #bf7569; border-color: #bf7569; }
 .agent-memory-ref.dropped { opacity: .55; }
+
+/* Agent 回答的 Markdown 渲染（static/markdown.js 生成的标签）。
+   模型最爱用表格和列表来组织「事实 / 判断 / 下一步」，之前这些全以原始
+   符号显示。注意先把 .project-agent-message p 的 pre-wrap 关掉：渲染后的
+   段落用 <br /> 表示换行，再叠 pre-wrap 会把每个换行算两次。 */
+.project-agent-md { min-width: 0; }
+.project-agent-md p.md-p { margin: 0; white-space: normal; overflow-wrap: anywhere; }
+.project-agent-md > * + * { margin-top: 7px; }
+.project-agent-md .md-h { margin: 0; color: var(--agent-ink); font-size: 11px; font-weight: 600; line-height: 1.5; }
+.project-agent-md .md-list { margin: 0; padding-left: 17px; }
+.project-agent-md .md-list li { margin: 2px 0; overflow-wrap: anywhere; }
+.project-agent-md .md-list .md-list { margin-top: 2px; }
+.project-agent-md .md-quote { margin: 0; padding: 4px 0 4px 9px; color: var(--agent-muted); border-left: 2px solid var(--agent-line-strong); }
+.project-agent-md .md-hr { margin: 9px 0; border: 0; border-top: 1px solid var(--agent-line); }
+.project-agent-md .md-code { margin: 0; padding: 8px 9px; background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; overflow-x: auto; }
+.project-agent-md .md-code code { color: var(--agent-ink); font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.project-agent-md code { padding: 1px 4px; color: var(--agent-ink); background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 4px; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.project-agent-md a { color: var(--agent-accent); text-decoration: none; overflow-wrap: anywhere; }
+.project-agent-md a:hover { text-decoration: underline; }
+.project-agent-md strong { display: inline; margin: 0; color: var(--agent-ink); font-size: inherit; font-weight: 600; }
+/* 表格单独包一层滚动容器：气泡宽度有上限，宽表格宁可自己横向滚，
+   也不能把整个面板撑破。 */
+.project-agent-md .md-table-wrap { overflow-x: auto; border: 1px solid var(--agent-line); border-radius: 7px; }
+.project-agent-md .md-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.project-agent-md .md-table th, .project-agent-md .md-table td { padding: 5px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--agent-line); }
+.project-agent-md .md-table th { color: var(--agent-ink); background: var(--agent-surface-muted); font-weight: 600; white-space: nowrap; }
+.project-agent-md .md-table tbody tr:last-child td { border-bottom: 0; }
+.project-agent-message.user .project-agent-md a { color: #fff; text-decoration: underline; }
+.project-agent-message.user .project-agent-md code,
+.project-agent-message.user .project-agent-md .md-code { color: #fff; background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.26); }
+.project-agent-message.user .project-agent-md .md-h,
+.project-agent-message.user .project-agent-md strong { color: #fff; }

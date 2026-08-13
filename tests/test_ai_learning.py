@@ -102,6 +102,29 @@ class AILearningTests(unittest.TestCase):
         self.assertEqual(final.json()["stats"]["completed"], 1)
         self.assertEqual(final.json()["stats"]["notes"], 1)
 
+    def test_optional_overall_output_allows_lesson_completion(self):
+        """界面写“选填”时，API 也必须接受空产出；自测本身就是有效完成证据。"""
+        async def request(root: Path):
+            with (
+                patch.object(app, "DATA_DIR", root),
+                patch.object(app, "DATABASE_FILE", root / "workbench.db"),
+                patch.object(app, "_DB_SCHEMA_READY", False),
+                patch.object(app, "llm_settings", return_value={"configured": False}),
+            ):
+                transport = httpx.ASGITransport(app=app.app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                    lesson = (await client.get("/api/ai-learning/dashboard")).json()["today"]
+                    response = await client.post(
+                        f"/api/ai-learning/lessons/{lesson['id']}/complete",
+                        json={"quiz_answer": lesson["content"]["quiz"]["correct_index"], "practice_output": "", "reflection": "", "confidence": 3},
+                    )
+                    return response
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            response = asyncio.run(request(Path(temp_dir)))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["lesson"]["completed"])
+
     def test_existing_learning_table_is_migrated_without_losing_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_file = Path(temp_dir) / "workbench.db"

@@ -106,6 +106,77 @@
     return `<div class="wb-retry-state" role="alert"><strong>暂时无法读取</strong><p>${escapeHtml(safe)}</p><button type="button" class="secondary-button wb-retry-button" data-wb-retry>${escapeHtml(retryLabel)}</button></div>`;
   }
 
+  // 流式对话消费：POST 到 SSE 接口，逐块回调。返回 Promise，resolve 时拿到完整文本。
+  // events: { onDelta(text, reasoning), onReset(payload), onFinish(payload), onError(message, payload) }
+  async function fetchStream(url, body, events = {}) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).detail || detail; } catch (_) { /* 非 JSON 错误体 */ }
+      throw new Error(detail);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const full = [];
+    let finishPayload = null;
+    let terminalError = "";
+    let terminalErrorPayload = null;
+    const consumeBlock = (block) => {
+      for (const line of block.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") continue;
+        let payload;
+        try { payload = JSON.parse(data); } catch (_) { continue; }
+        if (payload.type === "delta" || payload.type === "delta_text") {
+          if (payload.text) full.push(payload.text);
+          events.onDelta?.(payload.text || "", payload.reasoning || "");
+        } else if (payload.type === "reset") {
+          full.length = 0;
+          events.onReset?.(payload);
+        } else if (payload.type === "event") {
+          events.onEvent?.(payload);
+        } else if (payload.type === "finish") {
+          finishPayload = payload;
+          terminalError = "";
+          terminalErrorPayload = null;
+          events.onFinish?.(payload);
+        } else if (payload.type === "error") {
+          events.onError?.(payload.message || "流式输出失败", payload);
+          if (!payload.recoverable) {
+            terminalError = payload.message || "流式输出失败";
+            terminalErrorPayload = payload;
+          }
+        }
+      }
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop();
+      blocks.forEach(consumeBlock);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) consumeBlock(buffer);
+    if (!finishPayload) {
+      const error = new WorkbenchRequestError(terminalError || "流式连接在完成前中断，请重试。", {
+        code: terminalError ? "stream_failed" : "stream_interrupted",
+        detail: terminalError,
+        url,
+      });
+      error.payload = terminalErrorPayload;
+      throw error;
+    }
+    return full.join("");
+  }
+
   window.WorkbenchUX = Object.assign(window.WorkbenchUX || {}, {
     DEFAULT_TIMEOUT_MS,
     MUTATION_TIMEOUT_MS,
@@ -114,6 +185,7 @@
     friendlyErrorMessage,
     wbSetBusy: setBusy,
     wbRetryMarkup: retryMarkup,
+    fetchStream,
     wbShowRetry(host, message, retryLabel = "重新加载") {
       if (host) host.innerHTML = retryMarkup(message, retryLabel);
     },

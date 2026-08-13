@@ -1,19 +1,19 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.157"></script>
+  <script src="/static/theme.js?v=0.3.167"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>量化选股 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.157" />
-  <link rel="stylesheet" href="/static/market.css?v=0.3.157" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.167" />
+  <link rel="stylesheet" href="/static/market.css?v=0.3.167" />
 </head>
 <body data-project-id="market">
   <div class="page-shell">
     <header class="page-topbar">
       <a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>MARKET RESEARCH</small></span></a>
-      <div class="page-actions"><span class="ver-badge" title="当前加载的版本">v0.3.157</span><a class="back-link" href="/">← 返回工作台</a></div>
+      <div class="page-actions"><span class="ver-badge" title="当前加载的版本">v0.3.167</span><a class="back-link" href="/">← 返回工作台</a></div>
     </header>
     <main class="page-main">
       <section class="market-hero">
@@ -151,8 +151,8 @@
             <div class="section-heading-row"><div><span class="card-kicker">05 · 研究记录</span><h2 id="research-section-title">把“为什么看它”留住</h2><p class="section-subtitle">AI 可以帮你整理事实，但每个结论都要能追溯到数据。</p></div></div>
             <div class="research-grid">
               <section class="m2-card m2-ai" aria-labelledby="ai-scan-title">
-                <div class="m2-card-head"><div><span class="card-kicker">AI 整理</span><h3 id="ai-scan-title">今天自选发生了什么</h3></div><span id="ai-scan-state" class="m2-state">等待行情</span></div>
-                <div id="ai-scan-answer" class="m2-ai-answer"><div class="m2-empty">刷新行情后，AI 会把自选的涨跌、异常和需要你核对的地方整理成一段人话。</div></div>
+                <div class="m2-card-head"><div><span class="card-kicker">AI 整理</span><h3 id="ai-scan-title">今天自选发生了什么</h3></div><span id="ai-scan-state" class="m2-state">等待自选</span></div>
+                <div id="ai-scan-answer" class="m2-ai-answer"><div class="m2-empty">添加自选并刷新行情后，点击「问 AI」生成摘要；不会在打开页面时自动调用 AI。</div></div>
                 <form id="ai-scan-form" class="m2-ai-form"><input id="ai-scan-question" type="text" placeholder="例如：哪只今天波动最大？" autocomplete="off" /><button type="submit">问 AI</button></form>
               </section>
               <section class="m2-card" aria-labelledby="research-card-title">
@@ -248,12 +248,12 @@
       <p id="rule-message" class="modal-message" role="status"></p>
     </form>
   </div>
-  <script src="/static/request.js?v=0.3.157"></script>
-  <script src="/static/project.js?v=0.3.157"></script>
-  <script src="/static/market.js?v=0.3.157"></script>
-  <script src="/static/market-today.js?v=0.3.157"></script>
-  <script src="/static/market-decision.js?v=0.3.157"></script>
-  <script src="/static/market-screen.js?v=0.3.157"></script>
-  <script src="/static/market-style.js?v=0.3.157"></script>
+  <script src="/static/request.js?v=0.3.167"></script>
+  <script src="/static/markdown.js?v=0.3.167"></script><script src="/static/project.js?v=0.3.167"></script>
+  <script src="/static/market.js?v=0.3.167"></script>
+  <script src="/static/market-today.js?v=0.3.167"></script>
+  <script src="/static/market-decision.js?v=0.3.167"></script>
+  <script src="/static/market-screen.js?v=0.3.167"></script>
+  <script src="/static/market-style.js?v=0.3.167"></script>
 </body>
 </html>

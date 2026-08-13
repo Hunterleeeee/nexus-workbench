@@ -23,7 +23,7 @@ html[data-theme="dark"] {
 }
 
 body[data-project-id="ai-learning"] { --accent: var(--learn-accent); --accent-soft: var(--learn-soft); }
-.learning-shell { width: min(100% - 48px, 1380px); }
+.learning-shell { width: min(100% - 48px, 1380px); overflow-x: clip; }
 .learning-shell .brand-mark-small { color: var(--learn-accent); background: var(--learn-soft); border-color: var(--learn-line); }
 .learning-shell .page-main { padding-top: 25px; }
 
@@ -36,7 +36,7 @@ body[data-project-id="ai-learning"] { --accent: var(--learn-accent); --accent-so
 .learning-status-chip.neutral { color: var(--muted); background: var(--surface); border-color: var(--line); }
 .learning-status-chip.warning { color: var(--learn-warm); background: var(--learn-warm-soft); border-color: var(--learn-warm-line); }
 
-.learning-kpis { display: grid; grid-template-columns: repeat(4, minmax(88px, 1fr)); gap: 8px; min-width: 420px; }
+.learning-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; min-width: 0; }
 .learning-kpis > div { min-width: 0; padding: 12px 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 11px; }
 .learning-kpis span, .learning-kpis small { display: block; color: var(--muted); font-size: 9px; }
 .learning-kpis strong { display: inline-block; margin-top: 7px; color: var(--ink); font: 750 25px/1 var(--display); letter-spacing: -.05em; }
@@ -126,14 +126,15 @@ html[data-theme="dark"] .learning-page-status.error { background: #2b1819; borde
 .lesson-complete-summary strong { color: var(--ink); font-size: 13px; }
 .lesson-complete-summary p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 
-.learning-rail { display: grid; gap: 12px; }
-.rail-card { padding: 16px; }
-.rail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.learning-rail { display: grid; gap: 12px; min-width: 0; }
+.rail-card { padding: 16px; min-width: 0; overflow: hidden; }
+.rail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; }
+.rail-head > div { min-width: 0; }
 .rail-kicker { display: block; margin-bottom: 3px; color: var(--learn-accent); font-size: 8px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-.rail-head h2 { margin: 0; font: 700 14px var(--display); letter-spacing: -.025em; }
+.rail-head h2 { margin: 0; min-width: 0; overflow-wrap: break-word; font: 700 14px var(--display); letter-spacing: -.025em; }
 .rail-head > a { color: var(--learn-accent); font-size: 9px; text-decoration: none; }
 .rail-head > a:hover { text-decoration: underline; }
-.rail-copy { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.rail-copy { margin: 10px 0 0; min-width: 0; overflow-wrap: break-word; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .icon-circle { display: grid; place-items: center; flex: 0 0 auto; width: 30px; height: 30px; padding: 0; color: var(--muted); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 8px; }
 .icon-circle:hover { color: var(--learn-accent); border-color: var(--learn-line); }
 .icon-circle svg { width: 15px; height: 15px; }
@@ -331,3 +332,20 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 .practice-reset { margin-left: 8px; padding: 1px 6px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 9px; cursor: pointer; }
 .practice-reset:hover { color: var(--danger, #bf5a4f); border-color: var(--danger, #bf5a4f); }
+
+/* 练习更新后批改区提示 */
+.ai-review-stale { display: flex; align-items: center; gap: 10px; margin: 0 28px 14px; padding: 10px 14px; background: var(--orange-soft, #fff3df); border: 1px solid #f0c98; border-radius: 10px; color: #946020; font-size: 12px; line-height: 1.55; }
+.ai-review-stale strong { font-weight: 700; }
+.ai-review-stale span { color: var(--muted, #5d6b77); }
+html[data-theme="dark"] .ai-review-stale { background: #2b2317; border-color: #5a4521; color: #e8b868; }
+
+/* 本节整体产出（重构后：作答区统一，题 → 产出 → 点评） */
+.section-output-block { margin: 16px 28px 0; padding: 16px 18px; background: var(--surface-muted); border: 1px solid var(--learn-line); border-radius: 12px; }
+.section-output-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.section-output-title { color: var(--ink); font: 700 13px var(--display); letter-spacing: -.01em; }
+.section-output-title small { margin-left: 6px; color: var(--muted); font: 400 9px var(--sans, sans-serif); }
+.section-output-note { margin: 6px 0 10px; color: var(--muted); font-size: 10.5px; line-height: 1.6; }
+.section-output-block textarea { width: 100%; min-height: 92px; resize: vertical; padding: 10px 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; font: 12px/1.65 var(--sans, sans-serif); }
+.section-output-block textarea:focus { outline: none; border-color: var(--learn-accent); box-shadow: 0 0 0 2px var(--learn-soft); }
+.section-output-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+html[data-theme="dark"] .section-output-block { background: var(--surface-muted, #151e28); }

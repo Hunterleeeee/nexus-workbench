@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
-@import url('/static/project-agent.css?v=0.3.157');
+@import url('/static/project-agent.css?v=0.3.167');
 
 :root {
   --bg: #f4f6f8;
@@ -363,6 +363,17 @@ input::placeholder, textarea::placeholder { color: #aeb7bf; }
 .drop-zone input { height: auto; padding: 0; border: 0; background: transparent; }
 .output-preview { min-height: 510px; padding: 18px; background: #1d2730; border: 1px solid #2d3a45; border-radius: 10px; color: #e8eef2; font: 12px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow: auto; }
 .output-preview.placeholder { display: grid; place-items: center; color: #82909a; font-family: var(--sans); text-align: center; }
+.factory-md-preview { min-height: 470px; padding: 16px 18px; background: #fff; border-radius: 8px; color: var(--ink); font-family: var(--sans); white-space: normal; }
+.factory-md-preview h1 { font-size: 17px; margin: 10px 0 6px; }
+.factory-md-preview h2 { font-size: 15px; margin: 9px 0 5px; }
+.factory-md-preview h3, .factory-md-preview h4 { font-size: 13px; margin: 8px 0 4px; }
+.factory-md-preview p { margin: 5px 0; line-height: 1.7; }
+.factory-md-preview ul { margin: 5px 0; padding-left: 20px; }
+.factory-md-preview li { margin: 3px 0; line-height: 1.65; }
+.factory-output-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
+.factory-output-row > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.factory-output-view { flex: 0 0 auto; padding: 3px 10px; color: #fff; background: var(--violet); border: 0; border-radius: 99px; font-size: 10px; cursor: pointer; }
+.factory-output-meta { flex: 0 0 auto; margin-left: auto; color: var(--faint); font-size: 10px; }
 .output-link { color: var(--violet); text-decoration: none; }
 .output-link:hover { text-decoration: underline; }
 

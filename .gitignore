@@ -19,3 +19,4 @@ _to_delete/
 .understand-anything/
 .workbuddy/
 dist/
+.fuse_hidden*

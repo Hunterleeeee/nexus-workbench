@@ -23,7 +23,10 @@ let lastQuotes = [];
 function syncMarketDependents(market) {
   document.dispatchEvent(new CustomEvent("market:state-updated", { detail: { market } }));
   if ((market?.watchlist || []).length) {
-    loadAIScan();
+    const scanState = $("#ai-scan-state");
+    const scanAnswer = $("#ai-scan-answer");
+    if (scanState) scanState.textContent = "等待提问";
+    if (scanAnswer) scanAnswer.innerHTML = '<div class="m2-empty">行情已就绪。点击「问 AI」生成自选摘要，也可以先输入一个具体问题。</div>';
     loadPortfolio();
     return;
   }
@@ -133,7 +136,18 @@ async function loadAIScan(question) {
     state.textContent = body.ok ? "基于快照数据" : "不可用";
   } catch (error) { answer.innerHTML = `<p>${escapeHtml(error.message)}</p>`; state.textContent = "失败"; }
 }
-$("#ai-scan-form").addEventListener("submit", (event) => { event.preventDefault(); loadAIScan($("#ai-scan-question").value.trim()); });
+$("#ai-scan-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.submitter || $("#ai-scan-form button[type=submit]");
+  if (!Number($("#watch-count").textContent || 0)) {
+    $("#ai-scan-state").textContent = "等待自选";
+    $("#ai-scan-answer").innerHTML = '<div class="m2-empty">请先添加至少一只自选并刷新行情，再让 AI 帮你整理。</div>';
+    return;
+  }
+  WorkbenchUX.wbSetBusy(button, true, "生成中…");
+  try { await loadAIScan($("#ai-scan-question").value.trim()); }
+  finally { WorkbenchUX.wbSetBusy(button, false); }
+});
 
 /* ── 个股研究卡 ── */
 async function loadResearchCard(symbol) {
@@ -145,9 +159,10 @@ async function loadResearchCard(symbol) {
     const q = body.quote || {};
     const bt = body.backtests || {};
     const wf = body.walkforward || {};
-    const quoteLine = q.name ? `<div class="m2-card-head" style="margin-bottom:8px"><div><h3>${escapeHtml(q.name)} · ${escapeHtml(String(q.symbol || "").toUpperCase())}</h3><small>${pctText(q.change_pct)} · 开 ${escapeHtml(formatQuoteValue(q.open))} · 量 ${escapeHtml(formatQuoteValue(q.volume))}</small></div><strong style="color:${pctColor(q.change_pct)};font-size:16px">¥${escapeHtml(formatQuoteValue(q.price))}</strong></div>` : '<div class="m2-empty">没有拿到行情（代码可能有误或不在行情源）。</div>';
-    const wfLine = wf.status === "ok" && wf.fold_count ? `${wf.fold_count} 折样本外验证中 ${Math.round((wf.positive_fold_rate || 0) * wf.fold_count)} 折为正，样本外收益 ${wf.out_of_sample_return_pct != null ? wf.out_of_sample_return_pct + "%" : "—"}${(wf.positive_fold_rate || 0) < 0.5 ? " · 提示：多数折为负，可能过拟合" : ""}` : (wf.message || "样本外：样本不足");
-    const btLine = (name, key) => { const item = bt[key] || {}; return `${name}：${item.status === "ok" ? `净收益 ${item.net_return_pct}% vs 买入持有 ${item.benchmark_return_pct}% · 回撤 ${item.max_drawdown_pct ?? "—"}%` : (item.message || "样本不足")}`; };
+    const sourceLabel = { "tencent-kline": "腾讯日K（上市以来真实价格）", "fund-nav-history": "东财基金净值（日频）", "": "本地历史快照" }[body.data_source || ""] || "本地历史快照";
+    const quoteLine = q.name ? `<div class="m2-card-head" style="margin-bottom:8px"><div><h3>${escapeHtml(q.name)} · ${escapeHtml(String(q.symbol || "").toUpperCase())}</h3><small>${q.change_pct != null ? pctText(q.change_pct) + " · " : ""}${q.nav_date ? "净值日 " + escapeHtml(q.nav_date) : "开 " + escapeHtml(formatQuoteValue(q.open))}${q.volume != null ? " · 量 " + escapeHtml(formatQuoteValue(q.volume)) : ""}</small></div><strong style="color:${pctColor(q.change_pct)};font-size:16px">¥${escapeHtml(formatQuoteValue(q.price))}</strong></div><small class="m2-note">研究数据源：${escapeHtml(sourceLabel)}</small>` : '<div class="m2-empty">没有拿到行情（代码可能有误或不在行情源）。</div>';
+    const wfLine = wf.status === "ok" && wf.fold_count ? `${wf.fold_count} 折样本外验证中 ${Math.round((wf.positive_fold_rate || 0) * wf.fold_count)} 折为正，样本外收益 ${wf.out_of_sample_return_pct != null ? wf.out_of_sample_return_pct + "%" : "—"}（样本 ${wf.sample_count ?? "—"} 点）${(wf.positive_fold_rate || 0) < 0.5 ? " · 提示：多数折为负，可能过拟合" : ""}` : (wf.message || "样本外：样本不足");
+    const btLine = (name, key) => { const item = bt[key] || {}; return `${name}：${item.status === "ok" ? `净收益 ${item.net_return_pct}% vs 买入持有 ${item.benchmark_return_pct}% · 回撤 ${item.max_drawdown_pct ?? "—"}% · 样本 ${item.sample_count ?? "—"} 点` : (item.message || "样本不足")}`; };
     host.innerHTML = `
       ${quoteLine}
       <div class="m2-research-grid">
@@ -155,7 +170,7 @@ async function loadResearchCard(symbol) {
         <div class="m2-research-block"><strong>量化 · 动量回测</strong><p>${escapeHtml(btLine("动量（追涨）", "momentum"))}</p></div>
         <div class="m2-research-block"><strong>量化 · 均值回归</strong><p>${escapeHtml(btLine("均值回归", "mean_reversion"))}</p></div>
         <div class="m2-research-block"><strong>样本外验证</strong><p>${escapeHtml(wfLine)}</p></div>
-        <div class="m2-research-block m2-research-wide"><strong>价值清单（巴菲特式检查）</strong><p>${escapeHtml(body.note || "护城河/ROE/负债率/自由现金流需人工核对后填写；量化部分基于本地历史快照。")}</p></div>
+        <div class="m2-research-block m2-research-wide"><strong>价值清单（巴菲特式检查）</strong><p>${escapeHtml(body.note || "护城河/ROE/负债率/自由现金流需人工核对后填写；量化部分基于历史行情/净值。")}</p></div>
       </div>`;
   } catch (error) { host.innerHTML = `<div class="m2-empty">${escapeHtml(error.message)}</div>`; }
 }

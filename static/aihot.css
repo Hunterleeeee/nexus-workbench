@@ -90,3 +90,23 @@
 .signal-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: grid; gap: 2px; min-width: 110px; padding: 5px; background: var(--surface, #fff); border: 1px solid var(--line, #dfe5e9); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.08); }
 .signal-more-menu a, .signal-more-menu button { display: block; width: 100%; padding: 6px 8px; text-align: left; border: 0; border-radius: 5px; background: transparent; color: var(--muted, #5d6b77); font-size: 10px; text-decoration: none; cursor: pointer; }
 .signal-more-menu a:hover, .signal-more-menu button:hover { background: var(--surface-muted, #f1f5f9); color: var(--accent, #3b82f6); }
+
+/* 领域徽章 */
+.signal-domain { display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border-radius: 999px; font-size: 9px; font-weight: 700; letter-spacing: .03em; }
+.signal-domain.domain-ai { color: #6f61c9; background: var(--violet-soft, #f0efff); }
+.signal-domain.domain-科技 { color: #3f6fc5; background: var(--blue-soft, #dde9f9); }
+.signal-domain.domain-财经 { color: #17866d; background: var(--teal-soft, #e8f7f1); }
+.signal-domain.domain-商业 { color: #b26a00; background: #fdf0da; }
+.signal-domain.domain-综合 { color: #5d6b77; background: var(--panel-soft, #f1f5f9); }
+.signal-domain.domain-ai, .signal-domain.domain-科技, .signal-domain.domain-财经, .signal-domain.domain-商业, .signal-domain.domain-综合 { margin-right: 6px; }
+.filter-domains { margin-left: 8px; padding-left: 8px; border-left: 1px solid var(--line, #dfe5e9); }
+
+/* 已选入对话标签栏 */
+.selected-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line, #dfe5e9); background: var(--surface-muted, #f8fafb); }
+.selected-tags-label { color: var(--muted, #5d6b77); font-size: 10px; font-weight: 700; letter-spacing: .05em; }
+.selected-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 240px; padding: 4px 9px; color: var(--violet, #6f61c9); background: var(--violet-soft, #f0efff); border: 1px solid #d8d3f4; border-radius: 999px; font-size: 11px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-tag:hover { border-color: var(--violet, #6f61c9); }
+.selected-clear { margin-left: auto; padding: 3px 8px; color: var(--faint, #75828f); background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: 10px; cursor: pointer; }
+.selected-clear:hover { color: var(--danger, #bd4d49); border-color: var(--line, #dfe5e9); }
+html[data-theme="dark"] .selected-tags { background: var(--surface-muted, #151e28); }
+html[data-theme="dark"] .selected-tag { color: #aaa0f3; background: #26243f; border-color: #3b3564; }

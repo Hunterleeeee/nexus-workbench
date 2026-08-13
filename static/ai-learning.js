@@ -45,7 +45,7 @@ function lessonSourceLabel(lesson = {}) {
 function aiReviewMarkup(lesson) {
   const fb = lesson.feedback || {};
   if (!fb.reviewed_at) {
-    return `<div id="ai-review" class="ai-review empty"><div class="ai-review-head"><strong>AI 批改</strong><small>按本课的交付物标准逐条对照你的产出</small></div><p class="ai-review-hint">写完练习成果后点这里，会得到：哪些做到了、差在哪（引用你的原话）、一份保留你业务场景的改写版本。答错的自测题还会说明你选的那个选项背后的误解。</p><button id="request-ai-review" class="secondary-button" type="button">让 AI 批改我的练习</button></div>`;
+    return `<div id="ai-review" class="ai-review empty"><div class="ai-review-head"><strong>AI 点评本节</strong><small>综合练习题作答与本节整体产出，按交付物标准对照</small></div><p class="ai-review-hint">做完至少一道题（或写下本节整体产出）后点这里，会得到：哪些做到了、差在哪（引用你的原话）、一份保留你业务场景的改写版本。答错的自测题还会说明你选的那个选项背后的误解。</p><button id="request-ai-review" class="secondary-button" type="button">让 AI 点评本节产出</button></div>`;
   }
   const list = (items, cls) => (items || []).length ? `<ul class="ai-review-list ${cls}">${items.map((x) => `<li>${learnEscape(x)}</li>`).join("")}</ul>` : "";
   const verdictClass = fb.verdict === "达标" ? "pass" : fb.verdict === "未达标" ? "fail" : "partial";
@@ -138,8 +138,16 @@ function renderTodayLesson(lesson = {}) {
         <div class="exercise-block" id="exercise-block" data-lesson-id="${learnEscape(lesson.id)}">
           <div class="exercise-intro"><div><strong>手上没有现成的工作场景？</strong><p>让 AI 按这节课出一道题，背景给全，你只需要思考和作答，答完再对参考答案。</p></div><button type="button" id="exercise-new" class="secondary-button">出一道题</button></div>
           <div id="exercise-host" class="exercise-host"></div>
+          <div class="section-output-block">
+            <div class="section-output-head">
+              <span class="section-output-title">本节整体产出 <small>选填</small></span>
+              <span id="draft-status" class="draft-status ${completed || lesson.status === "in_progress" ? "saved" : ""}" role="status" aria-live="polite">${completed ? "已完成" : lesson.status === "in_progress" ? "已保存" : "自动保存"}</span>
+            </div>
+            <p class="section-output-note">写不下做题时的想法也行，把今天实际完成的、学到的记在这里；下方「点评本节」会连同练习题一并参考。</p>
+            <textarea id="practice-output" rows="5" maxlength="8000" placeholder="写下你实际完成了什么、学到了什么（选填）" ${completed ? "readonly" : ""}>${learnEscape(lesson.practice_output || "")}</textarea>
+            ${completed ? "" : `<div class="section-output-actions"><button type="button" id="reset-practice" class="practice-reset" title="清空这一节的练习、复盘和 AI 批改">清空这一节</button></div>`}
+          </div>
         </div>
-        <label class="practice-output-field" for="practice-output"><span class="practice-output-head"><span>练习成果 <small>必填</small>${completed ? "" : `<button type="button" id="reset-practice" class="practice-reset" title="清空这一节的练习、复盘和 AI 批改">清空这一节</button>`}</span><span id="draft-status" class="draft-status ${completed || lesson.status === "in_progress" ? "saved" : ""}" role="status" aria-live="polite">${completed ? "已完成" : lesson.status === "in_progress" ? "已保存" : "自动保存"}</span></span><textarea id="practice-output" rows="5" maxlength="8000" placeholder="粘贴结果、写下方案，或记录你实际完成了什么" ${completed ? "readonly" : ""}>${learnEscape(lesson.practice_output || "")}</textarea></label>
       </section>
       <section class="lesson-section" aria-labelledby="quiz-title">
         <div class="lesson-section-head"><span class="lesson-step">4</span><div><h3 id="quiz-title">自测与复盘</h3><p>选择答案并记录复盘</p></div></div>
@@ -438,9 +446,10 @@ async function flushPendingDraft() {
 
 async function requestAiReview(button, lessonId) {
   const output = (learnQuery("#practice-output")?.value || "").trim();
-  if (!output) {
-    learningSetStatus("请先写下练习成果，AI 才有东西可批改。");
-    learnQuery("#practice-output")?.focus();
+  const answeredCurrent = Boolean(learningState.exercise?.answered);
+  if (!output && !answeredCurrent) {
+    learningSetStatus("先做一道题，或写下本节整体产出，AI 才有东西可点评。");
+    learnQuery("#exercise-host")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     return;
   }
   window.WorkbenchUX?.wbSetBusy?.(button, true, "批改中…");
@@ -452,6 +461,7 @@ async function requestAiReview(button, lessonId) {
     // 渲染刚批改的那一节，而不是今天那节——两者不一定是同一节。
     if (body.lesson) syncLessonEverywhere(body.lesson);
     renderTodayLesson(body.lesson || currentLesson());
+    learnQuery("#ai-review")?.dispatchEvent(new CustomEvent("review-refreshed"));
     learnQuery("#ai-review")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (error) {
     learningSetStatus(error.message || "批改失败，请稍后重试。");
@@ -466,9 +476,33 @@ function bindLessonActions() {
   learnQuery("#save-lesson-note")?.addEventListener("click", (event) => saveLessonNote(event.currentTarget, lesson.id));
   [learnQuery("#practice-output"), learnQuery("#lesson-reflection")].forEach((field) => field?.addEventListener("input", scheduleLessonDraftSave));
   learnQuery("#lesson-confidence")?.addEventListener("change", scheduleLessonDraftSave);
+  // 联动：练习成果/复盘改了之后，如果已经有 AI 批改，给批改区加一条提示并把"重新批改"按钮置顶，
+  // 让用户清楚知道改完练习后批改还停留在旧版本。
+  [learnQuery("#practice-output"), learnQuery("#lesson-reflection")].forEach((field) => {
+    if (!field) return;
+    field.addEventListener("input", () => {
+      const review = learnQuery("#ai-review");
+      if (!review || review.classList.contains("empty")) return;
+      if (review.dataset.stale === "1") return;
+      review.dataset.stale = "1";
+      const hint = document.createElement("div");
+      hint.className = "ai-review-stale";
+      hint.innerHTML = '<strong>练习已更新</strong><span>批改还停留在旧版本，点「重新批改」基于最新练习重评。</span>';
+      review.querySelector(".ai-review-head")?.after(hint);
+      const btn = review.querySelector("#request-ai-review");
+      if (btn) { btn.textContent = "重新批改（基于最新练习）"; btn.classList.add("primary-button"); btn.classList.remove("secondary-button"); }
+    });
+  });
+  // 重新批改成功后清掉提示
+  learnQuery("#ai-review")?.addEventListener("review-refreshed", () => {
+    learnQuery("#ai-review")?.querySelector(".ai-review-stale")?.remove();
+    if (learnQuery("#ai-review")) learnQuery("#ai-review").dataset.stale = "";
+    const btn = learnQuery("#request-ai-review");
+    if (btn) { btn.textContent = "重新批改"; btn.classList.add("secondary-button"); btn.classList.remove("primary-button"); }
+  });
   learnQuery("#request-ai-review")?.addEventListener("click", (event) => requestAiReview(event.currentTarget, lesson.id));
   learnQuery("#reset-practice")?.addEventListener("click", async (event) => {
-    if (!window.confirm("清空这一节的练习成果、复盘和 AI 批改？课程内容（知识点、案例、题目）会保留。")) return;
+    if (!window.confirm("清空这一节的整体产出、复盘和 AI 批改？课程内容（知识点、案例、题目）会保留。")) return;
     const button = event.currentTarget;
     learningBusy(button, true, "清空中…");
     try {
@@ -490,13 +524,6 @@ function bindLessonActions() {
     event.preventDefault();
     const form = event.currentTarget;
     const draft = currentLessonDraftPayload();
-    if (!draft.practice_output) {
-      const feedback = learnQuery("#quiz-feedback");
-      feedback.className = "quiz-feedback visible review";
-      feedback.textContent = "请先填写练习成果。";
-      learnQuery("#practice-output")?.focus();
-      return;
-    }
     const selected = form.querySelector('input[name="quiz_answer"]:checked');
     if (!selected) {
       const feedback = learnQuery("#quiz-feedback");
@@ -582,7 +609,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.157", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.167", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 
@@ -661,9 +688,10 @@ function setupLearningHistory() {
 // 只能等课程哪天刚好讲到。
 // ---------------------------------------------------------------------------
 const EXPLORE_PLACEHOLDER = {
-  term: "例如：RAG 到底解决了什么",
-  hotspot: "可留空，让 AI 从真实热点里挑；也可以写一个方向",
-  theory: "例如：Scaling Law 的边界在哪",
+  term: "想弄懂哪个名词？例如：RAG、向量检索、Agent 记忆",
+  hotspot: "留空让 AI 从真实热点里挑；也可写方向，例如：国内 AI 应用",
+  theory: "想搞懂哪个理论？例如：Scaling Law 为什么有效",
+  method: "想学什么方法？例如：Agent 的工具怎么设计、RAG 怎么落地",
 };
 
 // 每个 kind 的字段不同，但都遵循「先讲清楚，再说边界」的顺序。
@@ -677,6 +705,9 @@ const EXPLORE_FIELDS = [
   ["misconceptions", "常见误解"],
   ["skeptic", "被高估的地方"],
   ["evidence", "支持依据"],
+  ["steps", "照着做"],
+  ["key_choices", "关键取舍"],
+  ["common_mistakes", "常见坑"],
   ["boundary", "什么时候不适用"],
   ["in_your_work", "在你的工作里怎么用"],
   ["check", "自查一下你是否真懂"],
@@ -791,7 +822,7 @@ function renderExercise(exercise) {
     ${exercise.context ? `<div class="exercise-context"><span>背景</span><p>${learnEscape(exercise.context)}</p></div>` : ""}
     ${criteria ? `<details class="exercise-criteria"><summary>这道题会按什么标准评</summary><ul>${criteria}</ul></details>` : ""}
     <label class="exercise-answer-field" for="exercise-answer"><span>你的答案</span><textarea id="exercise-answer" rows="5" maxlength="4000" placeholder="写下你的判断和理由，不用长，但要说清楚为什么" ${answered ? "readonly" : ""}>${learnEscape(exercise.user_answer || "")}</textarea></label>
-    ${answered ? "" : '<div class="exercise-actions"><button type="button" id="exercise-submit" class="primary-button">交给 AI 评判</button></div>'}
+    ${answered ? "" : '<div class="exercise-actions"><button type="button" id="exercise-submit" class="primary-button">评判这道题</button></div>'}
     ${answered ? `<div class="exercise-feedback">
       <div class="exercise-score"><strong>${exercise.score >= 0 ? `${learnEscape(exercise.score)} 分` : "已评判"}</strong><span>${learnEscape(feedback.verdict || "")}</span></div>
       ${feedback.hits?.length ? `<div class="exercise-hits"><strong>答到了</strong><ul>${list(feedback.hits)}</ul></div>` : ""}
