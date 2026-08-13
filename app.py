@@ -1124,12 +1124,12 @@ RUNTIME_TOOL_POLICIES: dict[str, dict[str, Any]] = {
     "knowledge_write": {"mode": "auto", "risk": "low", "label": "创建知识笔记"},
     "inbox_triage": {"mode": "auto", "risk": "low", "label": "整理收件箱"},
     "aihot_feedback": {"mode": "auto", "risk": "low", "label": "记录热点反馈"},
+    # notify 只是往应用内通知中心写一条记录（浏览器 Push 还受独立订阅约束），
+    # 本身无害——每条通知都要人工确认会打断 Agent 流程。降为 auto。
+    "notify": {"mode": "auto", "risk": "low", "label": "发送通知",
+               "note": "写入应用内通知中心；浏览器 Push 是否发送仍受独立订阅和静默时段约束。"},
 
     # —— 需要确认 ——
-    # notify 会推到通知中心甚至外部推送，是「用户之外的人也能看到」的那一类；
-    # 一个跑偏的循环连发十条通知，比写错一条笔记难收拾得多。
-    "notify": {"mode": "confirm", "risk": "medium", "label": "发送通知",
-               "note": "会进入通知中心并可能触发外部推送。"},
     "cloud_dev_generate": {"mode": "confirm", "risk": "medium", "label": "生成云端产物",
                            "note": "会往 outputs/cloudgen 落盘并登记 Artifact。"},
     "cloud_dev_test": {"mode": "confirm", "risk": "medium", "label": "运行云开发测试",

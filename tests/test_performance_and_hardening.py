@@ -3317,8 +3317,8 @@ class ConfirmationGateTests(unittest.TestCase):
             ran["n"] += 1
             return {"ok": True}
 
-        with patch.dict(app.REACT_TOOLS, {"notify": {"handler": handler}}):
-            result = app.execute_react_tool("notify", {"title": "t", "body": "b"},
+        with patch.dict(app.REACT_TOOLS, {"cloud_dev_generate": {"handler": handler}}):
+            result = app.execute_react_tool("cloud_dev_generate", {"kind": "draft"},
                                             project_id="market", run_id="run-1")
         self.assertEqual(ran["n"], 0, "需要确认的工具被直接执行了")
         self.assertTrue(result["needs_confirmation"])
@@ -3348,8 +3348,8 @@ class ConfirmationGateTests(unittest.TestCase):
 
     def test_the_model_is_told_not_to_claim_it_finished(self):
         """只回一句「失败」的话，模型会说「我已经发出通知了」。"""
-        with patch.dict(app.REACT_TOOLS, {"notify": {"handler": lambda args: {"ok": True}}}):
-            result = app.execute_react_tool("notify", {}, project_id="market", run_id="r")
+        with patch.dict(app.REACT_TOOLS, {"cloud_dev_generate": {"handler": lambda args: {"ok": True}}}):
+            result = app.execute_react_tool("cloud_dev_generate", {}, project_id="market", run_id="r")
         self.assertIn("不要当作已完成", result["error"])
 
 

@@ -1,5 +1,9 @@
 # 迭代记录
 
+## v0.3.169 · 2026-08-13
+
+- **notify（发送通知）降为 auto 档**：通知本身无害（只写应用内通知中心，浏览器 Push 仍受独立订阅约束），每条都要人工确认会打断 Agent 流程。确认模式工具仅剩 cloud_dev_generate / cloud_dev_test。
+
 ## v0.3.168 · 2026-08-13
 
 - **修复确认门执行端**：确认模式工具（notify / cloud_dev_generate / cloud_dev_test）创建的动作用运行时工具名，确认后执行的分发却只认旧点号命名（market.watchlist.add 等），两套名字零交集——点「确认」必然报「工具尚未接入执行器」。现在确认执行直接回调 `execute_react_tool(..., confirmed=True)` 真正执行，旧点号分支保留兼容。
