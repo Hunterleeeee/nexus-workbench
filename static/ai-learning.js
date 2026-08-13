@@ -47,7 +47,7 @@ function aiReviewMarkup(lesson) {
   if (!fb.reviewed_at) {
     return `<div id="ai-review" class="ai-review empty"><div class="ai-review-head"><strong>AI 点评本节</strong><small>综合练习题作答与本节整体产出，按交付物标准对照</small></div><p class="ai-review-hint">做完至少一道题（或写下本节整体产出）后点这里，会得到：哪些做到了、差在哪（引用你的原话）、一份保留你业务场景的改写版本。答错的自测题还会说明你选的那个选项背后的误解。</p><button id="request-ai-review" class="secondary-button" type="button">让 AI 点评本节产出</button></div>`;
   }
-  const list = (items, cls) => (items || []).length ? `<ul class="ai-review-list ${cls}">${items.map((x) => `<li>${learnEscape(x)}</li>`).join("")}</ul>` : "";
+  const list = (items, cls) => (items || []).length ? `<ul class="ai-review-list ${cls}">${items.map((x) => `<li>${_exploreItemToText(x)}</li>`).join("")}</ul>` : "";
   const verdictClass = fb.verdict === "达标" ? "pass" : fb.verdict === "未达标" ? "fail" : "partial";
   return `<div id="ai-review" class="ai-review ${verdictClass}">
     <div class="ai-review-head"><strong>AI 批改：${learnEscape(fb.verdict)}</strong>${fb.score ? `<span class="ai-review-score">${learnEscape(fb.score)}/100</span>` : ""}<small>${learnEscape(formatReviewTime(fb.reviewed_at))}</small></div>
@@ -609,7 +609,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.180", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.181", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 

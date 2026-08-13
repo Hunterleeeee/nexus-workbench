@@ -632,6 +632,31 @@ class UsageStatsAccuracyTests(unittest.TestCase):
         daily_total = sum(item["runs"] for item in stats["daily_runs"])
         self.assertEqual(daily_total, 4, "趋势图口径应与总数一致")
 
+    def test_home_card_and_agent_panel_counts_exclude_internal_kinds(self):
+        """统计口径必须全站一致：首页项目卡片（project_activity_batch）和
+        项目 Agent 面板（agent_run_summary）如果仍把 dispatch_child 等内部
+        记录算进「运行次数」，页面之间数字就会打架。"""
+        temp_dir, database_file = temp_database()
+        with temp_dir, patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False):
+            connection = app.db_connection()
+            try:
+                stamp = app.now_iso()
+                for kind, status in (("chat", "succeeded"), ("dispatch_child", "succeeded"), ("evidence_acceptance", "succeeded")):
+                    connection.execute(
+                        """INSERT INTO agent_runs(project_id, session_id, kind, title, status,
+                           request_json, result_json, error, attempt, max_attempts, created_at, updated_at)
+                           VALUES ('market','',?,?,?, '{}','{}','',1,2,?,?)""",
+                        (kind, kind, status, stamp, stamp),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+            batch = app.project_activity_batch(["market"])
+            summary = app.agent_run_summary("market", batch=batch)
+            solo = app.agent_run_summary("market")
+        self.assertEqual(summary["total"], 1, "首页卡片运行数只算真实运行")
+        self.assertEqual(solo["total"], 1, "Agent 面板运行数只算真实运行")
+
 
 class OrphanedCrawlRunTests(unittest.TestCase):
     """Crawl Worker 没启动时，任务会永远停在 queued，页面上显示"排队等待"。

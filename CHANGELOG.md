@@ -1,5 +1,13 @@
 # 迭代记录
 
+## v0.3.181 · 2026-08-13
+
+- **全站质量排查（渲染 + 口径两类隐患一次性修复）**：
+  - 渲染类：Agent 结果契约（工作台/网页研究两处 `sections` 列表）和 AI 批改的 met/gaps 列表，LLM 若把数组项写成对象会显示 `[object Object]`——新增 `escapeAny` 对象安全转义（抽 label/text/content 等字段），与主动学习结果渲染同款防御。
+  - 口径类：首页项目卡片（`project_activity_batch`）、项目 Agent 面板运行统计（`agent_run_summary` 及历史统计/最近运行）原来把 `dispatch_child`/`evidence_acceptance` 等内部记录算进「运行次数」，与统计页数字打架——统一为与使用统计相同的排除集合。
+  - 其余页面（idea-analysis/market/aihot 等）核查均使用字段访问，无同类隐患；全站除使用统计外无其他按 UTC 日期分组的统计。
+- 新增回归测试（首页卡片与 Agent 面板计数排除内部 kind），全量 508 通过。
+
 ## v0.3.180 · 2026-08-13
 
 - **修复主动学习结果「[object Object]」渲染**：`exploreValueMarkup` 之前对数组每项直接 `learnEscape(item)`，碰到 LLM 输出的对象结构（steps 每项 `{title, content}`、common_mistakes `{mistake, how_to_avoid}`、in_your_work `{first_step, scenario}` 等）就降级成 `[object Object]`。改为：识别字符串原样转、识别对象按 `text/title/content/mistake` 等字段抽 head（正文）+ `detail/how_to_avoid/applicable` 等抽 tail（补充说明，用小字呈现）。新增 `.explore-subnote` 样式区分主文与补充。

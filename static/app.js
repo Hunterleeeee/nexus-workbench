@@ -71,6 +71,8 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function escapeAny(value) { if (value == null) return ""; if (typeof value !== "object") return escapeHtml(value); const text = value.label || value.text || value.content || value.title || value.description || value.value || ""; return text ? escapeHtml(text) : escapeHtml(JSON.stringify(value)); }
+
 function formatTime(ms) {
   if (ms == null) return "—";
   if (ms < 1000) return `${ms}ms`;
@@ -155,7 +157,7 @@ function renderResultContract(contract = {}) {
   const node = document.createElement("details");
   node.className = "research-result-contract";
   node.open = true;
-  const body = entries.map(([key, label]) => `<div><strong>${label}</strong><ul>${sections[key].slice(0, 8).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`).join("");
+  const body = entries.map(([key, label]) => `<div><strong>${label}</strong><ul>${sections[key].slice(0, 8).map((item) => `<li>${escapeAny(item)}</li>`).join("")}</ul></div>`).join("");
   const citations = (contract.citations || []).slice(0, 8).map((item) => item.type === "url" ? `<a href="${escapeHtml(item.value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.label || item.value)}</a>` : `<span>${escapeHtml(item.value)}</span>`).join(" · ");
   const refs = (contract.source_refs || []).slice(0, 8).map((item) => { const label = `${item.label || item.id || "未命名来源"}${item.data_as_of ? ` · ${item.data_as_of}` : ""}`; return String(item.locator || "").startsWith("http") ? `<a href="${escapeHtml(item.locator)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : `<span>${escapeHtml(label)}</span>`; }).join(" · ");
   const coverage = contract.source_coverage || {};

@@ -438,7 +438,8 @@ def project_activity_batch(project_ids: list[str]) -> dict[str, Any]:
                 work_items.setdefault(project, {})
                 work_items[project][str(row["status"])] = work_items[project].get(str(row["status"]), 0) + int(row["count"])
         for row in connection.execute(
-            "SELECT project_id, status, COUNT(*) AS count FROM agent_runs GROUP BY project_id, status"
+            "SELECT project_id, status, COUNT(*) AS count FROM agent_runs WHERE kind NOT IN (?, ?, ?, ?) GROUP BY project_id, status",
+            USAGE_EXCLUDED_RUN_KINDS,
         ).fetchall():
             project = str(row["project_id"] or "")
             if project:
@@ -446,7 +447,8 @@ def project_activity_batch(project_ids: list[str]) -> dict[str, Any]:
         # 每个项目最近一次运行：按 (project_id, created_at DESC) 排一遍，取每组第一条。
         seen: set[str] = set()
         for row in connection.execute(
-            "SELECT * FROM agent_runs ORDER BY project_id, created_at DESC"
+            "SELECT * FROM agent_runs WHERE kind NOT IN (?, ?, ?, ?) ORDER BY project_id, created_at DESC",
+            USAGE_EXCLUDED_RUN_KINDS,
         ).fetchall():
             project = str(row["project_id"] or "")
             if project and project not in seen:
@@ -8781,12 +8783,13 @@ def agent_run_summary(project_id: str, batch: dict[str, Any] | None = None) -> d
     connection = db_connection()
     try:
         rows = connection.execute(
-            "SELECT status, COUNT(*) AS count FROM agent_runs WHERE project_id = ? GROUP BY status",
-            (project_id,),
+            "SELECT status, COUNT(*) AS count FROM agent_runs WHERE project_id = ? AND kind NOT IN (?, ?, ?, ?) GROUP BY status",
+            (project_id, *USAGE_EXCLUDED_RUN_KINDS),
         ).fetchall()
         counts = {row["status"]: int(row["count"]) for row in rows}
         latest_row = connection.execute(
-            "SELECT * FROM agent_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1", (project_id,)
+            "SELECT * FROM agent_runs WHERE project_id = ? AND kind NOT IN (?, ?, ?, ?) ORDER BY created_at DESC LIMIT 1",
+            (project_id, *USAGE_EXCLUDED_RUN_KINDS),
         ).fetchone()
         return {
             "total": sum(counts.values()),
@@ -8816,12 +8819,12 @@ def agent_quality_metrics(project_id: str, hours: int = 24) -> dict[str, Any]:
             """SELECT COUNT(*) AS total,
                       SUM(CASE WHEN status IN ('succeeded', 'completed') THEN 1 ELSE 0 END) AS succeeded,
                       SUM(CASE WHEN status IN ('failed', 'cancelled') THEN 1 ELSE 0 END) AS failed
-                 FROM agent_runs WHERE project_id = ?""",
-            (project_id,),
+                 FROM agent_runs WHERE project_id = ? AND kind NOT IN (?, ?, ?, ?)""",
+            (project_id, *USAGE_EXCLUDED_RUN_KINDS),
         ).fetchone()
         historical_latest = connection.execute(
-            "SELECT status, created_at, updated_at, error FROM agent_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1",
-            (project_id,),
+            "SELECT status, created_at, updated_at, error FROM agent_runs WHERE project_id = ? AND kind NOT IN (?, ?, ?, ?) ORDER BY created_at DESC LIMIT 1",
+            (project_id, *USAGE_EXCLUDED_RUN_KINDS),
         ).fetchone()
         historical_error = connection.execute(
             """SELECT error, updated_at FROM agent_runs

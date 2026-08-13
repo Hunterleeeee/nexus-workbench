@@ -6,7 +6,7 @@ const workbenchRequestJson = window.WorkbenchUX?.requestJson || (async (url, opt
   return body;
 });
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.180"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.181"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
   const topbar = document.querySelector(".topbar-right, .top-actions");
   if (!topbar || topbar.querySelector("[data-theme-toggle]")) return;
   const theme = window.WorkbenchTheme;
@@ -24,7 +24,7 @@ setupThemeToggle();
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistrations()
     .then((registrations) => Promise.all(registrations.filter((registration) => registration.scope === `${location.origin}/static/`).map((registration) => registration.unregister())))
-    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.180", { scope: "/" }))
+    .then(() => navigator.serviceWorker.register("/static/sw.js?v=0.3.181", { scope: "/" }))
     .catch(() => {});
 }
 const icons = {
@@ -39,6 +39,7 @@ const icons = {
   robot: '<svg viewBox="0 0 24 24" fill="none"><rect x="5" y="8" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/><circle cx="9.2" cy="12.3" r="1.1" fill="currentColor"/><circle cx="14.8" cy="12.3" r="1.1" fill="currentColor"/><path d="M12 8V5M9 5h6M12 17v2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
 };
 function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
+function escapeAny(value) { if (value == null) return ""; if (typeof value !== "object") return escapeHtml(value); const text = value.label || value.text || value.content || value.title || value.description || value.value || ""; return text ? escapeHtml(text) : escapeHtml(JSON.stringify(value)); }
 function setNotificationFeedback(message = "", tone = "") { const feedback = $("#notification-feedback"); if (!feedback) return; feedback.textContent = message; feedback.className = `notification-feedback${tone ? ` ${tone}` : ""}`; }
 let projects = []; let hiddenProjectIds = new Set(); let activeGroup = "all"; let collaborationLoaded = false; let draggedProjectId = ""; let preferenceSaveSeq = 0;
 function projectAgentHref(project) { const base = project.href || "/"; return `${base}${base.includes("?") ? "&" : "?"}focus=agent`; }
@@ -1063,7 +1064,7 @@ function agentResultContractMarkup(contract = {}) {
   const labels = { facts: "事实", judgement: "判断", evidence: "证据", risks: "风险", actions: "动作", next_steps: "下一步" };
   const entries = Object.entries(labels).filter(([key]) => Array.isArray(sections[key]) && sections[key].length);
   if (!contract?.summary && !entries.length) return "";
-  const body = entries.map(([key, label]) => `<div><strong>${label}</strong><ul>${sections[key].slice(0, 8).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`).join("");
+  const body = entries.map(([key, label]) => `<div><strong>${label}</strong><ul>${sections[key].slice(0, 8).map((item) => `<li>${escapeAny(item)}</li>`).join("")}</ul></div>`).join("");
   const citations = (contract.citations || []).slice(0, 8).map((item) => item.type === "url" ? `<a href="${escapeHtml(item.value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.label || item.value)}</a>` : `<span>${escapeHtml(item.value)}</span>`).join(" · ");
   const refs = (contract.source_refs || []).slice(0, 8).map((item) => { const label = `${item.label || item.id || "未命名来源"}${item.data_as_of ? ` · ${item.data_as_of}` : ""}`; return String(item.locator || "").startsWith("http") ? `<a href="${escapeHtml(item.locator)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : `<span>${escapeHtml(label)}</span>`; }).join(" · ");
   const review = contract.needs_review ? `<span class="agent-contract-review">需复核：${escapeHtml((contract.review_reasons || []).join("、") || "证据不足")}</span>` : "";
