@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -335,6 +336,58 @@ class WorkbenchStatusTests(unittest.TestCase):
         self.assertIn(3, ids)
         self.assertNotIn(4, ids, "非机会 kind 不该出现")
         self.assertNotIn(5, ids, "目标不是 idea-analysis 的不该出现")
+
+
+class KnowledgeNoteCrudTests(unittest.TestCase):
+    """本地知识库阅读闭环：查看全文 / 编辑 / 删除（回收站）三条路径。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self._old_dir = app.KNOWLEDGE_DIR
+        self._old_cache = dict(app._knowledge_files_cache)
+        app.KNOWLEDGE_DIR = self.tmp
+        app._knowledge_files_cache = {"signature": None, "files": []}
+
+    def tearDown(self):
+        app.KNOWLEDGE_DIR = self._old_dir
+        app._knowledge_files_cache = self._old_cache
+
+    def test_edit_updates_body_and_title_line(self):
+        note = app.write_knowledge_note("原始标题", "第一段正文")
+        rel = note["path"]
+        updated = app.update_knowledge_note(rel, "改后的正文", "新标题")
+        self.assertEqual(updated["title"], "新标题")
+        content = app.read_knowledge_note(rel)["content"]
+        self.assertTrue(content.startswith("# 新标题"), content[:30])
+        self.assertIn("改后的正文", content)
+
+    def test_edit_without_title_keeps_existing_heading(self):
+        note = app.write_knowledge_note("保持标题", "正文")
+        rel = note["path"]
+        app.update_knowledge_note(rel, "只有正文变化")
+        content = app.read_knowledge_note(rel)["content"]
+        self.assertTrue(content.startswith("# 保持标题"), "不传 title 不应丢失原标题")
+
+    def test_delete_moves_note_into_trash_and_hides_from_search(self):
+        note = app.write_knowledge_note("要删的笔记", "内容")
+        rel = note["path"]
+        result = app.delete_knowledge_note(rel)
+        self.assertTrue(result["ok"])
+        self.assertIn(".trash", result["trash_path"])
+        self.assertTrue((self.tmp / ".trash").exists())
+        files = [str(path) for path in app.knowledge_files()]
+        self.assertNotIn(rel, files, "删除后不应再出现在检索结果")
+        self.assertFalse((self.tmp / rel).exists(), "原文件应被移走")
+
+    def test_escaped_paths_are_rejected_for_read_update_delete(self):
+        for method in (app.read_knowledge_note,):
+            with self.assertRaises(app.HTTPException) as ctx:
+                method("../outside.md")
+            self.assertEqual(ctx.exception.status_code, 404)
+        with self.assertRaises(app.HTTPException):
+            app.update_knowledge_note("../../etc/passwd", "x")
+        with self.assertRaises(app.HTTPException):
+            app.delete_knowledge_note("/etc/passwd")
 
 
 if __name__ == "__main__":

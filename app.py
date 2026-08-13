@@ -6701,6 +6701,12 @@ class InboxUpdateRequest(BaseModel):
     content: str | None = Field(default=None, max_length=20000)
 
 
+class KnowledgeNoteUpdateRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    content: str = Field(min_length=1, max_length=100_000)
+    title: str = Field(default="", max_length=200)
+
+
 class InboxClassificationFeedbackRequest(BaseModel):
     accepted: str = Field(min_length=1, max_length=40)
 
@@ -11135,7 +11141,11 @@ def knowledge_files() -> list[Path]:
     signature = _knowledge_dir_signature()
     if _knowledge_files_cache["signature"] == signature:
         return list(_knowledge_files_cache["files"])
-    files = sorted(KNOWLEDGE_DIR.rglob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+    files = [
+        path
+        for path in sorted(KNOWLEDGE_DIR.rglob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+        if ".trash" not in path.parts
+    ]
     _knowledge_files_cache["signature"] = signature
     _knowledge_files_cache["files"] = files
     return list(files)
@@ -18808,11 +18818,11 @@ async def get_knowledge(q: str = "", vector: int = 0) -> dict[str, Any]:
     return {"root": str(KNOWLEDGE_DIR), "notes": knowledge_search(q), "mode": "keyword"}
 
 
-def read_knowledge_note(relative_path: str) -> dict[str, Any]:
-    """读取一篇笔记的全文。
+def _resolve_knowledge_path(relative_path: str) -> Path:
+    """把用户给的相对路径安全地解析到知识库目录内。
 
-    路径必须落在知识库目录内——这是唯一一个按用户给的路径读文件的接口，
-    不做限制就是任意文件读取。
+    知识库目录内是按用户给的路径读写文件的唯一入口，不做限制就是
+    任意文件读写。越界（..、绝对路径、软链逃逸）一律按不存在处理。
     """
     candidate = str(relative_path or "").strip().lstrip("/")
     if not candidate:
@@ -18820,8 +18830,15 @@ def read_knowledge_note(relative_path: str) -> dict[str, Any]:
     root = KNOWLEDGE_DIR.resolve()
     target = (root / candidate).resolve()
     if not str(target).startswith(str(root)) or not target.is_file() or target.suffix.lower() != ".md":
-        log.warning("拒绝越界的知识库读取：%s", candidate)
+        log.warning("拒绝越界的知识库路径：%s", candidate)
         raise HTTPException(404, "笔记不存在")
+    return target
+
+
+def read_knowledge_note(relative_path: str) -> dict[str, Any]:
+    """读取一篇笔记的全文。路径必须落在知识库目录内。"""
+    target = _resolve_knowledge_path(relative_path)
+    root = KNOWLEDGE_DIR.resolve()
     try:
         content = target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -18836,9 +18853,65 @@ def read_knowledge_note(relative_path: str) -> dict[str, Any]:
     }
 
 
+def update_knowledge_note(path: str, content: str, title: str = "") -> dict[str, Any]:
+    """编辑一篇笔记：正文全文替换；可选 title 生成/替换首行标题。"""
+    target = _resolve_knowledge_path(path)
+    body = content.strip()
+    title = title.strip()
+    original = target.read_text(encoding="utf-8")
+    original_title = next((line.lstrip("# ").strip() for line in original.splitlines() if line.strip()), target.stem)
+    effective_title = title or original_title
+    lines = body.split("\n")
+    if lines and lines[0].lstrip().startswith("#"):
+        first = lines[0]
+        indent = first[: len(first) - len(first.lstrip())]
+        lines[0] = f"{indent}# {effective_title}"
+        body = "\n".join(lines)
+    else:
+        body = f"# {effective_title}\n\n{body}"
+    target.write_text(body.rstrip() + "\n", encoding="utf-8")
+    new_title = title or next((line.lstrip("# ").strip() for line in body.splitlines() if line.strip()), target.stem)
+    return {
+        "name": target.stem,
+        "path": str(target.relative_to(KNOWLEDGE_DIR.resolve())),
+        "title": new_title,
+        "chars": len(body),
+        "updated_at": datetime.fromtimestamp(target.stat().st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+def delete_knowledge_note(path: str) -> dict[str, Any]:
+    """删除一篇笔记：移入知识库 .trash 回收站目录，不物理删除。"""
+    target = _resolve_knowledge_path(path)
+    root = KNOWLEDGE_DIR.resolve()
+    trash_dir = root / ".trash"
+    trash_dir.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = trash_dir / f"{stamp}-{target.name}"
+    if dest.exists():
+        dest = trash_dir / f"{stamp}-{int(time.time() * 1000) % 100000}-{target.name}"
+    target.rename(dest)
+    return {
+        "ok": True,
+        "path": str(target.relative_to(root)),
+        "trash_path": str(dest.relative_to(root)),
+        "message": f"已移入回收站：.trash/{dest.name}",
+    }
+
+
 @app.get("/api/knowledge/note")
 def get_knowledge_note(path: str = "") -> dict[str, Any]:
     return {"note": read_knowledge_note(path)}
+
+
+@app.put("/api/knowledge/note")
+def update_knowledge_note_api(request: KnowledgeNoteUpdateRequest) -> dict[str, Any]:
+    return {"note": update_knowledge_note(request.path, request.content, request.title)}
+
+
+@app.delete("/api/knowledge/note")
+def delete_knowledge_note_api(path: str = "") -> dict[str, Any]:
+    return delete_knowledge_note(path)
 
 
 @app.get("/api/knowledge/evaluation")

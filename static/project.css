@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
-@import url('/static/project-agent.css?v=0.3.174');
+@import url('/static/project-agent.css?v=0.3.175');
 
 :root {
   --bg: #f4f6f8;
@@ -173,6 +173,17 @@ input::placeholder, textarea::placeholder { color: #aeb7bf; }
 .note-card h3 { margin: 0 0 8px; font: 700 13px var(--display); }
 .note-card p { display: -webkit-box; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 .note-card footer { display: flex; justify-content: space-between; gap: 10px; margin-top: 11px; color: var(--faint); font-size: 10px; }
+.note-card .note-actions { display: inline-flex; gap: 2px; margin-left: auto; }
+.note-card .note-actions button { padding: 2px 7px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 5px; font-size: 10px; cursor: pointer; }
+.note-card .note-actions button:hover { color: var(--ink); background: var(--surface); border-color: var(--line-strong); }
+.kb-view-modal { width: min(880px, 94vw); }
+.kb-edit-modal { width: min(660px, 94vw); }
+.kb-md-preview { max-height: 62vh; min-height: 300px; padding: 16px 18px; overflow: auto; color: var(--ink); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 10px; font-size: 12px; line-height: 1.75; }
+.kb-md-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.kb-md-preview .md-table-wrap { overflow-x: auto; }
+.kb-md-preview table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.kb-md-preview th, .kb-md-preview td { padding: 5px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.kb-danger-button { color: var(--danger) !important; border-color: color-mix(in srgb, var(--danger) 40%, transparent) !important; }
 .draft-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .draft-row > * { flex: 1 1 150px; min-width: 0; }
 .draft-row button { flex: 0 0 auto; }
