@@ -147,6 +147,22 @@ class WorkbenchStatusTests(unittest.TestCase):
             source = page.read_text(encoding="utf-8")
             self.assertIn("/static/theme.js", source, page.name)
 
+    def test_inbox_write_has_fullscreen_compose_and_markdown_preview(self):
+        """收件箱写入优化：全屏编辑弹窗 + 工具栏 + 实时 Markdown 预览。"""
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "static" / "inbox.html").read_text(encoding="utf-8")
+        self.assertIn('id="inbox-compose-full"', html, "缺少全屏编辑入口")
+        self.assertIn('id="inbox-compose-modal"', html, "缺少全屏编辑弹窗")
+        self.assertIn('id="inbox-compose-text"', html)
+        self.assertIn('id="inbox-compose-preview"', html, "弹窗缺实时预览区")
+        self.assertIn('data-md-wrap', html, "缺格式工具栏（加粗/斜体/代码）")
+        self.assertIn('data-md-line', html, "缺行级格式（标题/列表/引用）")
+        self.assertIn('/static/markdown.js', html, "收件箱必须加载 markdown 渲染库")
+        self.assertIn('markdownPreviewOf', html, "缺预览渲染逻辑")
+        css = (root / "static" / "project.css").read_text(encoding="utf-8")
+        self.assertIn(".inbox-compose-modal", css)
+        self.assertIn(".inbox-compose-grid", css)
+
     def test_frontend_project_and_platform_recovery_hooks_are_present(self):
         root = Path(__file__).resolve().parents[1]
         project_source = (root / "static" / "project.js").read_text(encoding="utf-8")
