@@ -18056,25 +18056,114 @@ EXPLORE_RECOMMENDATIONS: dict[str, dict[str, list[dict[str, str]]]] = {
 }
 
 
-@app.get("/api/ai-learning/explorations/recommend")
-def get_ai_learning_exploration_recommendations(track: str = DEFAULT_LEARNING_TRACK, kind: str = "term") -> dict[str, Any]:
-    """按 track + kind 返回推荐问题（最多 8 条，前端本地分批轮换）。
+# 个性化推荐缓存：结合档案/课程进度调 LLM 生成一次，1 小时内换分类、
+# 换一批都不必反复调用（精选池做兜底，任何时候都可用）。
+_EXPLORE_RECOMMEND_CACHE: dict[str, tuple[float, list[dict[str, str]]]] = {}
+_EXPLORE_RECOMMEND_CACHE_TTL = 60 * 60
 
-    排除已经探索过的 topic，避免「换一换」换回问过的问题。
+
+def _explore_topic_similar(a: str, b: str) -> bool:
+    """推荐排除用轻量相似度：LLM 换措辞（如「什么是 RAG」vs「RAG 到底解决了
+    什么」）也能认出来，避免换一批又换回问过的问题。"""
+    norm = lambda s: re.sub(r"[\s，。！？、,.;:：—·「」『』()（）\"'“”]", "", s).lower()
+    x, y = norm(a), norm(b)
+    if not x or not y:
+        return False
+    if x in y or y in x:
+        return True
+    try:
+        import difflib
+
+        return difflib.SequenceMatcher(None, x, y).ratio() >= 0.62
+    except ImportError:
+        return False
+
+
+def _filter_asked_topics(items: list[dict[str, str]], asked: set[str]) -> list[dict[str, str]]:
+    return [
+        item
+        for item in items
+        if not any(_explore_topic_similar(str(item.get("topic") or ""), topic) for topic in asked)
+    ]
+
+
+async def recommend_ai_learning_explorations(track: str = "", kind: str = "term") -> list[dict[str, str]]:
+    """按 track + kind 返回推荐问题（最多 8 条，前端分批轮换）。
+
+    LLM 可用时结合用户档案、课程进度、已问历史现场生成更贴合的推荐；
+    未配置 LLM 或生成失败一律回落到精选池（EXPLORE_RECOMMENDATIONS）。
+    已探索过的 topic 自动排除，避免「换一换」换回问过的问题。
     """
     track_id = learning_track_id(track)
-    pool = EXPLORE_RECOMMENDATIONS.get(track_id, {}).get(kind)
-    if not pool:
-        raise HTTPException(404, "这个分类暂时没有推荐问题")
-    asked = {
-        str(item.get("topic") or "").strip()
-        for item in list_ai_learning_explorations(track_id, 80)
-    }
-    candidates = [item for item in pool if str(item.get("topic") or "").strip() not in asked] or pool
+    spec = EXPLORATION_KINDS.get(kind)
+    if not spec:
+        return []
+    asked = {str(item.get("topic") or "").strip() for item in list_ai_learning_explorations(track_id, 80)}
+    fallback = EXPLORE_RECOMMENDATIONS.get(track_id, {}).get(kind, [])
+    fallback_items = _filter_asked_topics(fallback, asked) or fallback
+    cache_key = f"{track_id}:{kind}"
+    now = time.time()
+    cached = _EXPLORE_RECOMMEND_CACHE.get(cache_key)
+    if cached and now - cached[0] < _EXPLORE_RECOMMEND_CACHE_TTL:
+        return cached[1][:8]
+    if not llm_settings().get("configured"):
+        return fallback_items[:8]
+    items: list[dict[str, str]] = []
+    try:
+        profile = get_ai_learning_profile(track_id)
+        lessons = list_ai_learning_lessons(10, track_id)
+        curriculum = learning_track(track_id)["curriculum"][:5]
+        payload = {
+            "kind_label": spec["label"],
+            "current_role": profile.get("current_role") or "未填写",
+            "target_role": profile.get("target_role") or "未填写",
+            "experience": profile.get("experience") or "未填写",
+            "focus": profile.get("focus") or "",
+            "goal": profile.get("goal") or "",
+            "curriculum": [f"{c.get('module')}｜{c.get('title')}：{c.get('objective')}" for c in curriculum],
+            "recent_lessons": [str(lesson.get("title") or "") for lesson in lessons[:5]],
+            "asked_before": sorted(asked)[:10],
+        }
+        answer = await call_llm(
+            [
+                {"role": "system", "content": (
+                    f"你是给非专业人士做 AI 学习规划的中文教练。用户不知道现在该问什么，请你结合他的岗位、目标和课程进度，"
+                    f"推荐 4 个最适合他现在学的「{spec['label']}」类问题。"
+                    '只输出 JSON 对象，不要 markdown 代码块，格式：{"items":[{"topic":"问题（一句话、口语化、具体）","why":"为什么值得现在学（一句话）"}]}。'
+                    "要求：贴近用户角色和课程进度；topic 要具体可问，不能空泛；不要推荐用户问过的；每条 why 写清楚和用户现状的关系。"
+                )},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            max_tokens=1_200,
+            temperature=0.7,
+            purpose="ai_learning_recommend",
+        )
+        content = parse_llm_json_object(answer) or {}
+        raw_items = content.get("items") if isinstance(content.get("items"), list) else []
+        items = [
+            {"topic": clip(str(item.get("topic") or ""), 120), "why": clip(str(item.get("why") or ""), 200)}
+            for item in raw_items
+            if isinstance(item, dict) and str(item.get("topic") or "").strip()
+        ][:8]
+        items = _filter_asked_topics(items, asked)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("个性化推荐失败，回落精选池（%s/%s）：%s", track_id, kind, exc)
+        items = []
+    if not items:
+        items = fallback_items[:8]
+    _EXPLORE_RECOMMEND_CACHE[cache_key] = (now, items)
+    return items[:8]
+
+
+@app.get("/api/ai-learning/explorations/recommend")
+async def get_ai_learning_exploration_recommendations(track: str = DEFAULT_LEARNING_TRACK, kind: str = "term") -> dict[str, Any]:
+    """按 track + kind 返回推荐问题（最多 8 条，前端本地分批轮换）。"""
+    track_id = learning_track_id(track)
+    recommendations = await recommend_ai_learning_explorations(track_id, kind)
     return {
         "track": track_id,
         "kind": kind,
-        "recommendations": candidates[:8],
+        "recommendations": recommendations,
     }
 
 
@@ -25874,16 +25963,19 @@ def collect_usage_stats(days: int = 30) -> dict[str, Any]:
             (since,),
         ).fetchone()
 
-        daily = [
-            {"date": str(row["day"]), "runs": int(row["runs"] or 0)}
-            for row in connection.execute(
-                """SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS runs
-                   FROM agent_runs
-                   WHERE created_at >= ? AND kind NOT IN (?, ?, ?, ?)
-                   GROUP BY day ORDER BY day""",
-                (since, *USAGE_EXCLUDED_RUN_KINDS),
-            )
-        ]
+        # 按「服务器本地时区」分组天数——created_at 存 UTC，直接 substr 会
+        # 把本地 0:00-8:00 的活动归进前一天，趋势图每天错位 8 小时。
+        daily_counts: dict[str, int] = {}
+        for row in connection.execute(
+            "SELECT created_at FROM agent_runs WHERE created_at >= ? AND kind NOT IN (?, ?, ?, ?)",
+            (since, *USAGE_EXCLUDED_RUN_KINDS),
+        ):
+            try:
+                day = datetime.fromisoformat(str(row["created_at"] or "")).astimezone().strftime("%Y-%m-%d")
+            except ValueError:
+                day = str(row["created_at"] or "")[:10]
+            daily_counts[day] = daily_counts.get(day, 0) + 1
+        daily = [{"date": day, "runs": daily_counts[day]} for day in sorted(daily_counts)]
     finally:
         connection.close()
 

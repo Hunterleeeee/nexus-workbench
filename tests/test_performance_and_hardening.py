@@ -2311,17 +2311,19 @@ class ActiveLearningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("综合", labels, "默认源必须包含综合/新闻类订阅（如新浪滚动新闻）")
         self.assertTrue(all(label in {"科技", "财经", "商业", "综合"} for label in labels), f"未知领域标签：{labels}")
 
-    def test_every_track_kind_has_recommendations_with_topic_and_why(self):
+    async def test_every_track_kind_has_recommendations_with_topic_and_why(self):
         """主动学习推荐：两个 track × 四个 kind 都要有可点的推荐，
         且每条带 topic（问什么）和 why（为什么值得问）——否则「换一换」
-        换不出东西，非专业用户依然卡在空白输入框前。"""
-        for track in ("ai-transformation", "embodied"):
-            for kind in ("term", "theory", "method", "hotspot"):
-                body = app.get_ai_learning_exploration_recommendations(track, kind)
-                items = body["recommendations"]
-                self.assertGreaterEqual(len(items), 4, f"{track}/{kind} 至少 4 条推荐")
-                self.assertTrue(all(item.get("topic") and item.get("why") for item in items),
-                                f"{track}/{kind} 每条都要有 topic 和 why")
+        换不出东西，非专业用户依然卡在空白输入框前。未配置 LLM 时走
+        精选池兜底也必须可用。"""
+        with patch.object(app, "llm_settings", lambda: {"configured": False}):
+            for track in ("ai-transformation", "embodied"):
+                for kind in ("term", "theory", "method", "hotspot"):
+                    body = await app.get_ai_learning_exploration_recommendations(track, kind)
+                    items = body["recommendations"]
+                    self.assertGreaterEqual(len(items), 4, f"{track}/{kind} 至少 4 条推荐")
+                    self.assertTrue(all(item.get("topic") and item.get("why") for item in items),
+                                    f"{track}/{kind} 每条都要有 topic 和 why")
 
     def test_hotspot_prompt_carries_the_real_items_and_forbids_invention(self):
         captured = {}
