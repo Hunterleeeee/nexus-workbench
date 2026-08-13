@@ -17965,6 +17965,119 @@ def list_ai_learning_explorations(track: str = "", limit: int = 20) -> list[dict
         connection.close()
 
 
+# 主动学习「推荐问题」：非专业人士不知道问什么，空白输入框就是拦路虎。
+# 每个 track × kind 预置一批高质量问题（贴合课程内容、面向普通用户），
+# 前端展示 4 条 + 「换一换」轮换；已探索过的问题自动排除。
+EXPLORE_RECOMMENDATIONS: dict[str, dict[str, list[dict[str, str]]]] = {
+    "ai-transformation": {
+        "term": [
+            {"topic": "RAG 检索增强到底解决了什么", "why": "课程里反复提到检索，先弄清它解决什么问题"},
+            {"topic": "什么是模型幻觉，为什么语气越肯定越危险", "why": "建立对 AI 输出可靠性的第一认知"},
+            {"topic": "提示词里的「四要素」是哪四样", "why": "课程核心方法的第一步"},
+            {"topic": "什么是 Agent（智能体），和聊天机器人差在哪", "why": "判断哪些任务能交给 Agent 的前提"},
+            {"topic": "什么是「预测下一个 token」", "why": "从底层理解模型为什么这样回答"},
+            {"topic": "什么是工作流，和单个问答差在哪", "why": "AI 转型的第一步是流程思维"},
+            {"topic": "什么是结构化输出，为什么它更容易被程序处理", "why": "让 AI 产出直接可用的前提"},
+            {"topic": "什么是上下文，为什么给太多反而容易出错", "why": "理解模型的输入限制"},
+        ],
+        "theory": [
+            {"topic": "为什么大模型能生成流畅文本却可能出错", "why": "语言连贯不等于事实正确"},
+            {"topic": "为什么 AI 转型的价值来自流程重构而不是单次问答", "why": "别只把 AI 当打字更快"},
+            {"topic": "为什么好的提示词本质是清楚的任务委托", "why": "提示词不是咒语，是说明书"},
+            {"topic": "为什么工作拆成输入输出清楚的步骤才容易被 AI 辅助", "why": "可验证才有可复用"},
+            {"topic": "为什么 AI 的判断需要证据和来源支撑", "why": "结论要能回溯"},
+            {"topic": "为什么模型表现取决于上下文质量而不是模型本身", "why": "同样模型不同结果的原因"},
+            {"topic": "为什么流程改造要一次只重做一条线", "why": "避免改造太多失控"},
+            {"topic": "为什么高风险输出必须由人来复核", "why": "流畅不等于可靠"},
+        ],
+        "method": [
+            {"topic": "怎么用四要素写出可执行提示词", "why": "课程第二课的实操核心"},
+            {"topic": "怎么把一个重复任务改造成 AI 工作流", "why": "选对第一个改造对象"},
+            {"topic": "怎么给 AI 的回答做事实校验和验收", "why": "把复核变成流程一环"},
+            {"topic": "怎么设计 Agent 的工具（让模型真正执行而不是只读）", "why": "从「问答」到「干活」"},
+            {"topic": "怎么把一次访谈记录整理成可追溯的需求证据表", "why": "结合你的实际工作"},
+            {"topic": "怎么让 AI 输出 JSON 或表格供下一个流程使用", "why": "结构化输出实操"},
+            {"topic": "怎么用 AI 提取竞品资料并标注来源缺失", "why": "带出处地提取，不凭记忆"},
+            {"topic": "怎么建立自己的提示词模板库", "why": "把好提示词沉淀复用"},
+        ],
+        "hotspot": [
+            {"topic": "从最近的 AI 热点里挑 2-3 件对产品经理最值得关注的", "why": "用热点雷达筛出真正重要的"},
+            {"topic": "最近有哪些新的 Agent 产品形态值得研究", "why": "追踪产品机会"},
+            {"topic": "从最近的模型发布看能力边界在怎么变", "why": "能力变化影响产品判断"},
+            {"topic": "最近 AI 热点里哪些只是噱头哪些是真变化", "why": "训练判断力"},
+            {"topic": "从热点新闻里找适合个人开发者验证的机会", "why": "把热点变成行动"},
+            {"topic": "最近哪些公司或产品的 AI 策略值得拆解学习", "why": "学习真实打法"},
+            {"topic": "从最近的热点看 AI 转型的学习重点应该放哪", "why": "学习跟着趋势走"},
+            {"topic": "最近 AI 圈有什么新工具值得先上手体验", "why": "保持工具雷达"},
+        ],
+    },
+    "embodied": {
+        "term": [
+            {"topic": "什么是具身智能，和聊天模型差在哪", "why": "课程第一课的核心"},
+            {"topic": "什么是感知—决策—执行三层结构", "why": "拆解具身系统的基本框架"},
+            {"topic": "什么是闭环误差累积（compounding error）", "why": "有身体的关键约束之一"},
+            {"topic": "什么是慢思考加快执行的分层架构", "why": "具身系统的普遍结构"},
+            {"topic": "什么是运动规划（Motion Planning）", "why": "让机器人决定怎么动"},
+            {"topic": "什么是 sim2real 仿真到真机迁移", "why": "实验室到真机的关键差距"},
+            {"topic": "什么是多模态感知（视觉、触觉、力觉）", "why": "身体感知从哪来"},
+            {"topic": "什么是位姿与刚体变换", "why": "机器人眼里的空间关系"},
+        ],
+        "theory": [
+            {"topic": "为什么具身系统要把「要做什么」和「怎么动」分开", "why": "大模型不直接输出关节角度"},
+            {"topic": "为什么控制回路有毫秒级实时约束", "why": "50Hz 意味着什么"},
+            {"topic": "为什么动作不可逆要求安全前置", "why": "打翻杯子没有撤销键"},
+            {"topic": "为什么误差会在闭环中累积", "why": "和聊天开环的本质区别"},
+            {"topic": "为什么「想清楚再说」在具身系统里行不通", "why": "实时性排除了哪些做法"},
+            {"topic": "为什么仿真里能跑通不等于真机也能跑", "why": "sim2real gap 从哪来"},
+            {"topic": "为什么数据采集是具身智能的瓶颈", "why": "机器人没有互联网级语料"},
+            {"topic": "为什么具身智能需要世界模型", "why": "预测下一步观察"},
+        ],
+        "method": [
+            {"topic": "怎么把一个物理任务拆成感知—决策—执行三层", "why": "课程第一课的练习"},
+            {"topic": "怎么评估一个机器人方案是不是真的「具身」", "why": "判断真伪具身"},
+            {"topic": "怎么从扫地机或机械臂这类设备开始理解具身系统", "why": "低门槛上手"},
+            {"topic": "怎么给具身项目设计安全边界", "why": "安全前置的实操"},
+            {"topic": "怎么理解一个机器人系统里的频率要求", "why": "看控制回路约束"},
+            {"topic": "怎么判断一个具身产品离落地还有多远", "why": "用三层结构做体检"},
+            {"topic": "怎么给机械臂抓取任务设计子目标分解", "why": "把任务交给控制器执行"},
+            {"topic": "怎么阅读一篇机器人论文并抓住要点", "why": "高效吸收研究内容"},
+        ],
+        "hotspot": [
+            {"topic": "从最近的具身智能热点看落地进展", "why": "热点雷达里的具身信号"},
+            {"topic": "最近哪些机器人公司或产品的进展值得关注", "why": "追踪主要玩家"},
+            {"topic": "从热点看人形机器人离普及还有多远", "why": "管理预期"},
+            {"topic": "最近具身智能领域有什么新的技术突破", "why": "保持技术雷达"},
+            {"topic": "从热点新闻里找具身智能的学习素材", "why": "把新闻变成课程"},
+            {"topic": "最近哪些大模型厂商入了具身智能的局", "why": "关注生态变化"},
+            {"topic": "从热点看具身智能的落地场景优先在哪", "why": "场景判断"},
+            {"topic": "最近具身智能有哪些被高估的宣传", "why": "训练判断力"},
+        ],
+    },
+}
+
+
+@app.get("/api/ai-learning/explorations/recommend")
+def get_ai_learning_exploration_recommendations(track: str = DEFAULT_LEARNING_TRACK, kind: str = "term") -> dict[str, Any]:
+    """按 track + kind 返回推荐问题（最多 8 条，前端本地分批轮换）。
+
+    排除已经探索过的 topic，避免「换一换」换回问过的问题。
+    """
+    track_id = learning_track_id(track)
+    pool = EXPLORE_RECOMMENDATIONS.get(track_id, {}).get(kind)
+    if not pool:
+        raise HTTPException(404, "这个分类暂时没有推荐问题")
+    asked = {
+        str(item.get("topic") or "").strip()
+        for item in list_ai_learning_explorations(track_id, 80)
+    }
+    candidates = [item for item in pool if str(item.get("topic") or "").strip() not in asked] or pool
+    return {
+        "track": track_id,
+        "kind": kind,
+        "recommendations": candidates[:8],
+    }
+
+
 def get_ai_learning_exploration(exploration_id: int) -> dict[str, Any] | None:
     connection = db_connection()
     try:

@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.177"></script>
+  <script src="/static/theme.js?v=0.3.178"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>AI 转型学习 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.177" />
-  <link rel="stylesheet" href="/static/ai-learning.css?v=0.3.177" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.178" />
+  <link rel="stylesheet" href="/static/ai-learning.css?v=0.3.178" />
 </head>
 <body data-project-id="ai-learning">
   <div class="page-shell learning-shell">
@@ -91,6 +91,10 @@
               <input id="explore-topic" placeholder="例如：RAG 到底解决了什么" autocomplete="off" />
               <button class="primary-button" type="submit">讲给我听</button>
             </form>
+            <div id="explore-recommend" class="explore-recommend">
+              <div class="explore-recommend-head"><span>不知道问什么？试试这些推荐</span><button type="button" id="explore-shuffle" class="secondary-button">换一换</button></div>
+              <div id="explore-recommend-list" class="explore-recommend-list"></div>
+            </div>
             <p id="explore-message" class="form-note" role="status" aria-live="polite"></p>
             <div id="explore-result" class="explore-result" hidden></div>
             <div id="explore-history" class="explore-history"></div>
@@ -110,9 +114,9 @@
     </main>
   </div>
 
-  <script src="/static/request.js?v=0.3.177"></script>
-  <script src="/static/llm-settings.js?v=0.3.177"></script>
-  <script src="/static/markdown.js?v=0.3.177"></script><script src="/static/project.js?v=0.3.177"></script>
-  <script src="/static/ai-learning.js?v=0.3.177"></script>
+  <script src="/static/request.js?v=0.3.178"></script>
+  <script src="/static/llm-settings.js?v=0.3.178"></script>
+  <script src="/static/markdown.js?v=0.3.178"></script><script src="/static/project.js?v=0.3.178"></script>
+  <script src="/static/ai-learning.js?v=0.3.178"></script>
 </body>
 </html>

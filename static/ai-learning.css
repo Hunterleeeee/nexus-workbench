@@ -269,6 +269,15 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .explore-form { display: flex; gap: 6px; }
 .explore-form input { flex: 1; min-width: 0; height: 31px; padding: 0 9px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
 .explore-form button { flex: 0 0 auto; }
+.explore-recommend { margin-top: 10px; }
+.explore-recommend-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }
+.explore-recommend-head .secondary-button { min-height: 24px; padding: 0 9px; font-size: 9px; }
+.explore-recommend-list { display: grid; gap: 5px; }
+.explore-recommend-item { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 7px 9px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.explore-recommend-item:hover { background: var(--surface-muted); border-color: var(--line-strong); }
+.explore-recommend-item strong { font-size: 10.5px; font-weight: 700; line-height: 1.45; }
+.explore-recommend-item small { overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.explore-recommend-empty { color: var(--faint); font-size: 9.5px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .explore-result { margin-top: 11px; padding: 12px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 10px; }
 .explore-result[hidden] { display: none; }

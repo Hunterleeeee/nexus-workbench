@@ -6,7 +6,7 @@ const trackQuery = (extra = "") => `track=${encodeURIComponent(LEARNING_TRACK)}$
 const learnQuery = (selector, root = document) => root.querySelector(selector);
 const learnQueryAll = (selector, root = document) => [...root.querySelectorAll(selector)];
 const learnEscape = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0, openingLessonId: 0, draftLessonId: 0, draftText: null, explorations: [], exploreKind: "term", exercise: null };
+const learningState = { dashboard: null, draftTimer: 0, draftRevision: 0, draftPromise: null, history: [], historyExpanded: false, openedLessonId: 0, openingLessonId: 0, draftLessonId: 0, draftText: null, explorations: [], exploreKind: "term", recommendations: [], recommendBatch: 0, exercise: null };
 
 function learningSetStatus(message = "", tone = "") {
   const node = learnQuery("#learning-page-status");
@@ -609,7 +609,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.177", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.178", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 
@@ -687,6 +687,8 @@ function setupLearningHistory() {
 // 在这之前学习只有一条被动通道——每天推一节，学完为止。临时想弄懂一个词，
 // 只能等课程哪天刚好讲到。
 // ---------------------------------------------------------------------------
+// 推荐问题：非专业人士不知道问什么，先给一批可点的，再给「换一换」。
+const EXPLORE_RECOMMEND_PAGE = 4;
 const EXPLORE_PLACEHOLDER = {
   term: "想弄懂哪个名词？例如：RAG、向量检索、Agent 记忆",
   hotspot: "留空让 AI 从真实热点里挑；也可写方向，例如：国内 AI 应用",
@@ -765,6 +767,19 @@ function setupExplore() {
       item.setAttribute("aria-selected", String(active));
     });
     input.placeholder = EXPLORE_PLACEHOLDER[learningState.exploreKind] || "";
+    void loadExploreRecommendations();
+  });
+  learnQuery("#explore-shuffle")?.addEventListener("click", () => {
+    const items = learningState.recommendations || [];
+    const pageCount = Math.max(1, Math.ceil(items.length / EXPLORE_RECOMMEND_PAGE));
+    learningState.recommendBatch = (learningState.recommendBatch + 1) % pageCount;
+    renderExploreRecommendations();
+  });
+  learnQuery("#explore-recommend-list")?.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-recommend-topic]");
+    if (!item) return;
+    input.value = item.dataset.recommendTopic;
+    form.requestSubmit();
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -800,7 +815,34 @@ function setupExplore() {
     const found = (learningState.explorations || []).find((entry) => String(entry.id) === item.dataset.explorationId);
     if (found) renderExploration(found);
   });
+  async function loadExploreRecommendations() {
+    const host = learnQuery("#explore-recommend-list");
+    if (!host) return;
+    const kind = learningState.exploreKind || "term";
+    try {
+      const body = await requestJson(`/api/ai-learning/explorations/recommend?${trackQuery()}&kind=${encodeURIComponent(kind)}`);
+      learningState.recommendations = body.recommendations || [];
+      learningState.recommendBatch = 0;
+      renderExploreRecommendations();
+    } catch (_) {
+      host.innerHTML = "";
+    }
+  }
+  function renderExploreRecommendations() {
+    const host = learnQuery("#explore-recommend-list");
+    if (!host) return;
+    const items = learningState.recommendations || [];
+    if (!items.length) {
+      host.innerHTML = '<span class="explore-recommend-empty">这个分类暂时没有推荐，自己问一个吧。</span>';
+      return;
+    }
+    const page = items.slice(learningState.recommendBatch * EXPLORE_RECOMMEND_PAGE, learningState.recommendBatch * EXPLORE_RECOMMEND_PAGE + EXPLORE_RECOMMEND_PAGE);
+    host.innerHTML = page.length
+      ? page.map((item) => `<button type="button" class="explore-recommend-item" data-recommend-topic="${learnEscape(item.topic)}" title="${learnEscape(item.why || "")}"><strong>${learnEscape(item.topic)}</strong><small>${learnEscape(item.why || "")}</small></button>`).join("")
+      : '<span class="explore-recommend-empty">没有更多推荐了，点「换一换」回到前面的。</span>';
+  }
   void loadExploreHistory();
+  void loadExploreRecommendations();
 }
 
 // ---------------------------------------------------------------------------
