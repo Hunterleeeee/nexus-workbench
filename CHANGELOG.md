@@ -1320,3 +1320,8 @@
 ## v0.3.109 · 2026-08-09
 
 - 修复 worker_health_check 自动化：worker_status_payload 返回 list（非 dict），分支直接遍历列表。
+
+## v0.3.182 · 2026-08-13
+
+- **修复主进程内存高**：`/api/health` 健康检查接口原来 `import crawl4ai`——crawl4ai 全家桶（numpy/scipy/onnxruntime，约 80MB）在第一次健康检查后常驻主 API 进程。改为 `importlib.util.find_spec` 只探测不导入；真实抓取仍走 run_crawl 的函数级懒加载。
+- 新增回归测试（health 不得 import crawl4ai），全量 509 通过。

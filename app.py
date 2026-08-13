@@ -23783,11 +23783,12 @@ def heartbeat_worker(worker_id: str, request: WorkerHeartbeatRequest) -> dict[st
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    # 只查「是否安装」不执行导入：import crawl4ai 会连带加载 numpy/scipy/
+    # onnxruntime 全家桶（约 80MB），而健康检查被部署脚本/监控频繁调用，
+    # 第一次就让它常驻主进程。真实抓取走 run_crawl 里的函数级懒加载。
     try:
-        import crawl4ai  # noqa: F401
-
-        crawl4ai_available = True
-    except Exception:
+        crawl4ai_available = importlib.util.find_spec("crawl4ai") is not None
+    except (ImportError, ValueError):
         crawl4ai_available = False
     return {"ok": True, "version": WORKBENCH_VERSION, "crawl4ai_available": crawl4ai_available, "llm": llm_settings()}
 

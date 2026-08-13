@@ -173,6 +173,15 @@ class ScopedCorsTests(unittest.TestCase):
         response = self.client.get("/api/health", headers={"Origin": self.origin})
         self.assertIsNone(response.headers.get("access-control-allow-origin"))
 
+    def test_healthcheck_does_not_import_crawl4ai_into_the_api_process(self):
+        """/api/health 被部署脚本和监控频繁调用，若它 import crawl4ai，
+        全家桶（numpy/scipy/onnxruntime，约 80MB）会常驻主进程——内存
+        高的主因之一。必须只探测不导入。"""
+        with patch.object(app.importlib.util, "find_spec", return_value=None) as probe:
+            body = self.client.get("/api/health").json()
+        self.assertFalse(body.get("crawl4ai_available"))
+        probe.assert_called_once_with("crawl4ai")
+
     def test_unknown_origin_is_refused_on_the_sync_route(self):
         response = self.client.options(
             app._SUB2API_CORS_PATH,
