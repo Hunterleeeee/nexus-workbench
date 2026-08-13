@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.168"></script>
+  <script src="/static/theme.js?v=0.3.169"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f4f6f8" />
   <title>想法分析 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.168" />
-  <link rel="stylesheet" href="/static/idea-analysis.css?v=0.3.168" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.169" />
+  <link rel="stylesheet" href="/static/idea-analysis.css?v=0.3.169" />
 </head>
 <body>
   <div class="page-shell">
@@ -25,7 +25,7 @@
   </div>
   <div id="evidence-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="evidence-overlay-title"><form id="evidence-form" class="modal"><div class="modal-head"><div><h2 id="evidence-overlay-title">记录验证证据</h2><p>把访谈原话、试用结果、竞品核查事实记下来，作为继续/停止判断的依据。</p></div><button class="icon-button" data-close-evidence type="button" aria-label="关闭">×</button></div><div class="form-stack"><label>标题<input id="evidence-title" placeholder="例如：访谈了 3 位酒店前台，都提到差评处理耗时" /></label><label>内容<textarea id="evidence-content" rows="4" placeholder="记录事实和原话，不写结论"></textarea></label><div class="two-col"><label>类别<select id="evidence-kind"><option value="market">市场</option><option value="interview">访谈</option><option value="competitor">竞品</option><option value="prototype">原型</option><option value="delivery">交付</option><option value="research">研究</option></select></label><label>证据倾向<select id="evidence-status"><option value="unverified">待验证</option><option value="supported">支持假设</option><option value="contradicted">反证</option><option value="partial">部分支持</option></select></label></div><label>来源（可选）<input id="evidence-source" placeholder="例如：2026-08-01 电话访谈" /></label></div><div class="modal-actions"><button class="secondary-button" data-close-evidence type="button">取消</button><button class="primary-button" type="submit">保存证据</button></div></form></div>
   <div id="interview-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="interview-overlay-title" aria-describedby="interview-overlay-description"><form id="interview-form" class="modal interview-modal"><div class="modal-head"><div><h2 id="interview-overlay-title">记录结构化访谈</h2><p id="interview-overlay-description">只记录具体问题和原话，不把一次访谈直接当成结论；后续可以在证据包里回放。</p></div><button class="icon-button" data-close-interview type="button" aria-label="关闭访谈记录">×</button></div><div class="form-stack"><label>参与者<input id="interview-participant" maxlength="160" autocomplete="off" placeholder="例如：某酒店前台负责人" required /></label><label>具体问题<textarea id="interview-question" rows="3" maxlength="2000" placeholder="例如：你最近一次处理差评花了多长时间？" required></textarea></label><label>原话 / 回答<textarea id="interview-answer" rows="5" maxlength="12000" placeholder="尽量保留原话、具体行为和上下文；不要只写“对方觉得不错”。" required></textarea></label><div class="two-col"><label>来源（可选）<input id="interview-source" maxlength="2000" autocomplete="off" placeholder="例如：2026-08-09 电话访谈 / 录音 03:12" /></label><label>证据状态<select id="interview-status"><option value="unverified">待验证</option><option value="supported">支持假设</option><option value="contradicted">反证</option><option value="partial">部分支持</option></select></label></div><p id="interview-form-message" class="modal-message" role="status" aria-live="polite"></p></div><div class="modal-actions"><button class="secondary-button" data-close-interview type="button">取消</button><button class="primary-button" type="submit">保存访谈</button></div></form></div>
-      <script src="/static/request.js?v=0.3.168"></script><script src="/static/markdown.js?v=0.3.168"></script><script src="/static/project.js?v=0.3.168"></script>
+      <script src="/static/request.js?v=0.3.169"></script><script src="/static/markdown.js?v=0.3.169"></script><script src="/static/project.js?v=0.3.169"></script>
   <script>
     let sessionId = "";
     let sessions = [];
