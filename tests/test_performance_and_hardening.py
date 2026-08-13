@@ -2598,6 +2598,55 @@ class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("工具上限", result["answer"])
         self.assertTrue(any(a[1] == "react_forced_summary" for a, _ in self.events))
 
+    async def test_react_loop_stops_when_task_cancelled_between_tool_rounds(self):
+        """用户点了取消后，运行中的任务要在本轮工具之间停下来，而不是只能干等。"""
+        def handler(args):
+            return {"ok": True}
+
+        async def fake_call(messages, tools):
+            return self._reply("", [{"id": "c", "function": {"name": "market_read", "arguments": "{}"}}])
+
+        def fake_consume(task_id):
+            return []
+
+        with patch.dict(app.REACT_TOOLS, {"market_read": {"handler": handler}}), \
+             patch.object(app, "call_llm_with_tools", fake_call), \
+             patch.object(app, "consume_agent_queue_messages", fake_consume), \
+             patch.object(app, "agent_queue_task_cancelled", lambda task_id: True):
+            result = await app.run_agent_react_loop(
+                project_id="market", run_id="r1", messages=[{"role": "user", "content": "问"}],
+                tools=[{"type": "function", "function": {"name": "market_read", "parameters": {}}}],
+                max_rounds=4,
+                queue_task_id=7,
+            )
+        self.assertTrue(result.get("cancelled"), "取消标志应让循环立即停止")
+        self.assertIn("取消", result["answer"])
+        self.assertEqual(result["rounds"], 0, "取消检查在工具执行前，第一轮工具都不该跑")
+
+    def test_cancel_agent_task_marks_running_task_cancelled(self):
+        """运行中的任务也必须能被取消：状态标成 cancelled，取消标志返回 True。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_file = Path(temp_dir) / "workbench.db"
+            patches = [patch.object(app, "DATABASE_FILE", database_file), patch.object(app, "_DB_SCHEMA_READY", False)]
+            for item in patches:
+                item.start()
+            try:
+                task = app.enqueue_agent_task(kind="chat", payload={"message": "hi"}, project_id="market")
+                connection = app.db_connection()
+                try:
+                    connection.execute("UPDATE agent_queue SET status = 'running' WHERE id = ?", (task["id"],))
+                    connection.commit()
+                finally:
+                    connection.close()
+                cancelled = app.cancel_agent_task(task["id"])
+                self.assertIsNotNone(cancelled)
+                self.assertTrue(cancelled["cancelled"])
+                self.assertEqual(cancelled["status"], "cancelled")
+                self.assertTrue(app.agent_queue_task_cancelled(task["id"]))
+            finally:
+                for item in reversed(patches):
+                    item.stop()
+
     async def test_every_tool_call_is_written_to_the_run_timeline(self):
         """回放里看不到调了什么工具，就没法判断结论是查出来的还是编出来的。"""
         replies = [
@@ -2713,6 +2762,85 @@ class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
         finish = next(c for c in collected if c["type"] == "finish")
         self.assertEqual(finish["answer"], "fallback 的完整回答。")
         self.assertTrue(any(c["type"] == "reset" for c in collected), "浏览器必须收到清空半段输出的信号")
+
+    async def test_stream_llm_text_continues_when_truncated_by_max_tokens(self):
+        """流式输出被 max_tokens 截断（finish_reason=length）时必须续写，
+        而不是只记一条 usage 就收工；续写段要回填成 assistant 消息再请求。"""
+        providers = [
+            {"id": "primary", "name": "主", "api_key": "k1", "model": "m", "base_url": "https://one.example/v1"},
+        ]
+        seen_messages: list[list[dict]] = []
+
+        class Response:
+            def __init__(self, first):
+                self.first = first
+            def raise_for_status(self):
+                pass
+            async def aiter_lines(self):
+                if self.first:
+                    yield 'data: {"choices":[{"delta":{"content":"前半段"},"finish_reason":"length"}]}'
+                else:
+                    yield 'data: {"choices":[{"delta":{"content":"后半段"},"finish_reason":"stop"}]}'
+                yield "data: [DONE]"
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+
+        class Client:
+            def __init__(self): self.calls = 0
+            def stream(self, *args, **kwargs):
+                self.calls += 1
+                seen_messages.append(kwargs.get("json", {}).get("messages", []))
+                return Response(first=self.calls == 1)
+
+        client = Client()
+        with patch.object(app, "llm_provider_state", return_value={"candidates": providers}), \
+             patch.object(app, "_llm_health", return_value={"status": "unknown"}), \
+             patch.object(app, "llm_http_client", AsyncMock(return_value=client)), \
+             patch.object(app, "schedule_llm_usage_event"), \
+             patch.object(app, "_record_llm_failure"), \
+             patch.object(app, "_record_llm_success"):
+            chunks = [chunk async for chunk in app.stream_llm_text([{"role": "user", "content": "问"}])]
+        text = "".join(str(c.get("text") or "") for c in chunks if c["type"] == "delta")
+        self.assertEqual(text, "前半段后半段", "截断后必须续写并拼接")
+        finishes = [c for c in chunks if c["type"] == "finish"]
+        self.assertEqual(len(finishes), 1, "续写期间不能把中途的 finish 发出去")
+        self.assertEqual(finishes[0]["reason"], "stop")
+        self.assertEqual(len(seen_messages), 2, "截断后应发起第二次请求")
+        self.assertEqual(seen_messages[1][-1]["role"], "assistant", "续写请求要把上一段回填成 assistant 消息")
+        self.assertIn("前半段", seen_messages[1][-1]["content"])
+
+    async def test_stream_llm_text_marks_length_capped_after_continuation_limit(self):
+        """续满上限仍被截断时，正文要明说没写完，并把 reason 标成 length_capped。"""
+        providers = [{"id": "p", "name": "主", "api_key": "k", "model": "m", "base_url": "https://one.example/v1"}]
+
+        class Response:
+            def raise_for_status(self): pass
+            async def aiter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"段"},"finish_reason":"length"}]}'
+                yield "data: [DONE]"
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+
+        class Client:
+            def __init__(self): self.calls = 0
+            def stream(self, *args, **kwargs):
+                self.calls += 1
+                return Response()
+
+        client = Client()
+        with patch.object(app, "llm_provider_state", return_value={"candidates": providers}), \
+             patch.object(app, "_llm_health", return_value={"status": "unknown"}), \
+             patch.object(app, "llm_http_client", AsyncMock(return_value=client)), \
+             patch.object(app, "schedule_llm_usage_event"), \
+             patch.object(app, "_record_llm_failure"), \
+             patch.object(app, "_record_llm_success"), \
+             patch.object(app, "LLM_MAX_CONTINUATIONS", 1):
+            chunks = [chunk async for chunk in app.stream_llm_text([{"role": "user", "content": "问"}])]
+        finishes = [c for c in chunks if c["type"] == "finish"]
+        self.assertEqual(len(finishes), 1)
+        self.assertEqual(finishes[0]["reason"], "length_capped")
+        tail = [c for c in chunks if c["type"] == "delta" and "没写完" in str(c.get("text") or "")]
+        self.assertTrue(tail, "续满上限必须明说还有内容没写完")
 
     async def test_streaming_updates_provider_health_on_failure_and_success(self):
         """流式请求也必须更新与非流式请求相同的健康状态，429 才能进入冷却。"""
@@ -3371,17 +3499,18 @@ class AgentQueueTests(unittest.TestCase):
         self.assertEqual(reclaimed["id"], task["id"])
         self.assertEqual(reclaimed["claimed_by"], "live-worker")
 
-    def test_only_queued_tasks_can_be_cancelled(self):
-        """已经在跑的任务停不下来——它可能正在调 LLM 或写库，
-        标成「已取消」只会让状态和事实对不上。"""
+    def test_queued_and_running_tasks_can_be_cancelled(self):
+        """排队中的直接取消；运行中的标成 cancelled 后，ReAct 循环会在每轮
+        工具之间读到并停下来——不再是「只能干等」的死任务。"""
         app.enqueue_agent_task(kind="chat", payload={"message": "x"})
         queued = app.cancel_agent_task(1)
         self.assertTrue(queued["cancelled"])
         app.enqueue_agent_task(kind="chat", payload={"message": "y"})
         running = app.claim_agent_task("w1")
         result = app.cancel_agent_task(running["id"])
-        self.assertFalse(result["cancelled"])
-        self.assertEqual(result["status"], "running")
+        self.assertTrue(result["cancelled"], "运行中的任务也必须能取消")
+        self.assertEqual(result["status"], "cancelled")
+        self.assertTrue(app.agent_queue_task_cancelled(running["id"]))
 
     def test_a_message_can_be_inserted_into_a_running_task_and_is_read_once(self):
         app.enqueue_agent_task(kind="chat", payload={"message": "查一下 A"})

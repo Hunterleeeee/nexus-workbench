@@ -244,18 +244,21 @@ body[data-project-id="crawl4ai"] .project-agent-panel {
 .project-agent-md .md-list .md-list { margin-top: 2px; }
 .project-agent-md .md-quote { margin: 0; padding: 4px 0 4px 9px; color: var(--agent-muted); border-left: 2px solid var(--agent-line-strong); }
 .project-agent-md .md-hr { margin: 9px 0; border: 0; border-top: 1px solid var(--agent-line); }
-.project-agent-md .md-code { margin: 0; padding: 8px 9px; background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; overflow-x: auto; }
-.project-agent-md .md-code code { color: var(--agent-ink); font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.project-agent-md .md-code-block { position: relative; }
+.project-agent-md .md-code { margin: 0; padding: 8px 9px; background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 7px; overflow-x: hidden; }
+.project-agent-md .md-code code { display: block; color: var(--agent-ink); font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-agent-md .md-copy { position: absolute; top: 5px; right: 5px; padding: 2px 8px; color: var(--agent-muted); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 5px; font-size: 9px; cursor: pointer; opacity: 0; transition: opacity .15s ease; }
+.project-agent-md .md-code-block:hover .md-copy, .project-agent-md .md-copy:focus-visible { opacity: 1; }
+.project-agent-md .md-copy:hover { color: var(--agent-ink); border-color: var(--agent-line-strong); }
 .project-agent-md code { padding: 1px 4px; color: var(--agent-ink); background: var(--agent-surface-muted); border: 1px solid var(--agent-line); border-radius: 4px; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .project-agent-md a { color: var(--agent-accent); text-decoration: none; overflow-wrap: anywhere; }
 .project-agent-md a:hover { text-decoration: underline; }
 .project-agent-md strong { display: inline; margin: 0; color: var(--agent-ink); font-size: inherit; font-weight: 600; }
-/* 表格单独包一层滚动容器：气泡宽度有上限，宽表格宁可自己横向滚，
-   也不能把整个面板撑破。 */
-.project-agent-md .md-table-wrap { overflow-x: auto; border: 1px solid var(--agent-line); border-radius: 7px; }
-.project-agent-md .md-table { width: 100%; border-collapse: collapse; font-size: 10px; }
-.project-agent-md .md-table th, .project-agent-md .md-table td { padding: 5px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--agent-line); }
-.project-agent-md .md-table th { color: var(--agent-ink); background: var(--agent-surface-muted); font-weight: 600; white-space: nowrap; }
+/* 表格不横向滚动：单元格换行显示，避免左右滑动。 */
+.project-agent-md .md-table-wrap { overflow-x: hidden; border: 1px solid var(--agent-line); border-radius: 7px; }
+.project-agent-md .md-table { width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed; }
+.project-agent-md .md-table th, .project-agent-md .md-table td { padding: 5px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--agent-line); overflow-wrap: anywhere; }
+.project-agent-md .md-table th { color: var(--agent-ink); background: var(--agent-surface-muted); font-weight: 600; white-space: normal; }
 .project-agent-md .md-table tbody tr:last-child td { border-bottom: 0; }
 .project-agent-message.user .project-agent-md a { color: #fff; text-decoration: underline; }
 .project-agent-message.user .project-agent-md code,

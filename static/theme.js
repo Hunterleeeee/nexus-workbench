@@ -9,7 +9,7 @@
   if (!document.querySelector("link[data-workbench-theme]")) {
     const stylesheet = document.createElement("link");
     stylesheet.rel = "stylesheet";
-    stylesheet.href = "/static/theme.css?v=0.3.167";
+    stylesheet.href = "/static/theme.css?v=0.3.168";
     stylesheet.dataset.workbenchTheme = "true";
     document.head.append(stylesheet);
   }

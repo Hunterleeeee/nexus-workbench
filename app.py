@@ -13205,7 +13205,7 @@ async def stream_llm_text(
     purpose: str = "agent",
     reasoning: bool = False,
 ):
-    """流式调用 LLM，逐块产出 dict。
+    """流式调用 LLM，逐块产出 dict；被 max_tokens 截断时自动续写。
 
     产出格式（每块一个 dict，由调用方决定如何消费）：
       {"type": "delta", "text": str, "reasoning": str}        内容增量（可能为空串）
@@ -13217,6 +13217,11 @@ async def stream_llm_text(
     语义与 call_llm 一致：主配置失败后依次尝试 fallback 候选，而不是让整条
     链路随第一个 Provider 一起失败。工具轮次（ReAct）仍用非流式 call_llm_with_tools，
     这里只服务"最终文字回答"的流式输出。
+
+    截断续写：finish_reason == "length" 时，把这一段回填成 assistant 消息再要
+    下一段，最多续 LLM_MAX_CONTINUATIONS 次；续写期间的 finish 扣住不外发
+    （否则前端以为答案完了）。续满上限会在正文末尾明说「还有内容没写完」，
+    并把 reason 标成 length_capped。
     """
     state = llm_provider_state()
     candidates = state.get("candidates") or []
@@ -13224,34 +13229,31 @@ async def stream_llm_text(
         yield {"type": "error", "message": "未配置可调用的 LLM Provider", "provider": "", "recoverable": False}
         return
 
-    errors: list[str] = []
-    for provider in candidates:
-        if _llm_health(provider).get("status") == "cooling":
-            errors.append(f"{provider.get('name', '未命名')}:rate_limit_cooling")
-            continue
+    async def _one_stream(provider: dict[str, Any], segment_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """单段流式请求；yield 增量文本，返回段内元信息。失败返回 None。"""
         started_at = time.monotonic()
         api_key = str(provider.get("api_key") or "")
         model = str(provider.get("model") or "")
         base_url = str(provider.get("base_url") or "")
         provider_name = str(provider.get("name") or model or "未命名")
         if not api_key or not model or not base_url:
-            errors.append(f"{provider_name}:配置不完整")
-            continue
+            yield {"type": "meta", "meta": {"error": "配置不完整", "provider": provider_name}}
+            return
         payload = {
             "model": model,
-            "messages": messages,
+            "messages": segment_messages,
             "temperature": temperature,
             "max_tokens": model_output_token_limit(model, max_tokens),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        finish_reason = ""
+        usage: dict[str, Any] | None = None
         try:
             client = await llm_http_client()
-            text_parts: list[str] = []
-            reasoning_parts: list[str] = []
-            finish_reason = ""
-            usage: dict[str, Any] | None = None
             async with client.stream(
                 "POST", chat_completions_url(base_url), headers=headers, json=payload
             ) as response:
@@ -13280,53 +13282,103 @@ async def stream_llm_text(
                         finish_reason = str(choice.get("finish_reason") or "")
                     if chunk.get("usage"):
                         usage = chunk.get("usage") or None
-            result = "".join(text_parts).strip() or "".join(reasoning_parts).strip()
-            if not result and finish_reason != "length":
-                errors.append(f"{provider_name}:返回为空")
-                empty_error = LLMStreamError("流式返回为空")
-                await asyncio.to_thread(_record_llm_failure, provider, empty_error)
-                yield {
-                    "type": "error",
-                    "message": f"Provider「{provider_name}」流式返回为空，尝试下一个…",
-                    "provider": provider_name,
-                    "recoverable": True,
-                }
-                continue
-            input_tokens = int((usage or {}).get("prompt_tokens") or (sum(len(str(m.get("content") or "")) for m in messages) // 4))
-            output_tokens = int((usage or {}).get("completion_tokens") or (len(result) // 4))
-            schedule_llm_usage_event(
-                provider,
-                status="succeeded",
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                purpose=purpose,
-            )
-            await asyncio.to_thread(_record_llm_success, provider)
-            yield {"type": "finish", "reason": finish_reason or "stop", "usage": usage, "provider": provider_name}
-            return
         except Exception as exc:
             schedule_llm_usage_event(
                 provider,
                 status="failed",
                 error_kind=_llm_error_kind(exc),
                 latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=sum(len(str(m.get("content") or "")) for m in messages) // 4,
+                input_tokens=sum(len(str(m.get("content") or "")) for m in segment_messages) // 4,
                 purpose=purpose,
             )
             await asyncio.to_thread(_record_llm_failure, provider, exc)
-            errors.append(f"{provider_name}:{clip(str(exc), 120)}")
-            # 已经把半段内容送到浏览器后才断流时，fallback 会从头重新回答。
-            # 显式 reset 才能让所有上层丢弃前一段，避免两家 Provider 的答案拼在一起。
-            if text_parts or (reasoning and reasoning_parts):
-                yield {"type": "reset", "provider": provider_name}
-            yield {
-                "type": "error",
-                "message": f"Provider「{provider_name}」失败：{clip(str(exc), 120)}",
+            yield {"type": "meta", "meta": {"error": f"Provider「{provider_name}」失败：{clip(str(exc), 120)}", "provider": provider_name}}
+            return
+        result = "".join(text_parts).strip() or "".join(reasoning_parts).strip()
+        input_tokens = int((usage or {}).get("prompt_tokens") or (sum(len(str(m.get("content") or "")) for m in segment_messages) // 4))
+        output_tokens = int((usage or {}).get("completion_tokens") or (len(result) // 4))
+        schedule_llm_usage_event(
+            provider,
+            status="succeeded",
+            latency_ms=int((time.monotonic() - started_at) * 1000),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            purpose=purpose,
+        )
+        await asyncio.to_thread(_record_llm_success, provider)
+        if not result and finish_reason != "length":
+            yield {"type": "meta", "meta": {"error": f"Provider「{provider_name}」流式返回为空，尝试下一个…", "provider": provider_name}}
+            return
+        yield {
+            "type": "meta",
+            "meta": {
+                "text": result,
+                "finish_reason": finish_reason or "stop",
+                "usage": usage,
                 "provider": provider_name,
-                "recoverable": True,
-            }
+                "reasoning": "".join(reasoning_parts).strip(),
+            },
+        }
+
+    errors: list[str] = []
+    emitted_any = False
+    for provider in candidates:
+        if _llm_health(provider).get("status") == "cooling":
+            errors.append(f"{provider.get('name', '未命名')}:rate_limit_cooling")
             continue
+        segment_messages = list(messages)
+        final_text = ""
+        final_usage = None
+        final_reason = "stop"
+        segment_index = 0
+        truncated = False
+        segment_error = None
+        while segment_index <= LLM_MAX_CONTINUATIONS:
+            meta: dict[str, Any] | None = None
+            async for chunk in _one_stream(provider, segment_messages):
+                if chunk["type"] == "delta":
+                    final_text += chunk["text"]
+                    emitted_any = True
+                    yield chunk
+                elif chunk["type"] == "meta":
+                    meta = chunk["meta"]
+            if meta is None:
+                # 段内异常：未产出任何内容则交给 failover；已产出半段要 reset。
+                segment_error = "段内中断"
+                if final_text:
+                    yield {"type": "reset", "provider": str(provider.get("name") or "")}
+                break
+            if "error" in meta:
+                segment_error = meta["error"]
+                if final_text:
+                    yield {"type": "reset", "provider": str(provider.get("name") or "")}
+                errors.append(segment_error)
+                break
+            final_usage = meta["usage"]
+            final_reason = str(meta["finish_reason"] or "stop")
+            if final_reason != "length":
+                truncated = False
+                break
+            # 截断了：回填这一段的 assistant 文本，继续要下一段。
+            truncated = True
+            segment_text = str(meta.get("text") or "")
+            if not segment_text:
+                truncated = False
+                break
+            segment_messages = [*segment_messages, {"role": "assistant", "content": segment_text}]
+            segment_index += 1
+        if segment_error and not emitted_any:
+            # 第一个 provider 就失败且什么都没吐：继续尝试下一个。
+            continue
+        if truncated:
+            # 续满上限仍被截断：明说没写完，并标记 reason。
+            tail = f"\n\n（回答已达到 {LLM_MAX_CONTINUATIONS + 1} 段续写上限，后面还有内容没写完，可要求继续。）"
+            final_text += tail
+            emitted_any = True
+            yield {"type": "delta", "text": tail, "reasoning": ""}
+            final_reason = "length_capped"
+        yield {"type": "finish", "reason": final_reason, "usage": final_usage, "provider": str(meta.get("provider") or "") if meta else ""}
+        return
     yield {"type": "error", "message": f"全部 LLM Provider 均失败（{'; '.join(errors)[:300]}）", "provider": "", "recoverable": False}
 
 
@@ -14344,7 +14396,17 @@ def execute_agent_action(action_id: str, *, force: bool = False, parent_run_id: 
     update_agent_run_record(run["id"], status="running")
     add_agent_run_event(run["id"], "started", f"开始执行：{action.get('name') or action.get('tool')}", metadata={"action_id": action_id})
     try:
-        if action["tool"] == "market.watchlist.add":
+        # 确认门创建的动作用的是运行时工具名（notify / cloud_dev_generate /
+        # cloud_dev_test 等）。此前这里只认旧的点号命名（market.watchlist.add、
+        # inbox.capture…），两套名字零交集，确认后必然抛「工具尚未接入执行器」。
+        # 运行时工具名直接回调 execute_react_tool(..., confirmed=True) 真正执行；
+        # 旧点号分支保留兼容历史动作。
+        if action["tool"] in REACT_TOOLS or action["tool"] in SUBAGENT_EXTRA_TOOLS:
+            result = execute_react_tool(action["tool"], action.get("arguments") or {}, project_id=action["project_id"], run_id=run["id"], confirmed=True)
+            if not isinstance(result, dict) or not result.get("ok"):
+                raise RuntimeError(str((result or {}).get("error") or "工具执行失败"))
+            result = result.get("result") if isinstance(result.get("result"), dict) else result
+        elif action["tool"] == "market.watchlist.add":
             result = add_market_symbol_to_watchlist(action["arguments"].get("symbol", ""))
         elif action["tool"] == "market.observations.evaluate":
             result = evaluate_market_observations(create_records=True)
@@ -14467,6 +14529,7 @@ async def stream_agent_react_loop(
     final_answer = ""
     final_usage = None
     final_provider = ""
+    final_reason = "stop"
     while rounds < max_rounds:
         content = ""
         tool_calls: list[dict[str, Any]] = []
@@ -14576,12 +14639,15 @@ async def stream_agent_react_loop(
             elif chunk["type"] == "finish":
                 final_usage = chunk.get("usage")
                 final_provider = chunk.get("provider", "")
+                # 透传真实 reason（length_capped 等），不再硬写 stop——
+                # 否则截断连信号都没有，前端看到的是一次正常完成。
+                final_reason = str(chunk.get("reason") or "stop")
             elif chunk["type"] == "error":
                 yield chunk
     if not final_answer:
         yield {"type": "error", "message": "LLM 未返回内容，请稍后重试。", "provider": final_provider}
         return
-    yield {"type": "finish", "reason": "stop", "usage": final_usage, "provider": final_provider, "answer": final_answer, "tool_calls": executed, "rounds": rounds}
+    yield {"type": "finish", "reason": final_reason, "usage": final_usage, "provider": final_provider, "answer": final_answer, "tool_calls": executed, "rounds": rounds}
 
 
 async def run_agent_react_loop(
@@ -14655,6 +14721,11 @@ async def run_agent_react_loop(
             for extra in await asyncio.to_thread(consume_agent_queue_messages, queue_task_id):
                 working.append({"role": "user", "content": f"（任务进行中追加的指令）{extra}"})
                 add_agent_run_event(run_id, "queue_message", f"任务进行中收到追加指令：{clip(extra, 120)}", level="info")
+            # 同一位置查取消：用户在队列页点了取消后，运行中的任务也能在
+            # 本轮工具之间停下来，而不是只能干等（最坏 4 轮 × 60 秒）。
+            if await asyncio.to_thread(agent_queue_task_cancelled, queue_task_id):
+                add_agent_run_event(run_id, "cancelled", "任务已被取消，停止后续工具调用。", level="warning")
+                return {"answer": "（任务已取消）", "tool_calls": executed, "rounds": rounds, "cancelled": True}
         outcomes = await asyncio.gather(*(_run_one(item) for item in tool_calls[:12]))
         for call_id, name, result in outcomes:
             executed.append({"tool": name, "ok": bool(result.get("ok")), "error": clip(str(result.get("error") or ""), 200)})
@@ -29001,6 +29072,16 @@ def agent_queue_row(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
+def agent_queue_task_cancelled(task_id: int) -> bool:
+    """运行中的 ReAct 循环在每轮工具之间查这个：任务是否已被用户取消。"""
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT status FROM agent_queue WHERE id = ?", (task_id,)).fetchone()
+        return bool(row and row["status"] == "cancelled")
+    finally:
+        connection.close()
+
+
 def enqueue_agent_task(
     *,
     kind: str,
@@ -29117,16 +29198,17 @@ def finish_agent_task(task_id: int, *, status: str, result: dict[str, Any] | Non
 
 
 def cancel_agent_task(task_id: int) -> dict[str, Any] | None:
-    """取消排队中的任务。
+    """取消排队或运行中的任务。
 
-    只取消还没开跑的：已经在跑的任务停不下来——它可能正在调 LLM 或写库，
-    这里把它标成「已取消」只会让状态和事实对不上。
+    排队中的直接改为 cancelled；运行中的任务标成 cancelled 后，ReAct 循环
+    会在每轮工具之间读到这个状态并停下来（不会杀掉正在进行的单次 LLM/工具
+    调用，但不会进入下一轮）。
     """
     timestamp = now_iso()
     connection = db_connection()
     try:
         cursor = connection.execute(
-            "UPDATE agent_queue SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'queued'",
+            "UPDATE agent_queue SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('queued', 'running')",
             (timestamp, task_id),
         )
         connection.commit()

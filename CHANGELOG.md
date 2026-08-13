@@ -1,5 +1,13 @@
 # 迭代记录
 
+## v0.3.168 · 2026-08-13
+
+- **修复确认门执行端**：确认模式工具（notify / cloud_dev_generate / cloud_dev_test）创建的动作用运行时工具名，确认后执行的分发却只认旧点号命名（market.watchlist.add 等），两套名字零交集——点「确认」必然报「工具尚未接入执行器」。现在确认执行直接回调 `execute_react_tool(..., confirmed=True)` 真正执行，旧点号分支保留兼容。
+- **流式截断续写**：`stream_llm_text` 被 max_tokens 截断（finish_reason=length）时自动续写，最多续 `LLM_MAX_CONTINUATIONS` 段；续写期间的 finish 扣住不外发（前端不会以为答案完了）；续满上限在正文明说「还有内容没写完」并把 reason 标成 `length_capped`；ReAct 循环不再把 finish reason 硬写 "stop"，截断信号真实透传。
+- **运行中的任务可取消**：`cancel_agent_task` 对 running 任务也标 cancelled；ReAct 循环在每轮工具之间（与插入消息同一位置）查取消标志，取消后停止后续工具调用，不再只能干等（最坏 4 轮 × 60 秒）。
+- **Agent 输出去掉横向滑动 + 代码块复制**：代码块长行改为换行显示（不再左右滑动）、表格单元格换行；代码块右上角新增「复制」按钮（navigator.clipboard + 非安全上下文 textarea fallback），项目 Agent 面板与文档工厂预览都生效。
+- 验证：新增流式续写 ×2、运行中取消 ×2 专项测试，更新旧取消语义测试；全量 497 项 + 前端 SSE 2 项通过。
+
 ## v0.3.167 · 2026-08-13
 
 - **Agent 回答统一 Markdown 渲染（static/markdown.js）**：此前模型输出的表格/列表/代码块/加粗全以原始符号显示，而 Agent 回答最爱用表格和列表。新增安全渲染库（先整段转义再还原已知结构，任何未识别内容留在转义态，杜绝 HTML 注入），支持表格、围栏代码块、标题、列表、引用、行内样式；doc-factory / ai-learning / aihot 等页面统一接入。服务端同步 `_is_markdown_table_divider`，与前端表格识别规则保持一致。

@@ -66,7 +66,7 @@
           index += 1;
         }
         index += 1;
-        html.push(`<pre class="md-code"${fence[1] ? ` data-lang="${escapeHtml(fence[1])}"` : ""}><code>${body.join("\n")}</code></pre>`);
+        html.push(`<div class="md-code-block"><button type="button" class="md-copy" data-md-copy>复制</button><pre class="md-code"${fence[1] ? ` data-lang="${escapeHtml(fence[1])}"` : ""}><code>${body.join("\n")}</code></pre></div>`);
         continue;
       }
 
@@ -165,6 +165,45 @@
   function renderInline(source) {
     return inline(escapeHtml(source));
   }
+
+  // 代码块复制：navigator.clipboard 需要安全上下文（https/localhost）；
+  // 非安全上下文 fallback 到临时 textarea + execCommand('copy')。
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (_) { /* fall through */ }
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+    document.body.removeChild(textarea);
+    return ok;
+  }
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-md-copy]");
+    if (!button) return;
+    const block = button.closest(".md-code-block");
+    const code = block?.querySelector("pre code");
+    if (!code) return;
+    const original = button.textContent;
+    button.disabled = true;
+    copyText(code.textContent).then((ok) => {
+      button.textContent = ok ? "已复制" : "复制失败";
+      window.setTimeout(() => {
+        button.textContent = original;
+        button.disabled = false;
+      }, 1600);
+    }).catch(() => {
+      button.textContent = "复制失败";
+      button.disabled = false;
+    });
+  });
 
   window.WorkbenchMarkdown = { render: renderMarkdown, renderInline, escapeHtml };
 })();

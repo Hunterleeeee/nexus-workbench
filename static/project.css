@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
-@import url('/static/project-agent.css?v=0.3.167');
+@import url('/static/project-agent.css?v=0.3.168');
 
 :root {
   --bg: #f4f6f8;
@@ -370,6 +370,15 @@ input::placeholder, textarea::placeholder { color: #aeb7bf; }
 .factory-md-preview p { margin: 5px 0; line-height: 1.7; }
 .factory-md-preview ul { margin: 5px 0; padding-left: 20px; }
 .factory-md-preview li { margin: 3px 0; line-height: 1.65; }
+.factory-md-preview .md-code-block { position: relative; margin: 8px 0; }
+.factory-md-preview .md-code { margin: 0; padding: 10px 12px; background: #f6f8fa; border: 1px solid var(--line); border-radius: 8px; overflow-x: hidden; }
+.factory-md-preview .md-code code { display: block; color: #24292f; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.factory-md-preview .md-copy { position: absolute; top: 6px; right: 6px; padding: 2px 9px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 5px; font-size: 10px; cursor: pointer; opacity: 0; transition: opacity .15s ease; }
+.factory-md-preview .md-code-block:hover .md-copy, .factory-md-preview .md-copy:focus-visible { opacity: 1; }
+.factory-md-preview .md-table-wrap { overflow-x: hidden; border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; }
+.factory-md-preview .md-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.factory-md-preview .md-table th, .factory-md-preview .md-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.factory-md-preview .md-table th { background: #f6f8fa; font-weight: 500; }
 .factory-output-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
 .factory-output-row > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .factory-output-view { flex: 0 0 auto; padding: 3px 10px; color: #fff; background: var(--violet); border: 0; border-radius: 99px; font-size: 10px; cursor: pointer; }
