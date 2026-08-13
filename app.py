@@ -1129,11 +1129,13 @@ RUNTIME_TOOL_POLICIES: dict[str, dict[str, Any]] = {
     "notify": {"mode": "auto", "risk": "low", "label": "发送通知",
                "note": "写入应用内通知中心；浏览器 Push 是否发送仍受独立订阅和静默时段约束。"},
 
-    # —— 需要确认 ——
-    "cloud_dev_generate": {"mode": "confirm", "risk": "medium", "label": "生成云端产物",
-                           "note": "会往 outputs/cloudgen 落盘并登记 Artifact。"},
+    # —— 需要确认（真高危：执行命令、不可逆、外部副作用）——
+    # cloud_dev_test 在服务器上真实执行固定命令，保留确认。
     "cloud_dev_test": {"mode": "confirm", "risk": "medium", "label": "运行云开发测试",
                        "note": "在服务器上真实执行一条固定命令。"},
+    # cloud_dev_generate 只生成版本化产物（不部署、不覆盖用户文件），可逆 → auto。
+    "cloud_dev_generate": {"mode": "auto", "risk": "medium", "label": "生成云端产物",
+                           "note": "按白名单模板生成版本化产物，不部署、不覆盖用户文件。"},
     # cloud_dev_patch 自己已经走审批链路（只生成编辑计划，批准后才应用），
     # 所以这里标 auto——再加一道确认等于同一件事要点两次。
     "cloud_dev_patch": {"mode": "auto", "risk": "medium", "label": "生成代码编辑计划",

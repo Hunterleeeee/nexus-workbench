@@ -1,5 +1,9 @@
 # 迭代记录
 
+## v0.3.170 · 2026-08-13
+
+- **运行时工具策略按「只读 readonly / 可逆 auto / 高危 confirm」收口**：`cloud_dev_generate`（生成云端产物，版本化且不覆盖用户文件，可逆）由 confirm 降为 auto；唯一保留确认的是 `cloud_dev_test`（在服务器上真实执行固定命令，高危）。现在 19 readonly / 7 auto / 1 confirm，Agent 日常动作几乎全部自动执行，只在真高危处停下。
+
 ## v0.3.169 · 2026-08-13
 
 - **notify（发送通知）降为 auto 档**：通知本身无害（只写应用内通知中心，浏览器 Push 仍受独立订阅约束），每条都要人工确认会打断 Agent 流程。确认模式工具仅剩 cloud_dev_generate / cloud_dev_test。
