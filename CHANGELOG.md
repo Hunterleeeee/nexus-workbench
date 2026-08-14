@@ -1475,3 +1475,23 @@
     app.py；AST 扫出 9 个漏网转发符号（obsidian_status/AGENT_TOOL_POLICIES/ai_learning_*/list_idea_sessions
     等）一次补齐；源码断言测试适配到 app_pkg/projects.py；
   - app.py 从 3.27 万行累计降至 **2.27 万行**（22711 行），全量 509 通过，3.11 语法 + 转发路径 smoke 通过。
+
+## v0.3.197 · 2026-08-14
+
+- **拆分第十一批：market 行情领域拆到 `app_pkg/market.py`**（约 2600 行，app.py 降至 2.02 万行，最后的大山第一批）：
+  - 拆出：数据层（load_market_watchlist/load_market_snapshot/save_*、market_snapshot_row/
+    record_market_snapshot/list_market_history/market_sampling_state/market_quote_quality/
+    analyze_market_snapshot/analyze_market_factors/evaluate_market_observations/symbol 工具/
+    fetch_market_quotes/fetch_fund_nav(_history)）、MARKET_* 常量、主区约 20 路由
+    （suggest/state/today/decision-center/watchlist-rules/styles/screen/sampling/report/
+    watchlist/refresh/observations）与模型；
+  - 兼容：**market.py 内部对测试 patch 函数的 137 处调用全部改 `_app_call` 运行时转发**
+    （含 load_json_file/快照/watchlist/record/save/analyze/list/fetch/market_sampling_state 等
+    模块内互调也绕道 app，保证 patch app.X 生效）；`_app_call` 参数名改 `fn_name`（避免与
+    调用 kwargs 里的 name 冲突）；asyncio.to_thread 传函数引用改 `to_thread(_app_call, "fn", ...)`；
+    OUTPUTS_DIR 常量经 `_OUTPUTS_DIR()` 运行时读；测试引用的私有函数（_market_history_points/
+    _market_reference_zones）补进 __all__；
+  - 边界：策略区（research/reports/strategies/backtest）与附加区（valuation/etf-rotation/
+    convertible-bonds/portfolio-check/ai-scan 等 12 路由）留 app.py，下一批并入；_tencent_kline
+    （app.py:17979）暂经 _app_call 转发；
+  - app.py 从 3.27 万行累计降至 **2.02 万行**（20202 行），全量 509 通过，3.11 语法 + 转发 smoke 通过。
