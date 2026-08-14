@@ -79,6 +79,27 @@ def worker_lease(*args: Any, **kwargs: Any) -> Any:
     return _app.worker_lease(*args, **kwargs)
 
 
+def create_work_item_record(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.create_work_item_record（work-items 领域仍在 app.py）。"""
+    import app as _app
+
+    return _app.create_work_item_record(*args, **kwargs)
+
+
+def create_relation_record(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.create_relation_record（仍在 app.py）。"""
+    import app as _app
+
+    return _app.create_relation_record(*args, **kwargs)
+
+
+def load_market_snapshot() -> dict[str, Any]:
+    """延迟转发 app.load_market_snapshot（market 领域仍在 app.py）。"""
+    import app as _app
+
+    return _app.load_market_snapshot()
+
+
 def load_sub2api_snapshot() -> dict[str, Any]:
     try:
         values = json.loads(_snapshot_file().read_text(encoding="utf-8"))
@@ -900,4 +921,47 @@ def evaluate_sub2api_alerts(snapshot: dict[str, Any] | None = None, create_recor
             created.append({"alert": alert, "created": False})
             continue
 
-__all__ = ["_snapshot_file", "_panel_settings_file", "call_llm", "register_artifact_safely", "list_artifacts", "list_work_items", "update_work_item_record", "worker_lease", "load_sub2api_snapshot", "save_sub2api_snapshot", "_sub2api_text", "_sub2api_number", "_sub2api_timestamp", "_sub2api_quota", "_sub2api_key_value", "sanitize_sub2api_client_snapshot_id", "sanitize_sub2api_snapshot", "analyze_sub2api_snapshot", "sub2api_prediction", "explain_sub2api_change", "_panel_unwrap", "_panel_money", "_panel_tokens", "_panel_remaining_days", "_panel_usage_aggregate", "_panel_keys_list", "sub2api_cost_breakdown", "parse_sub2api_panel_raw", "load_sub2api_panel_settings", "save_sub2api_panel_settings", "sub2api_sync_state", "update_sub2api_sync_state", "sub2api_panel_base_url", "panel_refresh_access_token", "fetch_sub2api_panel_admin", "auto_sync_sub2api_panel", "sub2api_auto_sync_loop", "record_sub2api_snapshot", "list_sub2api_history", "evaluate_sub2api_alerts", "SUB2API_PANEL_SETTINGS_FILE", "SUB2API_SNAPSHOT_FILE"]
+
+
+def evaluate_sub2api_alerts(snapshot: dict[str, Any] | None = None, create_records: bool = False) -> dict[str, Any]:
+    snapshot = snapshot or load_sub2api_snapshot()
+    analysis = analyze_sub2api_snapshot(snapshot)
+    created: list[dict[str, Any]] = []
+    existing_items = list_work_items("all", "inbox") if create_records else []
+    latest_artifact = list_artifacts("sub2api")[0] if list_artifacts("sub2api") else None
+    # 恢复闭环：账户恢复正常后，仍挂着的旧告警自动标 done（不重复打扰）
+    active_keys = {f"sub2api:{alert['key']}" for alert in analysis["alerts"]}
+    restored: list[dict[str, Any]] = []
+    for item in list_work_items("all", "sub2api"):
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        alert_key = str(metadata.get("alert_key") or "")
+        if alert_key.startswith("sub2api:") and item.get("status") in {"open", "running", "blocked"} and alert_key not in active_keys:
+            update_work_item_record(item["id"], {"status": "done", "resolved_at": now_iso(), "resolved_by": "sub2api_health_recovery"})
+            restored.append({"alert_key": alert_key, "work_item_id": item["id"]})
+    for alert in analysis["alerts"]:
+        alert_key = f"sub2api:{alert['key']}"
+        existing = next((item for item in existing_items if item.get("metadata", {}).get("alert_key") == alert_key and item.get("status") in {"open", "running", "blocked"}), None)
+        if existing:
+            created.append({"alert": alert, "work_item": existing, "created": False})
+            continue
+        if not create_records:
+            created.append({"alert": alert, "created": False})
+            continue
+        priority = "urgent" if alert["level"] == "error" else "high"
+        item = create_work_item_record(
+            title=alert["title"],
+            description=f"{alert['message']} 数据时间：{analysis['freshness'].get('checked_at') or '未知'}。",
+            kind="alert",
+            priority=priority,
+            source_project="sub2api",
+            target_project="inbox",
+            metadata={"alert_key": alert_key, "notification_project": "sub2api", "checked_at": analysis["freshness"].get("checked_at", ""), "source": "sub2api_agent"},
+        )
+        relation = None
+        if latest_artifact:
+            relation = create_relation_record(from_type="artifact", from_id=str(latest_artifact["id"]), to_type="work_item", to_id=str(item["id"]), relation_type="alert_from_snapshot", metadata={"alert_key": alert_key})
+        existing_items.append(item)
+        created.append({"alert": alert, "work_item": item, "relation": relation, "created": True})
+    return {"analysis": analysis, "alerts": analysis["alerts"], "created": created, "restored": restored}
+
+__all__ = ["_snapshot_file", "_panel_settings_file", "load_sub2api_snapshot", "save_sub2api_snapshot", "_sub2api_text", "_sub2api_number", "_sub2api_timestamp", "_sub2api_quota", "_sub2api_key_value", "sanitize_sub2api_client_snapshot_id", "sanitize_sub2api_snapshot", "analyze_sub2api_snapshot", "sub2api_prediction", "explain_sub2api_change", "_panel_unwrap", "_panel_money", "_panel_tokens", "_panel_remaining_days", "_panel_usage_aggregate", "_panel_keys_list", "sub2api_cost_breakdown", "parse_sub2api_panel_raw", "load_sub2api_panel_settings", "save_sub2api_panel_settings", "sub2api_sync_state", "update_sub2api_sync_state", "sub2api_panel_base_url", "panel_refresh_access_token", "fetch_sub2api_panel_admin", "auto_sync_sub2api_panel", "sub2api_auto_sync_loop", "record_sub2api_snapshot", "list_sub2api_history", "evaluate_sub2api_alerts", "SUB2API_PANEL_SETTINGS_FILE", "SUB2API_SNAPSHOT_FILE"]
