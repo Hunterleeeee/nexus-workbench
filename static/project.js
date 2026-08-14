@@ -10,7 +10,7 @@ function formatDate(value) {
 }
 
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.194"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.195"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
   const theme = window.WorkbenchTheme;
   if (!theme) document.documentElement.dataset.theme = localStorage.getItem("workbench-theme") === "dark" ? "dark" : "light";
   const actions = document.querySelector(".page-actions, .actions, .bar-right, .topbar-right");

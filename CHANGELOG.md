@@ -1442,3 +1442,18 @@
     改为单引号；
   - app.py 从 3.27 万行累计降至 **2.4 万行**（24024 行），全量 509 通过，3.11 语法校验通过，
     `_app_call(run_evidence_matrix)` 转发路径 smoke 验证通过。
+
+## v0.3.195 · 2026-08-14
+
+- **拆分第九批：证据领域拆到 `app_pkg/evidence.py`**（546 行，app.py 降至 2.36 万行）：
+  - 拆出：数据层（evidence_edge_summary/evidence_verification_kind/reclassify_legacy_evidence/
+    evidence_record_timestamp）、evidence_for_llm、run_evidence_matrix、证据质量
+    （evidence_quality_descriptor/summary）、证据包 evidence_bundle_payload、5 个路由
+    （/api/evidence/matrix|run|{edge}/{scenario}|compare|handoff）、4 个请求模型；
+  - 兼容：agent runs/work items/relations/artifacts/projects/搜索等仍在 app.py 的函数全走
+    `_app_call` 转发；PROJECT_LINKS 经 `_PROJECT_LINKS()` 运行时读取；WORKBENCH_VERSION 从
+    instance 直连；AGENT_REGISTRY 从 agent_platform 直连；
+  - get_idea_evidence_pack 属 idea-analysis 留在 app.py（经 app 转发调 evidence_bundle_payload）；
+  - 7 个分散区间分拆（数据层 1015 / evidence_for_llm 3880 / matrix 17502 / 模型 17651+21108 /
+    路由 17910+21158），跨模块联动（automations evidence_audit → evidence matrix）smoke 验证通过；
+  - app.py 从 3.27 万行累计降至 **2.36 万行**（23567 行），全量 509 通过，3.11 语法校验通过。
