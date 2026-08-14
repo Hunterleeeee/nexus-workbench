@@ -1405,3 +1405,11 @@
     （含 asyncio.to_thread 传函数引用的形式）；夹带的 agent 平台常量（AGENT_ROUTE_HINTS/
     AGENT_PLAYBOOKS/AGENT_RESULT_*）撤回 app.py（被 agent 平台函数引用，__all__ 不导出会 NameError）；
   - call_llm_with_tools 与 agent 平台耦合，留待 agent 平台层拆时并入。
+
+## v0.3.192 · 2026-08-14
+
+- **拆分第七批：Agent 平台层拆到 `app_pkg/agent_platform.py`**（995 行，app.py 降至 2.5 万行）：
+  - AGENT_* 平台常量（REGISTRY/TOOL_POLICIES/ROUTE_HINTS/PLAYBOOKS/IMPLEMENTATIONS/状态标签）+ SUBAGENT_TOOL_MAP + 结果契约常量；
+  - 平台函数：runtime_tool_policy/assert_runtime_tool_policies/subagent_tool_schemas/结果契约解析（_contract_source_*/agent_result_contract）/available_child_agents/capability_route_explanation/agent_declared_tools/validate_agent_tool_requests/build_agent_execution_plan/capability_graph_payload；
+  - 兼容：REACT_TOOLS/SUBAGENT_EXTRA_TOOLS 是粘合层（引用各领域 handler）留 app.py，平台模块运行时经 `_react_tools()` 读取；projects 域函数（agent_display_name/load_projects 等）延迟转发；
+  - app.py 从 3.27 万行累计降至 **2.5 万行**，全量 509 通过。dispatch_agent_task/call_llm_with_tools 执行器下一批。
