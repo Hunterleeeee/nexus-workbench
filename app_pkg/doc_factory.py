@@ -6,6 +6,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import subprocess
+import uuid
 import httpx
 import json
 import re
@@ -17,7 +21,7 @@ from fastapi import File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from .agent_runs import add_agent_run_event, create_agent_run_record, get_agent_run, update_agent_run_record
-from .core import OUTPUTS_DIR, clip, clip_for_llm, log, now_iso
+from .core import OUTPUTS_DIR, WORKBENCH_VERSION, clip, clip_for_llm, log, now_iso
 from .db import db_connection
 from .instance import app
 from .knowledge import extract_upload_text, knowledge_tokens, write_knowledge_note

@@ -11,7 +11,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .core import log, now_iso
+from fastapi.responses import FileResponse
+
+from .core import STATIC_DIR, log, now_iso
 from .db import db_connection
 from .instance import app
 

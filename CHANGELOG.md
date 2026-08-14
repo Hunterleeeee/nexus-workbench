@@ -1734,3 +1734,23 @@
     开源发布时替换 projects.json 即不引导爬虫入口，Agent 也不碰爬虫工具；
   - 验证：模拟 crawl4ai/market disabled → 首页排除 + 工具表移除（真实执行）；
     默认配置零影响（工具齐全）；全量 509 通过 + 3.11。
+
+## v0.3.211 · 2026-08-14
+
+- **修复拆分遗留的 15 个缺陷 + 插拔全链路补全**（用户 Bug 清单）：
+  - **P0 核心功能 7 个**：chat 复用 Crawl 结果 500（to_thread create_agent_run_record 未转发）、
+    doc_factory DOCX/PDF 交付 500（缺 WORKBENCH_VERSION/os/shutil/subprocess/uuid）、git
+    inventory-push 422（缺 Request/json/HTTPException）、trace recent 500（缺 load_projects/
+    project_href）、capability-graph 500（依赖转发 + aihot agent_detail 缺 AGENT_REGISTRY/
+    agent_display_name/agent_status_label 等 9 符号）、system-arch/heartbeat 500（worker 依赖 +
+    PROJECT_LINKS 常量改运行时读）、agent queue 消费 NameError（to_thread 3 处转发）；
+  - **P1 2 个**：backups 路由 500（Path/HTTPException/DATABASE_FILE 运行时读）、usage 页 500
+    （FileResponse/STATIC_DIR——「符号在注解里出现导致跳过判断误判」的坑）；
+  - **插拔补全 6 个**：require_project_agent 拒绝禁用项目（404）、route_child_agents 过滤
+    children、capability_graph_route 候选过滤、available_child_agents 过滤、PROJECT_REACT_TOOLS
+    补全（server/sub2api/knowledge/inbox/aihot）、**app.py 项目启用门中间件**（页面 + 业务
+    API 统一 404，路径前缀→项目映射，/api/agent/{id} 动态解析）；
+  - 额外揪出 3 个：browser BackgroundTasks 注解未导入（eager 注解全检抓出）、agent_engine
+    capability_graph_route 未导入（调度核心）、aihot _strip_html 转发；
+  - 验证：15 项逐条真实 smoke 全过 + 插拔模拟（禁用 crawl4ai → 页面/API/Agent/路由/工具
+    全拦截 404）；510 测试全绿 + 3.11 + eager 注解全检。

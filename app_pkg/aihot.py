@@ -26,8 +26,16 @@ from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .agent_platform import agent_result_contract
+from .agent_platform import (
+    AGENT_IMPLEMENTATIONS,
+    AGENT_PLAYBOOKS,
+    AGENT_REGISTRY,
+    AGENT_TOOL_POLICIES,
+    agent_result_contract,
+)
 from .agent_runs import (
+    agent_run_summary,
+    get_agent_run,
     add_agent_message,
     add_agent_run_event,
     create_agent_run_record,
@@ -39,6 +47,7 @@ from .agent_runs import (
 )
 from .core import (
     AIHOT_FEED_URL,
+    OUTPUTS_DIR,
     AIHOT_SNAPSHOT_FILE,
     STATIC_DIR,
     DATA_DIR,
@@ -55,10 +64,11 @@ from .db import db_connection
 from .instance import app
 from .sub2api import _SUB2API_CORS_PATH
 from .evidence import evidence_quality_descriptor, evidence_quality_summary
-from .llm import call_llm, llm_settings
+from .knowledge import knowledge_tokens
+from .llm import call_llm, llm_settings, stream_llm_text
 from .memories import sync_cid_preferences_to_memories
 from .notifications import create_notification_record
-from .projects import _audit_datetime
+from .projects import _audit_datetime, agent_display_name, agent_status_label, project_link_summary
 
 
 def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
@@ -1872,7 +1882,7 @@ def parse_rss_items(xml_text: str, source_name: str) -> list[dict[str, Any]]:
         items.append({
             "id": f"rss:{hashlib.md5(link.encode('utf-8')).hexdigest()[:12]}",
             "title": title,
-            "description": _strip_html(desc)[:300],
+            "description": _app_call('_strip_html', desc)[:300],
             "source": source_name,
             "tags": [],
             "published_at": pub,
@@ -1894,7 +1904,7 @@ def parse_rss_items(xml_text: str, source_name: str) -> list[dict[str, Any]]:
             items.append({
                 "id": f"rss:{hashlib.md5(link.encode('utf-8')).hexdigest()[:12]}",
                 "title": title,
-                "description": _strip_html(desc)[:300],
+                "description": _app_call('_strip_html', desc)[:300],
                 "source": source_name,
                 "tags": [],
                 "published_at": pub,

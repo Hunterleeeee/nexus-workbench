@@ -11,10 +11,13 @@
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 from datetime import datetime, timezone
 import sqlite3
 import threading
 from typing import Any
+
+from fastapi import HTTPException
 
 from .core import DATA_DIR, WORKBENCH_VERSION, log, now_iso
 from .instance import app
@@ -1340,7 +1343,7 @@ def restore_database_backup(name: str) -> dict[str, Any]:
 
 @app.get("/api/backups")
 async def get_backups() -> dict[str, Any]:
-    return {"backups": list_database_backups(), "database": str(DATABASE_FILE), "current": database_metadata()}
+    return {"backups": list_database_backups(), "database": str(_database_file()), "current": database_metadata()}
 
 
 @app.post("/api/backups")

@@ -90,7 +90,7 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         raise HTTPException(409, "请等爬取完成后再分析")
     if not _app_call('llm_settings', )["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
-    durable = await asyncio.to_thread(create_agent_run_record, 
+    durable = await asyncio.to_thread(_app_call, 'create_agent_run_record', 
         project_id="crawl4ai",
         parent_run_id=request.run_id,
         kind="chat",

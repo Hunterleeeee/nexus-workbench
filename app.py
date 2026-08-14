@@ -1044,3 +1044,65 @@ async def app_token_auth_middleware(request: Request, call_next: Any) -> Any:
         return _JSONResponse({"detail": "缺少或错误的 Workbench 访问令牌"}, status_code=401)
     return await call_next(request)
 
+
+
+# ---------------------------------------------------------------------------
+# 项目插拔（页面 / API 层）：enabled=false 的项目，其页面与业务 API 直接 404。
+# 与入口层（首页过滤）不同——这里是纵深防御：即使有人直接输 URL 或调 API，
+# 禁用项目也拿不到任何东西。中间件按路径前缀映射项目 id；部署级配置是静态
+# 快照（改 projects.json 后需重启生效），与工具注册表的行为保持一致。
+# ---------------------------------------------------------------------------
+def _disabled_project_ids_at_startup() -> frozenset[str]:
+    try:
+        values = json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    return frozenset(str(item.get("id")) for item in values if isinstance(item, dict) and item.get("enabled") is False)
+
+
+_PROJECT_DISABLED_IDS = _disabled_project_ids_at_startup()
+
+# 路径前缀 → 项目 id；None 表示从路径段解析（/projects/{id}）。
+_PROJECT_PATH_RULES: list[tuple[str, str | None]] = [
+    ("/crawl4ai", "crawl4ai"),
+    ("/projects/", None),
+    ("/api/inbox", "inbox"),
+    ("/api/knowledge", "knowledge"),
+    ("/api/doc-factory", "doc-factory"),
+    ("/api/sub2api", "sub2api"),
+    ("/api/market", "market"),
+    ("/api/server", "server"),
+    ("/api/aihot", "aihot"),
+    ("/api/cid", "cid-dashboard"),
+    ("/api/idea", "idea-analysis"),
+    ("/api/product", "product-manager"),
+    ("/api/ai-learning", "ai-learning"),
+    ("/api/embodied", "embodied"),
+    ("/api/crawl", "crawl4ai"),
+    ("/api/browser", "crawl4ai"),
+    ("/api/research", "web-research"),
+    ("/api/cloud-dev", "cloud-dev"),
+]
+
+
+def _path_project_id(path: str) -> str | None:
+    for prefix, project_id in _PROJECT_PATH_RULES:
+        if path.startswith(prefix):
+            if project_id:
+                return project_id
+            seg = path[len(prefix):].strip("/").split("/")[0]
+            return seg or None
+    if path.startswith("/api/agent/"):
+        return path[len("/api/agent/"):].split("/")[0] or None
+    return None
+
+
+@app.middleware("http")
+async def project_enabled_gate(request: Request, call_next: Any) -> Any:
+    if _PROJECT_DISABLED_IDS:
+        project_id = _path_project_id(request.url.path)
+        if project_id and project_id in _PROJECT_DISABLED_IDS:
+            from starlette.responses import JSONResponse as _JSONResponse
+
+            return _JSONResponse({"detail": "项目未启用"}, status_code=404)
+    return await call_next(request)

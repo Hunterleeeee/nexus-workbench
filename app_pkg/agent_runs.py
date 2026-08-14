@@ -19,7 +19,7 @@ from .agent_platform import AGENT_RUN_STATUS_LABELS
 from .core import clip, decode_json_column, log, now_iso
 from .db import db_connection
 from .notifications import create_notification_record
-from .projects import _audit_datetime, agent_display_name
+from .projects import _audit_datetime, agent_display_name, load_projects, project_href
 from .usage import USAGE_EXCLUDED_RUN_KINDS
 from .instance import app
 

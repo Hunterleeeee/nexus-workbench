@@ -8,6 +8,7 @@ dispatch_agent_task/call_llm_with_tools 执行器随后续批次并入。
 from __future__ import annotations
 
 import asyncio
+import importlib
 import httpx
 import json
 import re
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from .core import (
     MAX_CONVERSATION_MESSAGES,
+    WORKBENCH_VERSION,
     PROJECTS_FILE,
     clip,
     clip_for_llm,
@@ -67,6 +69,13 @@ SUBAGENT_TOOL_MAP: dict[str, list[str]] = {
     # handler、被静默丢掉的名字。
     "cloud-dev": ["cloud_dev_generate", "cloud_dev_patch", "cloud_dev_status", "cloud_dev_test", "work_items_read", "notify", "web_search", "web_fetch"],
 }
+
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
 
 
 def _disabled_project_ids() -> set[str]:
@@ -876,7 +885,9 @@ def agent_result_contract(
 
 
 def available_child_agents() -> list[str]:
-    return [item.get("id") for item in load_projects() if item.get("id") in AGENT_REGISTRY]
+    # 项目插拔：enabled=false 的项目不进候选（影响能力图/自动路由/子 Agent 列表）
+    return [item.get("id") for item in load_projects()
+            if item.get("id") in AGENT_REGISTRY and item.get("enabled") is not False]
 
 
 
@@ -1031,9 +1042,9 @@ def capability_graph_payload() -> dict[str, Any]:
     nodes = []
     for project_id in available_child_agents():
         detail = agent_detail(project_id, llm_ready=bool(llm_settings()["configured"]))
-        freshness = project_data_freshness(project_id)
-        summary = agent_run_summary(project_id)
-        quality = agent_quality_metrics(project_id, 24)
+        freshness = _app_call('project_data_freshness', project_id)
+        summary = _app_call('agent_run_summary', project_id)
+        quality = _app_call('agent_quality_metrics', project_id, 24)
         nodes.append({
             "id": project_id,
             "name": detail.get("name") or agent_display_name(project_id),
@@ -1046,7 +1057,8 @@ def capability_graph_payload() -> dict[str, Any]:
             "quality": quality,
             "links": project_link_summary(project_id),
         })
-    return {"generated_at": now_iso(), "nodes": nodes, "edges": [public_project_link(edge) for edge in PROJECT_LINKS]}
+        import app as _app
+    return {"generated_at": now_iso(), "nodes": nodes, "edges": [public_project_link(edge) for edge in _app.PROJECT_LINKS]}
 
 
 def add_agent_run_event(*args: Any, **kwargs: Any) -> Any:
@@ -1590,7 +1602,7 @@ def capability_graph_route(message: str, children: list[str] | None = None) -> l
     lowered = str(message or "").lower()
     scored: list[tuple[float, str]] = []
     for project_id in candidates:
-        if project_id not in AGENT_REGISTRY or project_id == "workbench":
+        if project_id not in AGENT_REGISTRY or project_id == "workbench" or project_id in _DISABLED_PROJECT_IDS:
             continue
         hints = AGENT_ROUTE_HINTS.get(project_id, ())
         playbook = AGENT_PLAYBOOKS.get(project_id, {})
@@ -1599,12 +1611,12 @@ def capability_graph_route(message: str, children: list[str] | None = None) -> l
         detail = agent_detail(project_id, llm_ready=bool(llm_settings()["configured"]))
         tools = set(detail.get("tools") or detail.get("implemented_tools") or [])
         if any(term in lowered for term in ("最新", "同步", "刷新", "数据时间", "变化")):
-            freshness = project_data_freshness(project_id)
+            freshness = _app_call('project_data_freshness', project_id)
             if freshness.get("status") in {"stale", "missing"}:
                 score += 2.0
         if tools:
             score += min(1.5, len(tools) * 0.1)
-        active = int((agent_run_summary(project_id) or {}).get("active", 0))
+        active = int((_app_call('agent_run_summary', project_id) or {}).get("active", 0))
         score -= min(1.5, active * 0.25)
         if score > 0:
             scored.append((score, project_id))
@@ -1629,7 +1641,7 @@ def get_capability_graph() -> dict[str, Any]:
 
 @app.get("/api/system/architecture")
 def get_system_architecture() -> dict[str, Any]:
-    workers = worker_status_payload()
+    workers = _app_call('worker_status_payload', )
     worker_by_id = {worker["id"]: worker for worker in workers}
 
     def component_status(worker_id: str) -> str:
@@ -1668,12 +1680,12 @@ class WorkerHeartbeatRequest(BaseModel):
 @app.post("/api/workers/{worker_id}/heartbeat")
 def heartbeat_worker(worker_id: str, request: WorkerHeartbeatRequest) -> dict[str, Any]:
     try:
-        worker = worker_lease(worker_id, status=request.status.strip() or "ready", metadata=request.metadata)
+        worker = _app_call('worker_lease', worker_id, status=request.status.strip() or "ready", metadata=request.metadata)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     if worker.get("status") == "held_by_other_instance":
         raise HTTPException(409, f"Worker {worker_id} 当前由其他实例持有")
-    return {"ok": True, "worker": worker, "workers": worker_status_payload()}
+    return {"ok": True, "worker": worker, "workers": _app_call('worker_status_payload', )}
 
 
 __all__ = [

@@ -21,6 +21,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .agent_platform import (
+    _DISABLED_PROJECT_IDS,
+    capability_graph_route,
     AGENT_PLAYBOOKS,
     SUBAGENT_TOOL_MAP,
     AGENT_REGISTRY,
@@ -199,6 +201,9 @@ class WorkItemTakeoverRequest(BaseModel):
 
 def require_project_agent(project_id: str) -> None:
     if project_id not in AGENT_REGISTRY or project_id == "workbench":
+        raise HTTPException(404, "项目 Agent 不存在")
+    # 项目插拔：enabled=false 的项目不提供 Agent（含聊天/会话/执行队列）
+    if project_id in _DISABLED_PROJECT_IDS:
         raise HTTPException(404, "项目 Agent 不存在")
 
 
@@ -2471,9 +2476,17 @@ READ_ONLY_REACT_TOOLS = frozenset({
 # 项目插拔（能力层）：enabled=false 的项目对应的 ReAct 工具一并移除。
 # REACT_TOOLS 里项目专属的只有少数（market_read / cloud_dev_*），通用工具
 # （web_search/web_fetch/notify/work_items_read）不属于任何单一项目。
+# 项目插拔（能力层）：enabled=false 的项目对应的 ReAct 工具一并移除。
+# 只列「项目专属」工具；通用工具（web_search/web_fetch/notify/work_items_read）
+# 不属于任何单一项目，禁用任何项目都不应影响它们。
 PROJECT_REACT_TOOLS: dict[str, set[str]] = {
     "market": {"market_read"},
     "cloud-dev": {"cloud_dev_generate", "cloud_dev_patch"},
+    "server": {"server_status"},
+    "sub2api": {"sub2api_status"},
+    "knowledge": {"knowledge_search"},
+    "inbox": {"inbox_read", "inbox_capture"},
+    "aihot": {"aihot_read"},
 }
 
 
@@ -2949,6 +2962,8 @@ assert_subagent_tools_exist()
 
 def route_child_agents(message: str, requested: list[str]) -> list[str]:
     children = set(AGENT_REGISTRY["workbench"].get("children", []))
+    # 项目插拔：禁用项目不参与显式调度与自动路由
+    children = children - _DISABLED_PROJECT_IDS
     explicit = [item for item in requested if item in children and item in AGENT_REGISTRY]
     if explicit:
         return list(dict.fromkeys(explicit))

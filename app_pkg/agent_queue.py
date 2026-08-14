@@ -364,8 +364,8 @@ async def run_queued_agent_task(task: dict[str, Any]) -> dict[str, Any]:
     _app_call('require_project_agent', project_id)
     session = _app_call('get_agent_session', str(payload.get("session_id") or ""), project_id) if payload.get("session_id") else None
     if not session:
-        session = await asyncio.to_thread(create_agent_session, project_id, message)
-    await asyncio.to_thread(add_agent_message, session["id"], "user", message, {"source": "agent_queue", "queue_id": task["id"]})
+        session = await asyncio.to_thread(_app_call, 'create_agent_session', project_id, message)
+    await asyncio.to_thread(_app_call, 'add_agent_message', session["id"], "user", message, {"source": "agent_queue", "queue_id": task["id"]})
     run = await asyncio.to_thread(
         create_agent_run_record,
         project_id=project_id,
