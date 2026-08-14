@@ -1495,3 +1495,21 @@
     convertible-bonds/portfolio-check/ai-scan 等 12 路由）留 app.py，下一批并入；_tencent_kline
     （app.py:17979）暂经 _app_call 转发；
   - app.py 从 3.27 万行累计降至 **2.02 万行**（20202 行），全量 509 通过，3.11 语法 + 转发 smoke 通过。
+
+## v0.3.198 · 2026-08-14
+
+- **拆分第十二批：market 策略区 + 附加区并入 `app_pkg/market.py`**（market.py 增至约 3900 行，
+  app.py 降至 1.9 万行，最后的大山收官）：
+  - 拆出：策略模型 6 个（MarketResearch/Strategy/Backtest/WalkForward/Compare/Sensitivity）、
+    策略实现（SUPPORTED_MARKET_STRATEGIES/market_backtest/market_walk_forward/_simulate_*/
+    market_backtest_samples/quality）、策略路由 8 个（research/reports/strategies/backtest/
+    walk-forward/compare/sensitivity）、valuation/conclude 路由与模型、_tencent_kline +
+    _TENCENT_KLINE_CACHE（不再转发）、附加实现 7 函数（etf-rotation/convertible-bonds/
+    valuation-percentile/portfolio-check/research-card/ai-scan）+ 附加路由 6 个；
+  - 兼容：新增代码的模块内互调再补 161 处 _app_call 转发；**全局正则替换误伤 71 个 def 行**
+    （def market_backtest( 被替换成 def _app_call("market_backtest", )）——用
+    `def _app_call\("(\w+)"(, ?)?` 正则批量恢复，教训：**正则替换必须逐行跳过 def/import 行**
+    （第一批逐行处理无此问题，第二批偷懒用全局 re.sub 就炸了）；源码断言测试
+    （SerialUpstreamFetchTests 3 个）适配到 app_pkg/market.py；
+  - app.py 从 3.27 万行累计降至 **1.9 万行**（19035 行），market 全部 33 路由拆完，
+    全量 509 通过，3.11 语法 + 回测/路由 smoke 通过。

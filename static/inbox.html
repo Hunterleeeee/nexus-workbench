@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.197"></script>
+  <script src="/static/theme.js?v=0.3.198"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>快速收件箱 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.197" />
+  <link rel="stylesheet" href="/static/project.css?v=0.3.198" />
 </head>
 <body>
   <div class="page-shell">
@@ -23,7 +23,7 @@
   </div>
   <div id="global-settings-modal" class="modal-backdrop hidden"><form id="global-settings-form" class="modal"><div class="modal-head"><div><h2>工作台全局 LLM</h2><p>可配置多个 URL / Key 条目；主配置优先调用，失败时按顺序切换到 fallback。</p></div><button class="icon-button" data-close-global-settings type="button" aria-label="关闭">×</button></div><div id="global-providers" class="global-providers" aria-label="LLM 配置条目列表"></div><button id="global-add-provider" class="global-add-provider" type="button">＋ 添加一个配置条目</button><p id="global-llm-summary" class="global-llm-summary" role="status"></p><p id="global-settings-message" class="modal-message" role="status"></p><div class="modal-actions"><button class="secondary-button" data-close-global-settings type="button">取消</button><button class="primary-button" type="submit">保存全局配置</button></div></form></div>
   <div id="inbox-compose-modal" class="modal-backdrop hidden"><div class="modal inbox-compose-modal" role="dialog" aria-modal="true" aria-label="记录到收件箱"><div class="modal-head"><div><h2>记录到收件箱</h2><p>左侧编辑，右侧实时预览；⌘ ↵ 保存，Esc 关闭。</p></div><button class="icon-button" data-close-inbox-compose type="button" aria-label="关闭">×</button></div><div class="inbox-toolbar" aria-label="格式工具栏"><button type="button" data-md-wrap="**" title="加粗"><b>B</b></button><button type="button" data-md-wrap="*" title="斜体"><i>I</i></button><button type="button" data-md-wrap="`" title="行内代码">⟨/⟩</button><button type="button" data-md-line="### " title="标题">H</button><button type="button" data-md-line="- " title="列表">列表</button><button type="button" data-md-line="> " title="引用">引用</button><button type="button" data-md-link title="插入链接">链接</button></div><div class="inbox-compose-grid"><div class="inbox-compose-pane"><textarea id="inbox-compose-text" placeholder="想到什么就写什么，也可以直接粘贴链接…（Markdown）" required></textarea></div><div class="inbox-compose-preview"><div id="inbox-compose-preview" class="md-inbox-preview" aria-live="polite"><p class="md-p">预览会显示在这里</p></div></div></div><div class="two-col"><label>类型<select id="inbox-compose-kind"><option value="note">笔记</option><option value="task">待办</option><option value="link">链接</option><option value="idea">想法</option><option value="research">研究</option><option value="document">文档</option><option value="alert">告警</option></select></label><label>优先级<select id="inbox-compose-priority"><option value="normal">普通</option><option value="high">高</option><option value="urgent">紧急</option><option value="low">低</option></select></label></div><label>来源（可选）<input id="inbox-compose-source" placeholder="例如：https://… 或 会议 / 项目名" /></label><label>标签<input id="inbox-compose-tags" placeholder="例如：产品, 待研究" /></label><p id="inbox-compose-message" class="modal-message" role="status" aria-live="polite"></p><div class="modal-actions"><button class="secondary-button" data-close-inbox-compose type="button">取消</button><button id="inbox-compose-save" class="primary-button" type="button">保存到收件箱</button></div></div></div>
-      <script src="/static/request.js?v=0.3.197"></script><script src="/static/llm-settings.js?v=0.3.197"></script><script src="/static/markdown.js?v=0.3.197"></script><script src="/static/project.js?v=0.3.197"></script><script>
+      <script src="/static/request.js?v=0.3.198"></script><script src="/static/llm-settings.js?v=0.3.198"></script><script src="/static/markdown.js?v=0.3.198"></script><script src="/static/project.js?v=0.3.198"></script><script>
     let currentStatus = "inbox";
     const selectedIds = new Set();
     const content = document.querySelector("#inbox-content");

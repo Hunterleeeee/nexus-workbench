@@ -1882,7 +1882,8 @@ class SerialUpstreamFetchTests(unittest.TestCase):
     """
 
     def source(self):
-        return (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # market 并发实现已随拆分迁到 app_pkg/market.py
+        return (Path(__file__).resolve().parents[1] / "app_pkg" / "market.py").read_text(encoding="utf-8")
 
     def test_etf_rotation_fetches_the_pool_concurrently(self):
         body = self.source()

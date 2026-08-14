@@ -1564,7 +1564,7 @@ def get_market_decision_center() -> dict[str, Any]:
 @app.post("/api/market/watchlist/rules")
 def set_market_watchlist_rule(request: MarketRuleRequest) -> dict[str, Any]:
     try:
-        return save_market_watchlist_rule(request)
+        return _app_call("save_market_watchlist_rule", request)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1767,7 +1767,7 @@ def score_candidates(candidates: list[dict[str, Any]], criteria: MarketScreenReq
             "stability": stability_score,
             "total": round(total, 1),
         }
-        item["warnings"] = candidate_warnings(item)
+        item["warnings"] = _app_call("candidate_warnings", item)
         scored.append(item)
     scored.sort(key=lambda entry: entry["scores"]["total"], reverse=True)
     return scored
@@ -2586,7 +2586,1240 @@ def evaluate_market_observations_route() -> dict[str, Any]:
     return {"ok": True, **result, "observation_tasks": observation_tasks}
 
 
+
+
+class MarketResearchRequest(BaseModel):
+    symbol: str = Field(default="", max_length=20)
+    question: str = Field(min_length=1, max_length=2_000)
+    event_date: str = Field(default="", max_length=40)
+
+
+class MarketStrategyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    rules: dict[str, Any] = Field(default_factory=dict)
+    note: str = Field(default="", max_length=2_000)
+
+
+class MarketBacktestRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+    strategy: str = Field(default="momentum", max_length=40)
+    window: int = Field(default=5, ge=2, le=60)
+    fee_bps: float = Field(default=10, ge=0, le=500)
+    slippage_bps: float = Field(default=5, ge=0, le=500)
+
+
+class MarketWalkForwardRequest(MarketBacktestRequest):
+    train_size: int = Field(default=30, ge=5, le=160)
+    test_size: int = Field(default=5, ge=2, le=60)
+    step_size: int = Field(default=5, ge=2, le=60)
+    max_folds: int = Field(default=8, ge=1, le=20)
+
+
+class MarketStrategyCompareRequest(MarketBacktestRequest):
+    strategies: list[str] = Field(default_factory=lambda: ["momentum", "mean_reversion"], min_length=2, max_length=4)
+
+
+class MarketSensitivityRequest(MarketBacktestRequest):
+    pass
+
+
+SUPPORTED_MARKET_STRATEGIES = {"momentum", "mean_reversion"}
+
+
+def normalize_market_strategy(value: Any) -> str:
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate in SUPPORTED_MARKET_STRATEGIES else ""
+
+
+def market_backtest_input_error(symbol: Any, strategy: Any) -> str:
+    if not _app_call("normalize_market_symbol", symbol):
+        return "无法识别股票代码，请填写 6 位 A 股/ETF 代码或 sh/sz 前缀。"
+    if not _app_call("normalize_market_strategy", strategy):
+        return "strategy 只能是 momentum 或 mean_reversion。"
+    return ""
+
+
+def market_history_series(symbol: str) -> list[dict[str, Any]]:
+    normalized = _app_call("normalize_market_symbol", symbol)
+    by_timestamp: dict[str, dict[str, Any]] = {}
+    for row in _app_call("list_market_history", limit=200):
+        checked_at = row.get("checked_at")
+        quote = next((item for item in row.get("quotes", []) if _app_call("normalize_market_symbol", item.get("symbol", "")) == normalized), None)
+        quality = _app_call("market_quote_quality", quote or {})
+        if quote and quality.get("valid") and quality.get("price") is not None:
+            by_timestamp[_app_call("market_timestamp_key", checked_at)] = {"checked_at": checked_at, "price": float(quality["price"]), "volume": quality.get("volume")}
+    return sorted(
+        by_timestamp.values(),
+        key=lambda item: _sub2api_timestamp(item["checked_at"]) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+
+
+def market_backtest_samples(symbol: str, snapshot: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return valid samples and an explicit rejection list for backtests."""
+    normalized = _app_call("normalize_market_symbol", symbol)
+    valid_by_timestamp: dict[str, dict[str, Any]] = {}
+    rejected: list[dict[str, Any]] = []
+    entries = [(row, False) for row in _app_call("list_market_history", limit=200)]
+    if isinstance(snapshot, dict) and snapshot.get("checked_at"):
+        # The current JSON snapshot may not have been persisted yet when a
+        # caller hits the backtest endpoint directly.  Include it explicitly;
+        # if its timestamp already exists in history, the current payload wins.
+        entries.append((snapshot, True))
+    for row, is_current in entries:
+        checked_at = str(row.get("checked_at") or row.get("created_at") or "")
+        if not checked_at:
+            rejected.append({"checked_at": "", "reason": "缺少数据时间"})
+            continue
+        quote = next((item for item in row.get("quotes", []) if _app_call("normalize_market_symbol", item.get("symbol", "")) == normalized), None)
+        quality = _app_call("market_quote_quality", quote or {})
+        if not quote or not quality.get("valid"):
+            rejected.append({"checked_at": checked_at, "reason": "；".join(quality.get("reasons") or ["缺少报价"])})
+            continue
+        timestamp_key = _app_call("market_timestamp_key", checked_at)
+        if timestamp_key in valid_by_timestamp:
+            if is_current:
+                # A normal /api/market request persists the same snapshot in
+                # SQLite first.  Do not lower the quality score for that
+                # expected mirror; simply let the current payload win.
+                valid_by_timestamp[timestamp_key] = {"checked_at": checked_at, "price": float(quality["price"]), "volume": quality.get("volume"), "source": str(row.get("source") or "unknown")}
+                continue
+            rejected.append({"checked_at": checked_at, "reason": "重复数据时间"})
+            continue
+        valid_by_timestamp[timestamp_key] = {"checked_at": checked_at, "price": float(quality["price"]), "volume": quality.get("volume"), "source": str(row.get("source") or "unknown")}
+    valid = sorted(
+        valid_by_timestamp.values(),
+        key=lambda item: _sub2api_timestamp(item["checked_at"]) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    return valid, rejected
+
+
+def market_backtest_quality(points: list[dict[str, Any]], rejected: list[dict[str, Any]], window: int) -> dict[str, Any]:
+    """Summarize whether a local snapshot series is fit for a research backtest."""
+    minimum_required = max(3, int(window) + 1)
+    total = len(points) + len(rejected)
+    coverage = 0.0
+    parsed_times = [_sub2api_timestamp(item.get("checked_at")) for item in points]
+    parsed_times = [item for item in parsed_times if item]
+    if len(parsed_times) >= 2:
+        coverage = round(max(0.0, (parsed_times[-1] - parsed_times[0]).total_seconds() / 86400), 2)
+    score = round(len(points) / total, 3) if total else 0.0
+    enough = len(points) >= minimum_required
+    sample_interval_hours = None
+    if len(parsed_times) >= 2:
+        intervals = [max(0.0, (current - previous).total_seconds() / 3600) for previous, current in zip(parsed_times, parsed_times[1:])]
+        if intervals:
+            sample_interval_hours = round(statistics.median(intervals), 2)
+    source_counts: dict[str, int] = {}
+    for point in points:
+        source = str(point.get("source") or "unknown")
+        source_counts[source] = source_counts.get(source, 0) + 1
+    source_stability = "unknown" if not source_counts or set(source_counts) == {"unknown"} else "stable" if len(source_counts) == 1 else "mixed"
+    # Compare coverage to the requested number of *sample intervals*, not to
+    # a fixed number of calendar days.  A 20-point 5-minute sample should not
+    # be rejected as if it were a 20-day daily series.
+    interval_days = sample_interval_hours / 24 if sample_interval_hours and sample_interval_hours > 0 else 1.0
+    coverage_required_days = round(max(interval_days * max(float(window), 2.0) * 0.75, interval_days * 2.0), 2)
+    coverage_ready = coverage >= coverage_required_days
+    confidence = (
+        "high"
+        if enough and len(points) >= 20 and score >= 0.9 and coverage_ready and source_stability == "stable"
+        else "medium"
+        if enough and score >= 0.7 and coverage >= max(0.5, coverage_required_days * 0.5)
+        else "low"
+    )
+    if sample_interval_hours is None:
+        interval_label = "无法估计"
+    elif sample_interval_hours >= 24:
+        interval_label = f"约 {round(sample_interval_hours / 24, 2)} 天/点"
+    else:
+        interval_label = f"约 {sample_interval_hours} 小时/点"
+    return {
+        "valid_count": len(points),
+        "rejected_count": len(rejected),
+        "minimum_required": minimum_required,
+        "usable_window_count": max(0, len(points) - int(window)),
+        "coverage_days": coverage,
+        "coverage_required_days": coverage_required_days,
+        "coverage_required_intervals": round(coverage_required_days / interval_days, 2) if interval_days > 0 else None,
+        "coverage_ready": coverage_ready,
+        "sample_interval_hours": sample_interval_hours,
+        "sample_interval_label": interval_label,
+        "quality_score": score,
+        "confidence": confidence,
+        "status": "ready" if enough else "insufficient",
+        "source_counts": source_counts,
+        "source_stability": source_stability,
+        "rejected": rejected[:20],
+        "policy": "仅使用现价、昨收和涨跌幅一致的唯一时间点；异常样本不参与回测；多个行情源混用时降低来源稳定性提示。",
+    }
+
+
+def _simulate_market_backtest(
+    points: list[dict[str, Any]],
+    strategy: str,
+    window: int,
+    fee_bps: float,
+    slippage_bps: float,
+    evaluation_start: int = 0,
+) -> dict[str, Any]:
+    """Run one deterministic simulation without reading or writing application state."""
+    prices = [float(item["price"]) for item in points]
+    if not prices:
+        return {
+            "capital": 1.0,
+            "trades": [],
+            "closed_returns": [],
+            "net_return_pct": 0.0,
+            "benchmark_return_pct": None,
+            "active_return_pct": None,
+            "max_drawdown_pct": 0.0,
+            "realized_volatility_pct": None,
+            "sample_sharpe_ratio": None,
+            "sample_sortino_ratio": None,
+            "exposure_pct": 0.0,
+            "trade_count": 0,
+            "win_rate": None,
+            "profit_factor": None,
+            "average_trade_return_pct": None,
+            "equity_curve": [],
+        }
+    evaluation_start = max(0, min(int(evaluation_start or 0), len(points) - 1))
+    fee_rate = max(0.0, float(fee_bps)) / 10_000
+    slippage_rate = max(0.0, float(slippage_bps)) / 10_000
+    capital = 1.0
+    holdings = 0.0
+    entry_cash = None
+    trades: list[dict[str, Any]] = []
+    closed_returns: list[float] = []
+    equity_curve: list[float] = []
+    held_samples = 0
+
+    for index, current in enumerate(prices):
+        if index >= max(window, evaluation_start):
+            average = statistics.mean(prices[index - window:index])
+            should_hold = current < average * 0.98 if strategy == "mean_reversion" else current > average * 1.01
+            if should_hold and holdings == 0:
+                execution_price = current * (1 + slippage_rate)
+                entry_cash = capital
+                holdings = capital / (execution_price * (1 + fee_rate))
+                capital = 0.0
+                trades.append({"action": "buy_simulated", "at": points[index]["checked_at"], "price": current, "execution_price": round(execution_price, 6)})
+            elif not should_hold and holdings:
+                execution_price = current * (1 - slippage_rate)
+                exit_cash = holdings * execution_price * (1 - fee_rate)
+                trade_return = ((exit_cash / entry_cash) - 1) * 100 if entry_cash else None
+                capital = exit_cash
+                holdings = 0.0
+                if trade_return is not None:
+                    closed_returns.append(trade_return)
+                trades.append({"action": "sell_simulated", "at": points[index]["checked_at"], "price": current, "execution_price": round(execution_price, 6), "trade_return_pct": round(trade_return, 4) if trade_return is not None else None})
+                entry_cash = None
+        if index >= evaluation_start:
+            if holdings:
+                held_samples += 1
+            equity_curve.append(capital + holdings * current)
+
+    if holdings:
+        current = prices[-1]
+        execution_price = current * (1 - slippage_rate)
+        exit_cash = holdings * execution_price * (1 - fee_rate)
+        trade_return = ((exit_cash / entry_cash) - 1) * 100 if entry_cash else None
+        capital = exit_cash
+        if trade_return is not None:
+            closed_returns.append(trade_return)
+        trades.append({"action": "sell_simulated_end", "at": points[-1]["checked_at"], "price": current, "execution_price": round(execution_price, 6), "trade_return_pct": round(trade_return, 4) if trade_return is not None else None})
+        equity_curve[-1] = capital
+
+    period_returns = [(current - previous) / previous for previous, current in zip(equity_curve, equity_curve[1:]) if previous > 0]
+    sample_sharpe_ratio = None
+    sample_sortino_ratio = None
+    if len(period_returns) >= 2:
+        mean_return = statistics.mean(period_returns)
+        return_deviation = statistics.pstdev(period_returns)
+        if return_deviation > 0:
+            # This is deliberately labelled "sample" rather than annualized:
+            # snapshots may be 5 minutes, daily, or irregular and should not
+            # be turned into an invented annual frequency.
+            sample_sharpe_ratio = round(mean_return / return_deviation * math.sqrt(len(period_returns)), 4)
+        downside_returns = [value for value in period_returns if value < 0]
+        downside_deviation = statistics.pstdev(downside_returns) if len(downside_returns) >= 2 else None
+        if downside_deviation and downside_deviation > 0:
+            sample_sortino_ratio = round(mean_return / downside_deviation * math.sqrt(len(period_returns)), 4)
+    peak = 0.0
+    max_drawdown = 0.0
+    for value in equity_curve:
+        peak = max(peak, value)
+        if peak:
+            max_drawdown = min(max_drawdown, value / peak - 1)
+    strategy_return = (capital - 1) * 100
+    benchmark_start_price = prices[evaluation_start]
+    benchmark_return = ((prices[-1] / benchmark_start_price) - 1) * 100 if benchmark_start_price else None
+    gains = sum(value for value in closed_returns if value > 0)
+    losses = sum(value for value in closed_returns if value < 0)
+    return {
+        "capital": capital,
+        "trades": trades,
+        "closed_returns": closed_returns,
+        "net_return_pct": round(strategy_return, 4),
+        "benchmark_return_pct": round(benchmark_return, 4) if benchmark_return is not None else None,
+        "active_return_pct": round(strategy_return - benchmark_return, 4) if benchmark_return is not None else None,
+        "max_drawdown_pct": round(max_drawdown * 100, 4),
+        "realized_volatility_pct": round(statistics.pstdev(period_returns) * 100, 4) if len(period_returns) >= 2 else None,
+        "sample_sharpe_ratio": sample_sharpe_ratio,
+        "sample_sortino_ratio": sample_sortino_ratio,
+        "exposure_pct": round(held_samples / max(1, len(equity_curve)) * 100, 4) if equity_curve else 0.0,
+        "trade_count": len(closed_returns),
+        "win_rate": round(sum(1 for value in closed_returns if value > 0) / len(closed_returns), 4) if closed_returns else None,
+        "profit_factor": round(gains / abs(losses), 4) if losses < 0 else None,
+        "average_trade_return_pct": round(statistics.mean(closed_returns), 4) if closed_returns else None,
+        "equity_curve": equity_curve,
+    }
+
+
+def _walk_forward_candidate_windows(window: int, train_size: int) -> list[int]:
+    """Return a small, explicit parameter grid that can fit inside a train fold."""
+    requested = max(2, min(60, int(window)))
+    candidates = sorted({max(2, requested - 2), requested, min(60, requested + 2)})
+    return [candidate for candidate in candidates if candidate + 1 <= int(train_size)]
+
+
+def _select_walk_forward_window(
+    train_points: list[dict[str, Any]],
+    strategy: str,
+    window: int,
+    fee_bps: float,
+    slippage_bps: float,
+) -> dict[str, Any]:
+    """Select a window only from the training segment of one walk-forward fold."""
+    candidates = _app_call("_walk_forward_candidate_windows", window, len(train_points))
+    evaluations = []
+    for candidate in candidates:
+        result = _app_call("_simulate_market_backtest", train_points, strategy, candidate, fee_bps, slippage_bps)
+        net_return = float(result.get("net_return_pct") or 0.0)
+        drawdown = float(result.get("max_drawdown_pct") or 0.0)
+        # A modest drawdown penalty keeps an in-sample outlier from always
+        # winning while keeping the policy deterministic and explainable.
+        score = net_return + drawdown * 0.25
+        evaluations.append({
+            "window": candidate,
+            "net_return_pct": result.get("net_return_pct"),
+            "max_drawdown_pct": result.get("max_drawdown_pct"),
+            "trade_count": result.get("trade_count", 0),
+            "score": round(score, 4),
+        })
+    if not evaluations:
+        return {"selected_window": None, "candidates": []}
+    selected = max(evaluations, key=lambda item: (item["score"], item["net_return_pct"] or 0.0, -abs(item["max_drawdown_pct"] or 0.0)))
+    return {"selected_window": selected["window"], "candidates": evaluations}
+
+
+def _compound_percent_returns(values: list[float]) -> float:
+    capital = 1.0
+    for value in values:
+        capital *= 1.0 + float(value) / 100.0
+    return round((capital - 1.0) * 100.0, 4)
+
+
+def _fold_max_drawdown(values: list[float]) -> float:
+    capital = 1.0
+    peak = capital
+    max_drawdown = 0.0
+    for value in values:
+        capital *= 1.0 + float(value) / 100.0
+        peak = max(peak, capital)
+        if peak:
+            max_drawdown = min(max_drawdown, capital / peak - 1.0)
+    return round(max_drawdown * 100.0, 4)
+
+
+def _fold_sample_ratios(values: list[float]) -> tuple[float | None, float | None]:
+    if len(values) < 2:
+        return None, None
+    returns = [float(value) / 100.0 for value in values]
+    mean_return = statistics.mean(returns)
+    deviation = statistics.pstdev(returns)
+    sharpe = round(mean_return / deviation * math.sqrt(len(returns)), 4) if deviation > 0 else None
+    downside = [value for value in returns if value < 0]
+    downside_deviation = statistics.pstdev(downside) if len(downside) >= 2 else None
+    sortino = round(mean_return / downside_deviation * math.sqrt(len(returns)), 4) if downside_deviation and downside_deviation > 0 else None
+    return sharpe, sortino
+
+
+def market_walk_forward(
+    symbol: str,
+    strategy: str,
+    window: int,
+    train_size: int,
+    test_size: int,
+    step_size: int,
+    max_folds: int,
+    fee_bps: float = 10,
+    slippage_bps: float = 5,
+    snapshot: dict[str, Any] | None = None,
+    external_points: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Run deterministic non-overlapping walk-forward out-of-sample tests."""
+    normalized_symbol = _app_call("normalize_market_symbol", symbol)
+    normalized_strategy = _app_call("normalize_market_strategy", strategy)
+    input_error = _app_call("market_backtest_input_error", symbol, strategy)
+    points, rejected_samples = (
+        (list(external_points), [])
+        if external_points is not None
+        else _app_call("market_backtest_samples", symbol, snapshot=snapshot)
+    )
+    quality = _app_call("market_backtest_quality", points, rejected_samples, window)
+    base = {
+        "symbol": normalized_symbol,
+        "strategy": normalized_strategy or str(strategy),
+        "window": window,
+        "train_size": train_size,
+        "test_size": test_size,
+        "step_size": step_size,
+        "max_folds": max_folds,
+        "sample_count": len(points),
+        "fold_count": 0,
+        "folds": [],
+        "out_of_sample_return_pct": None,
+        "out_of_sample_benchmark_return_pct": None,
+        "out_of_sample_active_return_pct": None,
+        "out_of_sample_max_drawdown_pct": None,
+        "out_of_sample_mean_return_pct": None,
+        "out_of_sample_positive_fold_rate": None,
+        "out_of_sample_sharpe_ratio": None,
+        "out_of_sample_sortino_ratio": None,
+        "cost_assumptions": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
+        "sample_quality": quality,
+        "policy": "每折只用训练段选择回看窗口，随后在不重叠测试段计算样本外结果；不连接券商、不自动下单。",
+    }
+    if input_error:
+        return {**base, "status": "invalid", "message": input_error}
+    if step_size < test_size:
+        return {**base, "status": "invalid", "message": "为避免样本外测试折重叠，step_size 不能小于 test_size。"}
+    if train_size <= window or len(points) < train_size + test_size:
+        return {**base, "status": "insufficient", "message": f"至少需要 {train_size + test_size} 个有效历史点，且训练段要长于回看窗口；当前只有 {len(points)} 个。"}
+    if not _app_call("_walk_forward_candidate_windows", window, train_size):
+        return {**base, "status": "insufficient", "message": "训练段不足以容纳所选回看窗口及其候选参数。"}
+
+    folds = []
+    start = 0
+    while start + train_size + test_size <= len(points) and len(folds) < max_folds:
+        train_end = start + train_size
+        test_end = train_end + test_size
+        train_points = points[start:train_end]
+        test_points = points[train_end:test_end]
+        selection = _app_call("_select_walk_forward_window", train_points, strategy, window, fee_bps, slippage_bps)
+        selected_window = selection.get("selected_window")
+        if selected_window is None:
+            break
+        block = train_points + test_points
+        oos = _app_call("_simulate_market_backtest", block, strategy, selected_window, fee_bps, slippage_bps, evaluation_start=len(train_points))
+        gross = _app_call("_simulate_market_backtest", block, strategy, selected_window, 0, 0, evaluation_start=len(train_points))
+        folds.append({
+            "fold": len(folds) + 1,
+            "train_count": len(train_points),
+            "test_count": len(test_points),
+            "train_from": train_points[0]["checked_at"],
+            "train_to": train_points[-1]["checked_at"],
+            "test_from": test_points[0]["checked_at"],
+            "test_to": test_points[-1]["checked_at"],
+            "selected_window": selected_window,
+            "selection": selection["candidates"],
+            "oos_return_pct": oos["net_return_pct"],
+            "oos_gross_return_pct": gross["net_return_pct"],
+            "oos_benchmark_return_pct": oos["benchmark_return_pct"],
+            "oos_active_return_pct": oos["active_return_pct"],
+            "oos_max_drawdown_pct": oos["max_drawdown_pct"],
+            "oos_sample_sharpe_ratio": oos["sample_sharpe_ratio"],
+            "oos_sample_sortino_ratio": oos["sample_sortino_ratio"],
+            "trade_count": oos["trade_count"],
+            "win_rate": oos["win_rate"],
+        })
+        start += step_size
+    if not folds:
+        return {**base, "status": "insufficient", "message": "当前历史点不足以形成一个有效的样本外测试折。"}
+
+    oos_returns = [float(item["oos_return_pct"] or 0.0) for item in folds]
+    benchmark_returns = [float(item["oos_benchmark_return_pct"] or 0.0) for item in folds]
+    sharpe, sortino = _app_call("_fold_sample_ratios", oos_returns)
+    status = "ok" if len(folds) >= 2 else "insufficient"
+    message = "样本外折数不足 2，结果仅作试运行，不能据此判断策略稳定性。" if status != "ok" else "已完成不重叠 walk-forward 样本外验证。"
+    return {
+        **base,
+        "status": status,
+        "message": message,
+        "folds": folds,
+        "fold_count": len(folds),
+        "out_of_sample_return_pct": _app_call("_compound_percent_returns", oos_returns),
+        "out_of_sample_benchmark_return_pct": _app_call("_compound_percent_returns", benchmark_returns),
+        "out_of_sample_active_return_pct": round(_app_call("_compound_percent_returns", oos_returns) - _app_call("_compound_percent_returns", benchmark_returns), 4),
+        "out_of_sample_max_drawdown_pct": _app_call("_fold_max_drawdown", oos_returns),
+        "out_of_sample_mean_return_pct": round(statistics.mean(oos_returns), 4),
+        "out_of_sample_positive_fold_rate": round(sum(1 for value in oos_returns if value > 0) / len(oos_returns), 4),
+        "out_of_sample_sharpe_ratio": sharpe,
+        "out_of_sample_sortino_ratio": sortino,
+        "data_from": points[0]["checked_at"],
+        "data_to": points[-1]["checked_at"],
+        "cost_assumptions": {"fee_bps": round(fee_bps, 4), "slippage_bps": round(slippage_bps, 4), "total_round_trip_bps": round((fee_bps + slippage_bps) * 2, 4)},
+        "disclaimer": "这是本地历史快照的 walk-forward 样本外模拟；每折先在训练段选择窗口，再在不重叠测试段计算结果。Sharpe/Sortino 是折间样本指标，未按年化频率外推；不构成投资建议，也不会下单。",
+    }
+
+
+def market_backtest(
+    symbol: str,
+    strategy: str,
+    window: int,
+    fee_bps: float = 10,
+    slippage_bps: float = 5,
+    snapshot: dict[str, Any] | None = None,
+    external_points: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_symbol = _app_call("normalize_market_symbol", symbol)
+    normalized_strategy = _app_call("normalize_market_strategy", strategy)
+    input_error = _app_call("market_backtest_input_error", symbol, strategy)
+    points, rejected_samples = (
+        (list(external_points), [])
+        if external_points is not None
+        else _app_call("market_backtest_samples", symbol, snapshot=snapshot)
+    )
+    quality = _app_call("market_backtest_quality", points, rejected_samples, window)
+    base = {
+        "symbol": normalized_symbol,
+        "strategy": normalized_strategy or str(strategy),
+        "window": window,
+        "sample_count": len(points),
+        "trades": [],
+        "return_pct": None,
+        "net_return_pct": None,
+        "benchmark_return_pct": None,
+        "active_return_pct": None,
+        "max_drawdown_pct": None,
+        "realized_volatility_pct": None,
+        "sample_sharpe_ratio": None,
+        "sample_sortino_ratio": None,
+        "exposure_pct": None,
+        "trade_count": 0,
+        "win_rate": None,
+        "profit_factor": None,
+        "average_trade_return_pct": None,
+        "cost_assumptions": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
+        "sample_quality": quality,
+    }
+    if input_error:
+        return {**base, "status": "invalid", "message": input_error}
+    if len(points) < max(3, window + 1):
+        return {**base, "status": "insufficient", "message": f"至少需要 {window + 1} 个有效历史点，当前只有 {len(points)} 个。样本按快照点计算，不等同交易日。"}
+    simulation = _app_call("_simulate_market_backtest", points, strategy, window, fee_bps, slippage_bps)
+    gross = _app_call("_simulate_market_backtest", points, strategy, window, 0, 0) if fee_bps or slippage_bps else None
+    return {
+        **base,
+        "status": "ok",
+        "return_pct": simulation["net_return_pct"],
+        "net_return_pct": simulation["net_return_pct"],
+        "gross_return_pct": gross["net_return_pct"] if gross else simulation["net_return_pct"],
+        "benchmark_return_pct": simulation["benchmark_return_pct"],
+        "active_return_pct": simulation["active_return_pct"],
+        "max_drawdown_pct": simulation["max_drawdown_pct"],
+        "realized_volatility_pct": simulation["realized_volatility_pct"],
+        "sample_sharpe_ratio": simulation["sample_sharpe_ratio"],
+        "sample_sortino_ratio": simulation["sample_sortino_ratio"],
+        "exposure_pct": simulation["exposure_pct"],
+        "trade_count": simulation["trade_count"],
+        "win_rate": simulation["win_rate"],
+        "profit_factor": simulation["profit_factor"],
+        "average_trade_return_pct": simulation["average_trade_return_pct"],
+        "trades": simulation["trades"],
+        "data_from": points[0]["checked_at"],
+        "data_to": points[-1]["checked_at"],
+        "cost_assumptions": {"fee_bps": round(fee_bps, 4), "slippage_bps": round(slippage_bps, 4), "total_round_trip_bps": round((fee_bps + slippage_bps) * 2, 4)},
+        "disclaimer": "这是本地历史快照的模拟研究；已计入假设手续费和滑点，并与买入持有基准比较。Sharpe/Sortino 是样本期指标，未按年化频率外推；不构成投资建议，也不会下单。",
+    }
+
+
+@app.post("/api/market/research")
+def create_market_research(request: MarketResearchRequest) -> dict[str, Any]:
+    symbol = _app_call("normalize_market_symbol", request.symbol) if request.symbol else ""
+    snapshot = _app_call("load_market_snapshot", )
+    history = _app_call("list_market_history", limit=30)
+    analysis = _app_call("analyze_market_snapshot", snapshot, history)
+    freshness = analysis.get("freshness") if isinstance(analysis.get("freshness"), dict) else {}
+    data_quality = {
+        "source": str(snapshot.get("source") or "本地快照"),
+        "checked_at": str(snapshot.get("checked_at") or ""),
+        "freshness_status": str(freshness.get("status") or "missing"),
+        "freshness_label": str(freshness.get("label") or "未知"),
+        "history_count": len(history),
+        "watchlist_count": len(snapshot.get("watchlist") or []),
+        "warnings": [clip(str(item), 180) for item in (analysis.get("warnings") or [])[:5]],
+        "research_confidence": analysis.get("research_confidence") or {},
+    }
+    artifact = _app_call("register_artifact_safely", project_id="market", name=f"行情研究上下文 · {symbol or '全市场'}", path=str(MARKET_SNAPSHOT_FILE), kind="market_research_context", metadata={"symbol": symbol, "checked_at": snapshot.get("checked_at"), "question": request.question, "data_quality": data_quality})
+    quality_note = f"数据质量：{data_quality['freshness_label']} · 来源 {data_quality['source']} · 历史快照 {data_quality['history_count']} 次"
+    item = _app_call("create_work_item_record", title=f"行情研究：{clip(request.question, 120)}", description=f"标的：{symbol or '未指定'}\n问题：{request.question}\n事件日期：{request.event_date or '未指定'}\n数据时间：{snapshot.get('checked_at') or '未知'}\n{quality_note}\n要求：请结合历史快照与公开来源完成事件驱动研究，不自动交易。", kind="market_event_research", source_project="market", target_project="knowledge", metadata={"symbol": symbol, "question": request.question, "event_date": request.event_date, "artifact_id": artifact.get("id") if artifact else None, "checked_at": snapshot.get("checked_at"), "data_quality": data_quality})
+    relation = _app_call("create_relation_record", from_type="artifact", from_id=str(artifact.get("id")), to_type="work_item", to_id=str(item.get("id")), relation_type="market_context_to_research", metadata={"symbol": symbol, "data_quality": data_quality}) if artifact else None
+    return {"ok": True, "item": item, "artifact": artifact, "relation": relation}
+
+
+@app.get("/api/market/reports")
+def get_market_reports(limit: int = 30) -> dict[str, Any]:
+    return {"artifacts": [item for item in _app_call("list_artifacts", "market") if item.get("kind") in {"market_report", "market_strategy", "market_backtest", "market_walk_forward"}][:max(1, min(limit, 100))]}
+
+
+@app.post("/api/market/reports")
+def create_market_report() -> dict[str, Any]:
+    snapshot = _app_call("load_market_snapshot", )
+    history = _app_call("list_market_history", limit=30)
+    analysis = _app_call("analyze_market_snapshot", snapshot, history)
+    if not analysis.get("valid_quote_count"):
+        raise HTTPException(400, "当前快照没有有效报价，暂不生成量化报告")
+    confidence = analysis.get("research_confidence") or {}
+    lines = [f"# 量化行情日报 · {datetime.now().astimezone().strftime('%Y-%m-%d')}", "", f"> 数据时间：{snapshot.get('checked_at') or '未知'} · 来源：{snapshot.get('source') or '本地快照'}", "", "## 总览", "", analysis.get("summary") or "暂无行情摘要。", "", f"研究可信度：{confidence.get('label') or 'low'} · 分数 {confidence.get('score', 0)} · 有效报价 {confidence.get('valid_quote_count', 0)} / 拒绝 {confidence.get('rejected_quote_count', 0)} · 覆盖 {confidence.get('coverage_days', 0)} 天", "", "## 可解释观察", ""]
+    for signal in analysis.get("signals", []):
+        lines.append(f"- **{signal.get('name') or signal.get('symbol')}**：{signal.get('observation') or '暂无观察'}；因子：{'、'.join(signal.get('factors') or []) or '样本不足'}")
+    lines.extend(["", "## 风险边界", "", "本报告只用于本地研究，不构成投资建议，不执行自动交易。"])
+    path = OUTPUTS_DIR / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-量化日报.md"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    artifact = _app_call("register_artifact_safely", project_id="market", name=path.name, path=str(path), kind="market_report", metadata={"report_type": "daily", "checked_at": snapshot.get("checked_at"), "history_count": len(history)})
+    return {"ok": True, "artifact": artifact, "path": str(path), "content": "\n".join(lines)}
+
+
+@app.post("/api/market/strategies")
+def create_market_strategy(request: MarketStrategyRequest) -> dict[str, Any]:
+    version = 1 + sum(1 for item in _app_call("list_artifacts", "market") if item.get("kind") == "market_strategy" and item.get("metadata", {}).get("name") == request.name.strip())
+    artifact = _app_call("register_artifact_safely", project_id="market", name=f"策略-{_app_call('safe_filename', request.name)}-v{version}.json", path=str(MARKET_SNAPSHOT_FILE), kind="market_strategy", metadata={"name": request.name.strip(), "version": version, "rules": request.rules, "note": request.note, "automated_trading": False})
+    return {"ok": True, "artifact": artifact, "version": version, "policy": "策略只用于研究和回测，不连接券商、不自动下单。"}
+
+
+@app.get("/api/market/strategies")
+def get_market_strategies(limit: int = 50) -> dict[str, Any]:
+    strategies = [item for item in _app_call("list_artifacts", "market") if item.get("kind") == "market_strategy"]
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in strategies[: max(1, min(limit, 100))]:
+        name = str((item.get("metadata") or {}).get("name") or item.get("name") or "未命名策略")
+        grouped.setdefault(name, []).append(item)
+    return {"strategies": strategies[: max(1, min(limit, 100))], "versions": grouped, "count": len(strategies)}
+
+
+@app.post("/api/market/backtest")
+def run_market_backtest(request: MarketBacktestRequest) -> dict[str, Any]:
+    strategy = _app_call("normalize_market_strategy", request.strategy)
+    symbol = _app_call("normalize_market_symbol", request.symbol)
+    if not strategy:
+        raise HTTPException(400, "strategy 只能是 momentum 或 mean_reversion")
+    if not symbol:
+        raise HTTPException(400, "无法识别股票代码，请填写 6 位 A 股/ETF 代码或 sh/sz 前缀")
+    snapshot = _app_call("load_market_snapshot", )
+    _app_call("record_market_snapshot", snapshot)
+    result = _app_call("market_backtest", symbol, strategy, request.window, request.fee_bps, request.slippage_bps, snapshot=snapshot)
+    artifact = _app_call("register_artifact_safely", project_id="market", name=f"回测-{symbol}-{strategy}-{datetime.now().strftime('%Y%m%d%H%M%S')}.json", path=str(MARKET_SNAPSHOT_FILE), kind="market_backtest", metadata=result)
+    return {"ok": True, "backtest": result, "artifact": artifact}
+
+
+@app.post("/api/market/backtest/walk-forward")
+def run_market_walk_forward(request: MarketWalkForwardRequest) -> dict[str, Any]:
+    strategy = _app_call("normalize_market_strategy", request.strategy)
+    symbol = _app_call("normalize_market_symbol", request.symbol)
+    if not strategy:
+        raise HTTPException(400, "strategy 只能是 momentum 或 mean_reversion")
+    if not symbol:
+        raise HTTPException(400, "无法识别股票代码，请填写 6 位 A 股/ETF 代码或 sh/sz 前缀")
+    if request.step_size < request.test_size:
+        raise HTTPException(400, "为避免样本外测试折重叠，step_size 不能小于 test_size")
+    snapshot = _app_call("load_market_snapshot", )
+    _app_call("record_market_snapshot", snapshot)
+    result = _app_call("market_walk_forward", 
+        symbol,
+        strategy,
+        request.window,
+        request.train_size,
+        request.test_size,
+        request.step_size,
+        request.max_folds,
+        request.fee_bps,
+        request.slippage_bps,
+        snapshot=snapshot,
+    )
+    artifact = _app_call("register_artifact_safely", 
+        project_id="market",
+        name=f"样本外验证-{symbol}-{strategy}-{datetime.now().strftime('%Y%m%d%H%M%S')}.json",
+        path=str(MARKET_SNAPSHOT_FILE),
+        kind="market_walk_forward",
+        metadata=result,
+    )
+    return {"ok": True, "walk_forward": result, "artifact": artifact}
+
+
+@app.post("/api/market/strategies/compare")
+def compare_market_strategies(request: MarketStrategyCompareRequest) -> dict[str, Any]:
+    strategies = list(dict.fromkeys(request.strategies))
+    symbol = _app_call("normalize_market_symbol", request.symbol)
+    if len(strategies) < 2:
+        raise HTTPException(400, "strategies 至少需要两个不同策略")
+    invalid = [item for item in strategies if not _app_call("normalize_market_strategy", item)]
+    if invalid:
+        raise HTTPException(400, "strategies 只能包含 momentum 或 mean_reversion")
+    if not symbol:
+        raise HTTPException(400, "无法识别股票代码，请填写 6 位 A 股/ETF 代码或 sh/sz 前缀")
+    snapshot = _app_call("load_market_snapshot", )
+    _app_call("record_market_snapshot", snapshot)
+    comparison = [
+        _app_call("market_backtest", symbol, _app_call("normalize_market_strategy", strategy), request.window, request.fee_bps, request.slippage_bps, snapshot=snapshot)
+        for strategy in strategies
+    ]
+    artifact = _app_call("register_artifact_safely", 
+        project_id="market",
+        name=f"策略对比-{_app_call('normalize_market_symbol', request.symbol)}-{datetime.now().strftime('%Y%m%d%H%M%S')}.json",
+        path=str(MARKET_SNAPSHOT_FILE),
+        kind="market_strategy_comparison",
+        metadata={"symbol": symbol, "strategies": strategies, "window": request.window, "fee_bps": request.fee_bps, "slippage_bps": request.slippage_bps, "comparison": comparison},
+    )
+    return {"ok": True, "comparison": comparison, "artifact": artifact, "policy": "只比较本地历史快照，不构成投资建议，也不会自动下单。"}
+
+
+@app.post("/api/market/backtest/sensitivity")
+def market_backtest_sensitivity(request: MarketSensitivityRequest) -> dict[str, Any]:
+    strategy = _app_call("normalize_market_strategy", request.strategy)
+    symbol = _app_call("normalize_market_symbol", request.symbol)
+    if not strategy:
+        raise HTTPException(400, "strategy 只能是 momentum 或 mean_reversion")
+    if not symbol:
+        raise HTTPException(400, "无法识别股票代码，请填写 6 位 A 股/ETF 代码或 sh/sz 前缀")
+    scenarios = [("无成本", 0.0, 0.0), ("当前假设", request.fee_bps, request.slippage_bps), ("成本翻倍", request.fee_bps * 2, request.slippage_bps * 2)]
+    snapshot = _app_call("load_market_snapshot", )
+    _app_call("record_market_snapshot", snapshot)
+    results = []
+    for label, fee_bps, slippage_bps in scenarios:
+        result = _app_call("market_backtest", symbol, strategy, request.window, fee_bps, slippage_bps, snapshot=snapshot)
+        results.append({"label": label, "fee_bps": fee_bps, "slippage_bps": slippage_bps, "return_pct": result.get("net_return_pct"), "status": result.get("status"), "sample_count": result.get("sample_count"), "sample_quality": result.get("sample_quality", {})})
+    return {"ok": True, "symbol": symbol, "strategy": strategy, "scenarios": results, "policy": "敏感性分析只说明成本假设对历史模拟的影响，不代表未来收益。"}
+
+
+
+class MarketValuationRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+    fundamentals: dict[str, Any] = Field(default_factory=dict)
+    note: str = Field(default="", max_length=2_000)
+
+
+class MarketResearchConclusionRequest(BaseModel):
+    conclusion: str = Field(min_length=1, max_length=12_000)
+    confirmed: bool = False
+
+
+@app.post("/api/market/valuation")
+def create_market_valuation(request: MarketValuationRequest) -> dict[str, Any]:
+    symbol = _app_call("normalize_market_symbol", request.symbol)
+    if not symbol:
+        raise HTTPException(400, "无法识别股票代码")
+    numeric = {}
+    for key in ("pe", "pb", "ps", "roe", "dividend_yield", "revenue_growth"):
+        value = request.fundamentals.get(key)
+        try:
+            if value is not None and value != "":
+                numeric[key] = round(float(value), 6)
+        except (TypeError, ValueError):
+            continue
+    available = bool(numeric)
+    factors = [{"name": key, "value": value, "status": "available"} for key, value in numeric.items()]
+    result = {"symbol": symbol, "available": available, "factors": factors, "missing": [key for key in ("pe", "pb", "roe") if key not in numeric], "note": request.note.strip(), "data_as_of": _app_call("load_market_snapshot", ).get("checked_at", ""), "policy": "估值因子只接受明确来源的输入；缺数据时不推断估值，也不构成投资建议。"}
+    artifact = _app_call("register_artifact_safely", project_id="market", name=f"估值因子 · {symbol}", kind="market_valuation", path=str(MARKET_SNAPSHOT_FILE), metadata=result)
+    return {"ok": True, "valuation": result, "artifact": artifact}
+
+
+@app.post("/api/market/research/{item_id}/conclude")
+def conclude_market_research(item_id: int, request: MarketResearchConclusionRequest) -> dict[str, Any]:
+    if not request.confirmed:
+        raise HTTPException(409, "沉淀行情研究结论前需要明确确认")
+    item = _app_call("get_work_item_record", item_id)
+    if not item or item.get("source_project") != "market" or item.get("kind") != "market_event_research":
+        raise HTTPException(404, "行情研究任务不存在")
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    existing_id = metadata.get("conclusion_artifact_id")
+    if str(existing_id).isdigit():
+        existing_artifact = _app_call("get_artifact_record", int(existing_id))
+        if existing_artifact:
+            return {"ok": True, "already_concluded": True, "item": item, "note": {"artifact": existing_artifact}, "message": "这条行情研究已经沉淀过结论。"}
+    artifact_id = metadata.get("artifact_id")
+    source = _app_call("get_artifact_record", int(artifact_id)) if str(artifact_id).isdigit() else None
+    title = clip(item.get("title") or "行情研究结论", 120)
+    note = _app_call("write_knowledge_note", f"行情研究结论｜{title}", f"> 来源工作项：行情 #{item_id}\n> 数据时间：{metadata.get('checked_at') or (source or {}).get('metadata', {}).get('checked_at') or '未记录'}\n\n## 结论\n\n{request.conclusion.strip()}\n\n## 风险边界\n\n本结论基于本地快照和人工补充，只作研究记录，不构成投资建议。", metadata={"source_market_work_item_id": item_id, "source_artifact_id": source.get("id") if source else None, "confirmed": request.confirmed}, artifact_kind="market_research_conclusion")
+    relation = _app_call("create_relation_record", from_type="work_item", from_id=str(item_id), to_type="artifact", to_id=str(note.get("artifact", {}).get("id", "")), relation_type="research_to_knowledge", metadata={"confirmed": request.confirmed}) if note.get("artifact") else None
+    conclusion_artifact_id = note.get("artifact", {}).get("id") if note.get("artifact") else None
+    updated_metadata = {**metadata, "conclusion_artifact_id": conclusion_artifact_id, "concluded_at": now_iso(), "conclusion": request.conclusion.strip()}
+    updated = _app_call("update_work_item_record", item_id, {"status": "done", "completed_at": now_iso(), "metadata_json": json.dumps(updated_metadata, ensure_ascii=False), "result_json": json.dumps({"knowledge_artifact_id": conclusion_artifact_id, "conclusion": request.conclusion.strip()}, ensure_ascii=False), "last_error": ""})
+    return {"ok": True, "item": updated, "note": note, "relation": relation, "message": "研究结论已沉淀到工作区知识库。"}
+
+
+# ═══════════════ 量化 2.0：研究卡 / ETF 轮动 / 可转债 / 估值百分位 / 组合体检 / AI 一眼看 ═══════════════
+
+_TENCENT_KLINE_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+async def _tencent_kline(symbol: str, days: int = 40) -> list[dict[str, Any]]:
+    """腾讯日 K 线（前复权）：symbol 如 sh510300 / sz159915；返回 [{date, close}] 升序。
+
+    进程内缓存 10 分钟：量化决策卡片批量拉自选历史时不会每次请求都打上游。
+    """
+    cache_key = f"{symbol}:{days}"
+    cached = _TENCENT_KLINE_CACHE.get(cache_key)
+    if cached and (time.monotonic() - cached[0]) < 600:
+        return cached[1]
+    try:
+        url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{days + 10},qfq"
+        async with httpx.AsyncClient(timeout=10, trust_env=False, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        node = ((payload or {}).get("data") or {}).get(symbol) or {}
+        klines = node.get("qfqday") or node.get("day") or []
+        rows = []
+        for parts in klines:
+            if len(parts) >= 3:
+                close = _app_call("parse_market_number", parts[2])
+                if close and close > 0:
+                    rows.append({"date": str(parts[0]), "close": close})
+        result = rows[-days:]
+        _TENCENT_KLINE_CACHE[cache_key] = (time.monotonic(), result)
+        return result
+    except Exception:
+        return []
+
+
+async def market_etf_rotation() -> dict[str, Any]:
+    """宽基 ETF 动量轮动：候选池 20 日动量排序 + 绝对动量过滤建议。"""
+    pool = [
+        {"symbol": "sh510300", "name": "沪深300ETF"},
+        {"symbol": "sh510500", "name": "中证500ETF"},
+        {"symbol": "sz159915", "name": "创业板ETF"},
+        {"symbol": "sh588000", "name": "科创50ETF"},
+    ]
+    # 四个标的的行情互不依赖，原来是一个一个 await 下来的：实测这个接口 1484ms，
+    # 是整个市场页最慢的一项，而里面除了四次串行的上游往返几乎没有别的开销。
+    # 并发之后耗时取决于最慢的那一次，而不是四次之和。
+    klines_list = await asyncio.gather(
+        *(_app_call("_tencent_kline", item["symbol"], 30) for item in pool),
+        return_exceptions=True,
+    )
+    results = []
+    for item, klines in zip(pool, klines_list):
+        if isinstance(klines, BaseException) or len(klines) < 2:
+            note = "行情不足" if not isinstance(klines, BaseException) else f"行情读取失败：{clip(str(klines), 80)}"
+            results.append({**item, "momentum_20d": None, "latest": None, "ok": False, "note": note})
+            continue
+        latest = klines[-1]["close"]
+        base = klines[0]["close"]
+        momentum = round((latest - base) / base * 100, 2)
+        results.append({**item, "momentum_20d": momentum, "latest": latest, "ok": True, "note": ""})
+    ranked = [r for r in results if r.get("ok") and r.get("momentum_20d") is not None]
+    ranked.sort(key=lambda r: r["momentum_20d"], reverse=True)
+    top = ranked[0] if ranked else None
+    suggestion = ""
+    if top:
+        if top["momentum_20d"] <= 0:
+            suggestion = f"{top['name']} 动量 {top['momentum_20d']}% 仍为负，按绝对动量过滤建议空仓观望（或转债券/货币）。"
+        else:
+            suggestion = f"建议关注 {top['name']}（20 日动量 {top['momentum_20d']}% 最强）；跌破其 20 日均线或动量转负再换仓。"
+    return {
+        "pool": results,
+        "suggestion": suggestion,
+        "note": "动量 = 近 20 个交易日涨幅；只作研究参考，不构成投资建议。",
+    }
+
+
+async def _tencent_convertible_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """腾讯行情批量查询可转债现价/涨跌幅/溢价（GBK 编码需转码）。
+
+    返回 {code: {"price", "change_pct", "premium"}}；失败字段为 None。
+    """
+    if not codes:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    try:
+        url = "https://qt.gtimg.cn/q=" + ",".join(codes)
+        async with httpx.AsyncClient(timeout=10, trust_env=False, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            text = response.content.decode("gbk", errors="replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            body = line.split("=", 1)[1].strip().strip(";").strip('"')
+            fields = body.split("~")
+            if len(fields) < 40:
+                continue
+            code = str(fields[2] or "").strip()
+            price = _app_call("parse_market_number", fields[3])
+            change_pct = _app_call("parse_market_number", fields[32] if len(fields) > 32 else None)
+            # 转股溢价率在部分代码段不返回，尽力而为
+            premium = _app_call("parse_market_number", fields[47] if len(fields) > 47 else None)
+            result[code] = {
+                "price": price,
+                "change_pct": change_pct,
+                "premium": premium,
+            }
+    except Exception:
+        log.debug("忽略异常（_tencent_convertible_quotes）", exc_info=True)
+    return result
+
+
+async def market_convertible_bonds(limit: int = 30) -> dict[str, Any]:
+    """可转债低价/双低筛选：东财数据中心取存续转债静态信息（评级/到期/转股价），腾讯行情补实时价与溢价。
+
+    溢价率字段不稳定时降级为低价优先（诚实标注）。只作研究参考。
+    """
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        url = (
+            "https://datacenter.eastmoney.com/securities/api/data/v1/get?reportName=RPT_BOND_CB_LIST"
+            "&columns=ALL&pageSize=300&pageNumber=1&sortColumns=EXPIRE_DATE&sortTypes=1"
+            f"&filter=(EXPIRE_DATE%3E%3D%27{today}%27)"
+        )
+        async with httpx.AsyncClient(timeout=12, trust_env=False, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com/"}) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        rows = (((payload or {}).get("result") or {}).get("data")) or []
+        rows = rows[:200]
+        # 腾讯行情批量补实时价（一次最多 60 个代码）
+        premium_available = False
+        bonds: list[dict[str, Any]] = []
+        # 每批 60 个代码是上游的限制，但批与批之间没有依赖关系——原来一批一批
+        # 串着等，200 只债就是 4 次串行往返。
+        chunks = [rows[i : i + 60] for i in range(0, len(rows), 60)]
+        chunk_prefixes = [
+            {
+                str(item.get("SECURITY_CODE") or "").strip(): ("sh" if str(item.get("SECUCODE") or "").endswith(".SH") else "sz")
+                for item in chunk
+            }
+            for chunk in chunks
+        ]
+        quote_batches = await asyncio.gather(
+            *(_app_call("_tencent_convertible_quotes", [prefix + code for code, prefix in mapping.items() if code])
+              for mapping in chunk_prefixes),
+            return_exceptions=True,
+        )
+        for chunk, code_prefix, quotes in zip(chunks, chunk_prefixes, quote_batches):
+            if isinstance(quotes, BaseException):
+                log.warning("可转债实时价批量读取失败：%s", quotes)
+                continue
+            for item in chunk:
+                code = str(item.get("SECURITY_CODE") or "").strip()
+                quote = quotes.get(code_prefix.get(code, "") + code) if code else None
+                price = (quote or {}).get("price")
+                if price is None or price <= 0:
+                    continue
+                premium = (quote or {}).get("premium")
+                if premium is not None:
+                    premium_available = True
+                double_low = round(price + (premium or 0), 2)
+                bonds.append({
+                    "symbol": code,
+                    "name": str(item.get("SECURITY_NAME_ABBR") or f"{code}转债"),
+                    "price": price,
+                    "change_pct": (quote or {}).get("change_pct"),
+                    "premium": premium,
+                    "double_low": double_low,
+                    "rating": str(item.get("RATING") or ""),
+                    "expire_date": str(item.get("EXPIRE_DATE") or "")[:10],
+                    "convert_stock": str(item.get("CONVERT_STOCK_CODE") or ""),
+                    "is_redeem": str(item.get("IS_REDEEM") or ""),
+                })
+        bonds = [b for b in bonds if b["price"] < 130]
+        bonds.sort(key=lambda b: (b["premium"] is not None, b["double_low"] if b["premium"] is not None else b["price"]))
+        return {
+            "bonds": bonds[:limit],
+            "premium_available": premium_available,
+            "note": "双低 = 价格 + 转股溢价率（越低性价比越高）；溢价率不可用时按低价筛选。评级/到期来自交易所数据。只作研究参考。",
+        }
+    except Exception as exc:
+        return {"bonds": [], "premium_available": False, "note": f"可转债数据读取失败：{clip(str(exc), 200)}"}
+
+
+async def market_valuation_percentile() -> dict[str, Any]:
+    """宽基指数估值百分位（蛋卷公开估值接口）：pe/pb 历史分位 + 估值区间标签。"""
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            response = await client.get("https://danjuanfunds.com/djapi/index_eva/dj")
+            response.raise_for_status()
+            payload = response.json()
+        items = ((payload or {}).get("data") or {}).get("items") or []
+        wanted = ["沪深300", "中证500", "创业板", "科创50", "上证50"]
+        result = []
+        for item in items:
+            name = str(item.get("name") or "")
+            if not any(k in name for k in wanted):
+                continue
+            pe_pct = item.get("pe_percentile")
+            pb_pct = item.get("pb_percentile")
+            eva = str(item.get("eva_type") or "")
+            label = {"low": "低估", "normal": "适中", "high": "偏高"}.get(eva, eva or "未知")
+            result.append({
+                "name": name,
+                "index_code": item.get("index_code"),
+                "pe": round(float(item.get("pe") or 0), 2) if item.get("pe") else None,
+                "pb": round(float(item.get("pb") or 0), 2) if item.get("pb") else None,
+                "pe_percentile": round(float(pe_pct or 0), 3) if pe_pct else None,
+                "pb_percentile": round(float(pb_pct or 0), 3) if pb_pct else None,
+                "roe": round(float(item.get("roe") or 0), 3) if item.get("roe") else None,
+                "eva_label": label,
+            })
+        return {"indices": result, "note": "百分位 = 当前 PE/PB 处于历史什么位置；>0.8 偏贵、<0.2 偏便宜（用于定投/仓位参考）。"}
+    except Exception as exc:
+        return {"indices": [], "note": f"指数估值读取失败：{clip(str(exc), 200)}"}
+
+
+async def market_portfolio_check() -> dict[str, Any]:
+    """组合体检：基于自选行情与历史快照，给出集中度/相关性/波动观察。"""
+    snapshot = _app_call("load_market_snapshot", )
+    watchlist = snapshot.get("watchlist") or []
+    quotes = snapshot.get("quotes") or []
+    if not watchlist:
+        return {"ok": False, "note": "还没有自选股票，先添加自选再看组合体检。"}
+    def _pos(value):
+        try:
+            return isinstance(value, (int, float)) and float(value) > 0
+        except (TypeError, ValueError):
+            return False
+    up = [q for q in quotes if _pos(q.get("change_pct"))]
+    down = [q for q in quotes if (lambda v: isinstance(v, (int, float)) and float(v) < 0)(q.get("change_pct"))]
+    trends = {str(q.get("symbol") or "").lower(): [p.get("p") for p in (q.get("trend") or []) if isinstance(p.get("p"), (int, float))] for q in quotes}
+    return {
+        "ok": True,
+        "count": len(watchlist),
+        "up_count": len(up),
+        "down_count": len(down),
+        "symbols": [str(q.get("symbol") or "").upper() for q in quotes],
+        "trend_points": {k: len(v) for k, v in trends.items() if v},
+        "note": "相关性计算需要每个标的至少 5 个历史快照点；样本不足的标的会标注。只作研究参考。",
+    }
+
+
+async def market_research_card(symbol: str) -> dict[str, Any]:
+    """个股研究卡（三块合一）：行情 + 估值 + 量化回测/样本外 + 价值清单。
+
+    回测数据源优先级：① 腾讯历史日 K（股票/场内 ETF，上市以来真实价格）；
+    ② 东财历史净值（场外基金，日频净值）——两者都不依赖本地快照积累，
+    新加的自选当天就能算出结果；③ 本地周期快照（最后的兜底）。
+    """
+    symbol = str(symbol or "").strip().lower()
+    if not symbol:
+        return {"ok": False, "message": "请先填写股票代码。"}
+    norm = _app_call("normalize_market_symbol", symbol)
+    if not norm:
+        return {"ok": False, "message": "代码格式无效，例如 600519 或 sh600519。"}
+    raw = re.sub(r"\D", "", symbol)[-6:]
+    quote = None
+    data_source = ""
+    external_points: list[dict[str, Any]] = []
+    try:
+        if _app_call("market_symbol_queryable", norm) or norm.startswith(("sh", "sz", "bj")):
+            quotes = await _app_call("fetch_market_quotes", [norm])
+            quote = quotes[0] if quotes else None
+        # 场外基金在腾讯接口查不到：净值行情 + 历史净值都走东财。
+        if not quote and len(raw) == 6:
+            fund_quote = await _app_call("fetch_fund_nav", raw)
+            if fund_quote:
+                quote = fund_quote
+    except Exception:
+        quote = None
+    try:
+        if _app_call("market_symbol_queryable", norm):
+            klines = await _app_call("_tencent_kline", norm, 120)
+            if klines:
+                data_source = "tencent-kline"
+                external_points = [
+                    {"checked_at": f"{item['date']} 15:00:00", "price": float(item["close"]), "volume": None, "source": "tencent-kline"}
+                    for item in klines
+                ]
+        # 腾讯查不到的 6 位代码可能是场外基金（sz 前缀也被 queryable 误判）：
+        # 直接退到东财历史净值，让基金当天就能研究，而不是永远"样本不足"。
+        if not external_points and len(raw) == 6:
+            history = await _app_call("fetch_fund_nav_history", raw, 120)
+            if history:
+                data_source = "fund-nav-history"
+                external_points = [
+                    {"checked_at": f"{item['date']} 15:00:00", "price": float(item["close"]), "volume": None, "source": "fund-nav-history"}
+                    for item in history
+                ]
+    except Exception:
+        log.warning("研究卡拉取 %s 历史数据失败", norm, exc_info=True)
+    if not quote and external_points:
+        quote = {
+            "symbol": norm, "name": norm.upper(), "price": external_points[-1]["price"],
+            "change_pct": None, "open": None, "volume": None, "source": data_source,
+        }
+    backtests = {}
+    walkforward = {}
+    for strategy in ("momentum", "mean_reversion"):
+        try:
+            body = await asyncio.to_thread(
+                market_backtest, symbol, strategy, 20, 10, 5, None,
+                external_points if external_points else None,
+            )
+            backtests[strategy] = {
+                "status": body.get("status"),
+                "net_return_pct": body.get("net_return_pct"),
+                "benchmark_return_pct": body.get("benchmark_return_pct"),
+                "max_drawdown_pct": body.get("max_drawdown_pct"),
+                "sample_count": body.get("sample_count"),
+                "message": body.get("message"),
+            }
+        except Exception:
+            backtests[strategy] = {"status": "error", "message": "回测失败"}
+    try:
+        wf = await asyncio.to_thread(
+            market_walk_forward, symbol, "momentum", 20, 30, 5, 5, 8, 10, 5, None,
+            external_points if external_points else None,
+        )
+        walkforward = {
+            "status": wf.get("status"),
+            "out_of_sample_return_pct": wf.get("out_of_sample_return_pct"),
+            "fold_count": wf.get("fold_count"),
+            "positive_fold_rate": wf.get("out_of_sample_positive_fold_rate"),
+            "sample_count": wf.get("sample_count"),
+            "message": wf.get("message"),
+        }
+    except Exception:
+        walkforward = {"status": "error", "message": "样本外验证失败"}
+    return {
+        "ok": True,
+        "symbol": norm,
+        "quote": quote,
+        "backtests": backtests,
+        "walkforward": walkforward,
+        "data_source": data_source,
+        "warnings": [],
+        "note": "价值清单（护城河/ROE/负债率/自由现金流）需要人工核对后填写；量化部分基于历史行情/净值（"
+        + ("腾讯日K" if data_source == "tencent-kline" else "东财基金净值" if data_source == "fund-nav-history" else "本地历史快照")
+        + "），只作研究参考。",
+    }
+
+
+async def market_ai_scan(question: str = "") -> dict[str, Any]:
+    """AI 一眼看：基于自选行情与观察信号生成人话总结；可带追问问题。"""
+    snapshot = _app_call("load_market_snapshot", )
+    watchlist = snapshot.get("watchlist") or []
+    quotes = snapshot.get("quotes") or []
+    if not quotes:
+        return {"ok": False, "answer": "还没有行情数据。先添加自选并刷新行情，再让我看一眼。"}
+    lines = []
+    for q in quotes[:12]:
+        change = q.get("change_pct")
+        change_text = ("+" + str(change) + "%") if isinstance(change, (int, float)) and float(change) > 0 else (str(change) + "%") if isinstance(change, (int, float)) else "—"
+        lines.append(f"{q.get('name') or q.get('symbol')}({str(q.get('symbol') or '').upper()}): {q.get('price')} {change_text}")
+    summary_text = "；".join(lines)
+    question = str(question or "").strip()
+    prompt = (
+        "你是量化研究助手。下面是用户自选股的最新行情快照（时间、来源以快照为准）：\n"
+        f"{summary_text}\n"
+    )
+    if question:
+        prompt += f"用户追问：{question}\n请结合快照数据回答，区分事实与判断，缺数据就明说。"
+    else:
+        prompt += "请用 3-5 句话总结今天值得注意的点：整体强弱、最值得关注的标的及原因、需要警惕的信号。区分事实与判断，不构成投资建议。"
+    try:
+        answer = await call_llm(
+            [{"role": "system", "content": "你是量化研究助手，说话要有人味、结论要带数据时间和依据，缺数据就明说，不构成投资建议。"}, {"role": "user", "content": prompt}],
+            max_tokens=1200,
+            temperature=0.3,
+            purpose="market_ai_scan",
+        )
+    except Exception as exc:
+        return {"ok": False, "answer": f"AI 一眼看暂时不可用：{clip(str(exc), 300)}"}
+    return {"ok": True, "answer": answer}
+
+
+@app.get("/api/market/research-card")
+async def get_market_research_card(symbol: str = "") -> dict[str, Any]:
+    return await _app_call("market_research_card", symbol)
+
+
+@app.get("/api/market/etf-rotation")
+async def get_market_etf_rotation() -> dict[str, Any]:
+    return await _app_call("market_etf_rotation", )
+
+
+@app.get("/api/market/convertible-bonds")
+async def get_market_convertible_bonds(limit: int = 30) -> dict[str, Any]:
+    return await _app_call("market_convertible_bonds", limit)
+
+
+@app.get("/api/market/valuation-percentile")
+async def get_market_valuation_percentile() -> dict[str, Any]:
+    return await _app_call("market_valuation_percentile", )
+
+
+@app.get("/api/market/portfolio-check")
+async def get_market_portfolio_check() -> dict[str, Any]:
+    return await _app_call("market_portfolio_check", )
+
+
+@app.post("/api/market/ai-scan")
+async def post_market_ai_scan(request: dict[str, Any]) -> dict[str, Any]:
+    return await _app_call("market_ai_scan", str((request or {}).get("question") or ""))
+
+
+# ═══════════════ 网页研究：服务器渲染真实页面截图 ═══════════════
+
 __all__ = [
+    "market_ai_scan",
+    "_tencent_kline",
+    "market_backtest",
+    "market_walk_forward",
+    "_style_metrics",
+    "_style_series",
+    "_percentile_rank",
+    "_screen_number",
+    "_market_position_example",
+    "_market_percentile",
+    "_market_today_for_quote",
+    "_distance_pct",
+    "_market_rule_value",
+    "_market_factor_meta",
+    "post_market_ai_scan",
+    "get_market_portfolio_check",
+    "get_market_valuation_percentile",
+    "get_market_convertible_bonds",
+    "get_market_etf_rotation",
+    "get_market_research_card",
+    "market_research_card",
+    "market_portfolio_check",
+    "market_valuation_percentile",
+    "market_convertible_bonds",
+    "_tencent_convertible_quotes",
+    "market_etf_rotation",
+    "_TENCENT_KLINE_CACHE",
+    "conclude_market_research",
+    "create_market_valuation",
+    "MarketResearchConclusionRequest",
+    "MarketValuationRequest",
+    "market_backtest_sensitivity",
+    "compare_market_strategies",
+    "run_market_walk_forward",
+    "run_market_backtest",
+    "get_market_strategies",
+    "create_market_strategy",
+    "create_market_report",
+    "get_market_reports",
+    "create_market_research",
+    "_fold_sample_ratios",
+    "_fold_max_drawdown",
+    "_compound_percent_returns",
+    "_select_walk_forward_window",
+    "_walk_forward_candidate_windows",
+    "_simulate_market_backtest",
+    "market_backtest_quality",
+    "market_backtest_samples",
+    "market_history_series",
+    "market_backtest_input_error",
+    "normalize_market_strategy",
+    "SUPPORTED_MARKET_STRATEGIES",
+    "MarketSensitivityRequest",
+    "MarketStrategyCompareRequest",
+    "MarketWalkForwardRequest",
+    "MarketBacktestRequest",
+    "MarketStrategyRequest",
+    "MarketResearchRequest",
     "save_market_watchlist",
     "save_market_snapshot",
     "_market_history_points",
