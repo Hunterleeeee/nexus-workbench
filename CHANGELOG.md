@@ -1513,3 +1513,19 @@
     （SerialUpstreamFetchTests 3 个）适配到 app_pkg/market.py；
   - app.py 从 3.27 万行累计降至 **1.9 万行**（19035 行），market 全部 33 路由拆完，
     全量 509 通过，3.11 语法 + 回测/路由 smoke 通过。
+
+## v0.3.199 · 2026-08-14
+
+- **拆分第十三批：agent 数据层（run/session/action 记录层）拆到 `app_pkg/agent_runs.py`**
+  （593 行，app.py 降至 1.85 万行）：
+  - 拆出：agent_action_row + run 层 10 函数（create_agent_run_record/get_agent_run/list_agent_runs/
+    update_agent_run_record/add_agent_run_event/list_agent_run_events/agent_run_timeline/
+    agent_run_summary/agent_quality_metrics）+ session 层 8 函数 + action 层 3 函数；
+  - 兼容：模块内互调 21 处全走 `_app_call`（patch app.X 生效）；AGENT_RUN_STATUS_LABELS 从
+    agent_platform 直连；agent_display_name/_audit_datetime 从 projects 直连；decode_json_column
+    从 core 直连；USAGE_EXCLUDED_RUN_KINDS 从 usage 直连；create_notification_record 从
+    notifications 直连；
+  - 边界教训：segA2 截止行容易把 update_agent_action_record 的 finally/close 切掉（SyntaxError
+    expected 'except' or 'finally'）——区间结束必须含完整 try/finally；
+  - app.py 从 3.27 万行累计降至 **1.85 万行**（18479 行），全量 509 通过，3.11 语法 + 跨模块
+    转发 smoke 通过。引擎（stream/run_project_agent）与 agent 路由（19 个）下一批。
