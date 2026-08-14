@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
-<head><script src="/static/theme.js?v=0.3.202"></script><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>文档工厂 · Workbench</title><link rel="stylesheet" href="/static/project.css?v=0.3.202" /></head>
+<head><script src="/static/theme.js?v=0.3.203"></script><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>文档工厂 · Workbench</title><link rel="stylesheet" href="/static/project.css?v=0.3.203" /></head>
 <body>
   <div class="page-shell">
     <header class="page-topbar"><a class="page-brand" href="/" aria-label="返回工作台"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>DOCUMENT FACTORY</small></span></a><div class="page-actions"><a class="back-link" href="/"><span>←</span><span>返回工作台</span></a><button id="global-settings-button" class="global-button unconfigured" type="button"><i class="dot"></i><span class="global-label">配置全局 LLM</span></button></div></header>
@@ -13,7 +13,7 @@
     </main>
   </div>
   <div id="global-settings-modal" class="modal-backdrop hidden"><form id="global-settings-form" class="modal"><div class="modal-head"><div><h2>工作台全局 LLM</h2><p>可配置多个 URL / Key 条目；主配置优先调用，失败时按顺序切换到 fallback。</p></div><button class="icon-button" data-close-global-settings type="button" aria-label="关闭">×</button></div><div id="global-providers" class="global-providers" aria-label="LLM 配置条目列表"></div><button id="global-add-provider" class="global-add-provider" type="button">＋ 添加一个配置条目</button><p id="global-llm-summary" class="global-llm-summary" role="status"></p><p id="global-settings-message" class="modal-message" role="status"></p><div class="modal-actions"><button class="secondary-button" data-close-global-settings type="button">取消</button><button class="primary-button" type="submit">保存全局配置</button></div></form></div>
-  <script src="/static/request.js?v=0.3.202"></script><script src="/static/llm-settings.js?v=0.3.202"></script><script src="/static/markdown.js?v=0.3.202"></script><script src="/static/project.js?v=0.3.202"></script><script>
+  <script src="/static/request.js?v=0.3.203"></script><script src="/static/llm-settings.js?v=0.3.203"></script><script src="/static/markdown.js?v=0.3.203"></script><script src="/static/project.js?v=0.3.203"></script><script>
     const source = document.querySelector("#factory-source");
     const message = document.querySelector("#factory-message");
     const output = document.querySelector("#factory-output");

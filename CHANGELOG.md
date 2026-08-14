@@ -1583,3 +1583,25 @@
     EMBEDDING_URL 常量随段走；InboxBatchMergeRequest 夹在冲突模型后保留 app.py；
   - app.py 从 3.27 万行累计降至 **1.49 万行**（14933 行），全量 509 通过，3.11 语法 +
     转发/缓存/真实读取 smoke 通过。
+
+## v0.3.203 · 2026-08-14
+
+- **拆分第十七批：ai-learning / idea-analysis / product-manager 三领域一次拆出**
+  （app.py 降至 1.08 万行）：
+  - `app_pkg/ai_learning.py`（约 1880 行）：学习画像/今日一课/课程与练习/探索推荐/练习批改 +
+    课程常量区（AI_LEARNING_CURRICULUM/PHASES、EMBODIED_*、LEARNING_TRACKS、4 模型）；
+  - `app_pkg/idea_analysis.py`（约 1050 行）：会话/假设验证/访谈/决策对比/证据包/自动跟进 +
+    run_idea_agent_turn 引擎 + 5 模型；
+  - `app_pkg/product_manager.py`（约 1420 行）：项目/需求/反馈/决策/原型/Cowart 画布/
+    PRD 生成 + 9 模型 + 页面路由；
+  - 兼容：llm_settings/call_llm 绑定导入 patch 失效全改 `_app_call`（22 处）；to_thread
+    函数引用 23 处（含无参形式 `to_thread(fn)`）改 `to_thread(_app_call, 'fn', ...)`；
+    DocumentFactoryRequest 跨模块模型构造走 `_app_call('DocumentFactoryRequest', ...)`；
+    PRODUCT_PROTOTYPES_DIR/OUTPUTS_DIR 用 helper 运行时读；html_lib/html/urllib/base64/
+    hashlib/mimetypes 等标准库补齐；
+  - 血泪教训：**多次部分执行后 app.py 行号漂移，必须 git checkout 恢复后重新侦察**
+    （曾把"删除后行号"当锚点导致课程常量段定位到 cid 引擎区）；拆区间前必须列全
+    区间内所有顶层 def/class/常量逐个判定归属（5281-5814 课程区与 cid 引擎交错）；
+  - 源码断言测试 3 处适配到 app_pkg/ai_learning.py；DEFAULT_LEARNING_TRACK 随段走；
+  - app.py 从 3.27 万行累计降至 **1.08 万行**（10759 行），全量 509 通过，3.11 语法 +
+    转发 smoke 通过。

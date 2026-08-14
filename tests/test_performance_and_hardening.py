@@ -1590,7 +1590,8 @@ class LessonDraftIsolationTests(unittest.TestCase):
         self.assertIn("await flushPendingDraft()", body)
 
     def test_there_is_a_way_to_clear_a_lesson_that_already_holds_the_wrong_answer(self):
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # 主动学习路由已随拆分迁到 app_pkg/ai_learning.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "ai_learning.py").read_text(encoding="utf-8")
         self.assertIn('/api/ai-learning/lessons/{lesson_id}/reset-practice', source)
         body = source[source.find("def post_ai_learning_reset_practice("):]
         body = body[:body.find("\n@app.")]
@@ -2471,7 +2472,8 @@ class ActiveLearningTests(unittest.IsolatedAsyncioTestCase):
 
     def test_the_exercise_prompt_asks_for_a_self_contained_scenario(self):
         """题目要能靠思考回答——这正是原来的练习做不到的地方。"""
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # 主动学习已随拆分迁到 app_pkg/ai_learning.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "ai_learning.py").read_text(encoding="utf-8")
         body = source[source.find("async def create_ai_learning_exercise("):]
         body = body[:body.find("\nasync def grade_ai_learning_exercise(")]
         self.assertIn("不需要用户手上有现成的工作材料", body)
@@ -2480,7 +2482,8 @@ class ActiveLearningTests(unittest.IsolatedAsyncioTestCase):
 
     def test_the_lesson_case_now_has_to_carry_an_answer(self):
         """案例只讲「他怎么做的」，读的人无从判断自己想的对不对。"""
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # 课程常量已随拆分迁到 app_pkg/ai_learning.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "ai_learning.py").read_text(encoding="utf-8")
         self.assertIn('"case": ("situation", "approach", "result", "lesson", "answer")', source)
         self.assertIn("answer 写「在这个情境下正确的做法是什么、为什么」", source)
         script = (Path(__file__).resolve().parents[1] / "static" / "ai-learning.js").read_text(encoding="utf-8")
