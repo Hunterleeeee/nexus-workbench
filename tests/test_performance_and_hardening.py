@@ -3460,7 +3460,8 @@ class EvidencePhaseToolsTests(unittest.TestCase):
     """总调度的「数据探查」阶段此前持有 REACT_TOOLS 全表，包括写工具。"""
 
     def test_the_gathering_phase_only_gets_read_only_tools(self):
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # react_gather_evidence 已随拆分迁到 app_pkg/agent_engine.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "agent_engine.py").read_text(encoding="utf-8")
         body = source[source.find("async def react_gather_evidence("):]
         body = body[:body.find("\nasync def ")]
         self.assertIn('runtime_tool_policy(item["function"]["name"])["mode"] == "readonly"', body)

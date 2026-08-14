@@ -35,7 +35,6 @@ from .core import (
 from .db import db_connection
 from .instance import app
 from .agent_platform import AGENT_REGISTRY
-from .browser import work_item_source_context
 from .notifications import create_notification_record
 from .projects import PROJECT_LINKS, agent_display_name, project_audit, project_link_summary, public_project_link
 
@@ -133,7 +132,7 @@ def work_item_row(row: sqlite3.Row) -> dict[str, Any]:
     item = {key: row[key] for key in row.keys()}
     item["metadata"] = decode_json_column(item.pop("metadata_json", "{}"))
     item["result"] = decode_json_column(item.pop("result_json", "{}"))
-    item["source_context"] = work_item_source_context(item["metadata"])
+    item["source_context"] = _app_call('work_item_source_context', item["metadata"])
     source_project = item.get("source_project", "workbench")
     target_projects = [project_id.strip() for project_id in str(item.get("target_project", "")).split(",") if project_id.strip()]
     item["source_agent_name"] = agent_display_name(source_project)

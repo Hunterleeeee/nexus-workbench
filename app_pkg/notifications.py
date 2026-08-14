@@ -15,7 +15,7 @@ from typing import Any
 
 from .core import clip, log, now_iso
 from .db import db_connection
-from .integrations import send_ntfy_message
+from .integrations import integration_status, send_ntfy_message
 import feishu as feishu_bot
 
 

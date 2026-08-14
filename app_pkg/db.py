@@ -1243,4 +1243,5 @@ def _ensure_db_schema() -> None:
         app._DB_SCHEMA_READY = True
 
 
-__all__ = ["db_connection", "db_scope"]
+__all__ = [
+    "_DB_SCHEMA_READY","db_connection", "db_scope"]

@@ -1047,6 +1047,81 @@ def get_idea_evidence_pack(session_id: str) -> dict[str, Any]:
     return {"session": session, "artifacts": evidence, "decisions": decision, "summary": summary, "evidence_sources": source_bundle.get("sources", []), "policy": "证据包按来源、状态、数据时间和可读性聚合；不会自动替用户改变继续/暂停/转向结论。样本不足时只展示趋势，不替代人工判断。"}
 
 
+async def stream_idea_agent_turn(
+    *,
+    run: dict[str, Any],
+    session: dict[str, Any],
+    message: str,
+):
+    """流式版想法分析 Agent：边收边产出 SSE 事件，收完后持久化。"""
+    update_agent_run_record(run["id"], status="running", error="")
+    add_agent_run_event(run["id"], "started", "想法分析 Agent 开始整理假设和验证路径。")
+    system = (
+        "你是工作台中的想法分析 Agent，负责和用户一起判断一个奇怪想法是否值得做。"
+        "你不是一上来就泼冷水，也不是无条件鼓励；必须通过追问和证据逐步收敛。"
+        "每轮都尽量围绕：目标用户与痛点、现有替代方案、付费或价值、获客路径、竞争壁垒、实现成本、合规风险。"
+        "当信息不足时先提出不超过 3 个关键问题；当已经足够判断时，输出：\n"
+        "1. 结论：值得做 / 先验证 / 暂不建议；\n"
+        "2. 依据：事实与假设分开；\n"
+        "3. 最小验证：7 天内能完成的动作、目标用户、成功指标；\n"
+        "4. 风险与下一步。\n"
+        "不要假装做过外部市场调研；没有证据就标注待验证。使用简体中文，像一个务实的产品合伙人。"
+    )
+    try:
+        history = list_idea_messages(session["id"], limit=12)
+        messages = [{"role": "system", "content": system}] + [{"role": item["role"], "content": item["content"]} for item in history]
+        add_agent_run_event(run["id"], "llm_started", "正在调用全局 LLM 做想法分析。")
+        collected: list[str] = []
+        provider = ""
+        usage = None
+        async for chunk in stream_llm_text(messages, max_tokens=4000, temperature=0.3, purpose="idea-analysis"):
+            if chunk["type"] == "delta":
+                if chunk.get("text"):
+                    collected.append(chunk["text"])
+                yield chunk
+            elif chunk["type"] == "reset":
+                collected.clear()
+                yield chunk
+            elif chunk["type"] == "finish":
+                provider = chunk.get("provider", "")
+                usage = chunk.get("usage")
+            elif chunk["type"] == "error":
+                yield chunk
+        answer = "".join(collected).strip()
+        if not answer:
+            update_agent_run_record(run["id"], status="failed", error="LLM 未返回内容")
+            add_agent_run_event(run["id"], "failed", "想法分析 Agent 未返回内容。", level="error")
+            yield {"type": "error", "message": "LLM 未返回内容，请稍后重试。", "provider": provider}
+            return
+        add_agent_run_event(run["id"], "llm_succeeded", "想法分析已返回。", level="success")
+        result_contract = agent_result_contract(
+            "idea-analysis",
+            answer,
+            source_refs=[{"type": "idea_session", "id": session["id"], "title": session.get("title", "未命名想法"), "updated_at": session.get("updated_at", "")}],
+            data_as_of=session.get("updated_at", ""),
+            run_id=run["id"],
+            session_id=session["id"],
+        )
+        assistant_message = add_idea_message(session["id"], "assistant", answer)
+        verdict_match = re.search(r"(值得做|先验证|暂不建议)", answer)
+        summary = {
+            **(session.get("summary") if isinstance(session.get("summary"), dict) else {}),
+            "verdict": verdict_match.group(1) if verdict_match else "继续澄清",
+            "last_answer": clip(answer, 1000),
+            "last_result_contract": result_contract,
+            "last_run_id": run["id"],
+        }
+        session = update_idea_session_summary(session["id"], summary) or session
+        result = {"answer": answer, "session_id": session["id"], "message_id": assistant_message.get("id"), "verdict": summary["verdict"], "result_contract": result_contract}
+        updated_run = update_agent_run_record(run["id"], status="succeeded", result=result, error="") or run
+        add_agent_run_event(run["id"], "succeeded", "想法分析 Agent 本轮完成。", level="success")
+        yield {"type": "finish", "reason": "stop", "usage": usage, "provider": provider, "answer": answer, "session_id": session["id"], "message_id": assistant_message.get("id"), "verdict": summary["verdict"], "result_contract": result_contract}
+    except Exception as exc:
+        update_agent_run_record(run["id"], status="failed", error=clip(str(exc), 500))
+        add_agent_run_event(run["id"], "failed", f"想法分析 Agent 失败：{clip(str(exc), 200)}", level="error")
+        yield {"type": "error", "message": clip(str(exc), 300), "provider": ""}
+
+
 __all__ = [
     "IdeaAnalysisChatRequest",
     "idea_session_row",
@@ -1092,4 +1167,5 @@ __all__ = [
     "add_idea_metric",
     "compare_idea_decision",
     "get_idea_evidence_pack",
+    "stream_idea_agent_turn",
 ]

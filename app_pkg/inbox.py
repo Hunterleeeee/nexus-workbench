@@ -892,6 +892,139 @@ def delete_inbox_item(item_id: int) -> dict[str, bool]:
         connection.close()
 
 
+def handoff_title(item: dict[str, Any], prefix: str = "") -> str:
+    content = next((line.strip() for line in str(item.get("description") or item.get("title") or "").splitlines() if line.strip()), "未命名交接")
+    return clip(f"{prefix}{content}", 100)
+
+
+async def run_inbox_handoff_work_item(project_id: str, item: dict[str, Any]) -> dict[str, Any]:
+    """Execute and audit a confirmed Inbox → Knowledge/Document handoff."""
+    item_id = int(item["id"])
+    session = create_agent_session(project_id, f"交接：{clip(item.get('title', '未命名工作项'), 90)}")
+    handoff_message = (
+        "这是一个来自快速收件箱的已确认交接，请把它当作当前项目 Agent 的正式任务处理。\n\n"
+        f"来源 Agent：{item.get('source_agent_name', item.get('source_project', '工作台'))}\n"
+        f"工作项：{item.get('title', '未命名工作项')}\n"
+        f"任务内容：\n{item.get('description', '')}\n\n"
+        "请基于当前项目上下文，输出事实、判断、缺口和下一步；不要把未验证内容写成确定事实。"
+    )
+    add_agent_message(session["id"], "user", handoff_message, {"source": "work_item", "work_item_id": item_id, "source_project": item.get("source_project", "")})
+    run = create_agent_run_record(
+        project_id=project_id,
+        session_id=session["id"],
+        parent_run_id=str(item.get("claimed_run_id") or ""),
+        kind="handoff_knowledge" if project_id == "knowledge" else "handoff_document",
+        title=clip(item.get("title", "交接工作项"), 240),
+        request={"work_item_id": item_id, "source_project": item.get("source_project", ""), "message": handoff_message},
+        max_attempts=2,
+        attempt=2 if item.get("claimed_run_id") else 1,
+    )
+    update_work_item_record(item_id, {"status": "running", "claimed_at": now_iso(), "claimed_run_id": run["id"], "last_error": ""})
+    artifact = None
+    answer = ""
+    assistant_message = None
+    try:
+        if project_id == "knowledge":
+            result = await run_project_agent(project_id=project_id, session=session, run=run, message=handoff_message, context={"source": "inbox_handoff", "work_item_id": item_id})
+            session = result.get("session") or session
+            answer = str(result.get("message", {}).get("content", "")).strip()
+            note = write_knowledge_note(
+                handoff_title(item, "收件箱沉淀："),
+                f"> 来源：快速收件箱 #{item_id}\n> 原始内容：{clip(str(item.get('description') or ''), 600)}\n\n{answer}",
+                metadata={"source_inbox_id": item_id, "source_work_item_id": item_id, "handoff_run_id": run["id"], "source_project": "inbox"},
+                artifact_kind="inbox_handoff_note",
+            )
+            artifact = note.get("artifact")
+            assistant_message = result.get("message")
+            update_agent_run_record(run["id"], status="succeeded", result={"answer": answer, "artifact_id": artifact.get("id") if artifact else None, "session_id": session["id"], "source_work_item_id": item_id}, error="")
+            add_agent_run_event(run["id"], "artifact_produced", "知识库 Agent 已生成本地 Markdown 笔记。", level="success", metadata={"artifact_id": artifact.get("id") if artifact else None})
+        else:
+            update_agent_run_record(run["id"], status="running", error="")
+            add_agent_run_event(run["id"], "started", "文档工厂 Agent 开始把收件箱内容加工为版本化工作草稿。")
+            add_agent_run_event(run["id"], "llm_started", "正在调用全局 LLM 生成文档草稿。")
+            answer = await call_llm(
+                [
+                    {"role": "system", "content": "你是本地文档工厂 Agent。把收件箱内容加工成中文 Markdown 工作草稿。不得编造事实；必须分开写：目标、已知信息、待确认问题、建议下一步。明确标注这不是已经批准的正式交付。"},
+                    {"role": "user", "content": f"来源收件箱 #{item_id}\n{item.get('description', '')}"},
+                ],
+                max_tokens=4000,
+                temperature=0.2,
+            )
+            add_agent_run_event(run["id"], "llm_succeeded", "文档草稿已生成。", level="success")
+            assistant_message = add_agent_message(session["id"], "assistant", answer, {"run_id": run["id"], "source_work_item_id": item_id})
+            session = update_agent_session_summary(session["id"], {"last_answer": clip(answer, 1200), "last_run_id": run["id"], "source_work_item_id": item_id}) or session
+            previous = next((candidate for candidate in list_artifacts("doc-factory") if candidate.get("metadata", {}).get("source_work_item_id") == item_id), None)
+            version = int((previous or {}).get("metadata", {}).get("version") or 0) + 1
+            title = handoff_title(item, "收件箱交付：")
+            output_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-v{version}-{safe_filename(title, '收件箱文档')}.md"
+            output_path = OUTPUTS_DIR / output_name
+            output_path.write_text(answer.rstrip() + "\n", encoding="utf-8")
+            artifact = register_artifact_safely(
+                project_id="doc-factory",
+                name=output_name,
+                path=str(output_path),
+                kind="inbox_handoff_document",
+                metadata={"title": title, "version": version, "source_inbox_id": item_id, "source_work_item_id": item_id, "source_project": "inbox", "source_name": f"快速收件箱 #{item_id}", "handoff_run_id": run["id"], "draft_only": True},
+            )
+            if previous and artifact:
+                create_relation_record(from_type="artifact", from_id=str(previous["id"]), to_type="artifact", to_id=str(artifact["id"]), relation_type="version_of", metadata={"project_id": "doc-factory", "version": version, "source_work_item_id": item_id})
+            update_agent_run_record(run["id"], status="succeeded", result={"answer": answer, "artifact_id": artifact.get("id") if artifact else None, "session_id": session["id"]}, error="")
+            add_agent_run_event(run["id"], "artifact_produced", "文档工厂 Agent 已保存版本化工作草稿。", level="success", metadata={"artifact_id": artifact.get("id") if artifact else None, "version": version})
+        if artifact:
+            create_relation_record(from_type="work_item", from_id=str(item_id), to_type="artifact", to_id=str(artifact.get("id")), relation_type="produced", metadata={"project_id": project_id, "source_inbox_id": item_id, "agent_run_id": run["id"]})
+            create_relation_record(from_type="agent_run", from_id=run["id"], to_type="artifact", to_id=str(artifact.get("id")), relation_type="produced", metadata={"project_id": project_id, "source_work_item_id": item_id})
+        relation = create_relation_record(from_type="work_item", from_id=str(item_id), to_type="agent_run", to_id=run["id"], relation_type="processed_by", metadata={"project_id": project_id, "status": "done", "artifact_id": artifact.get("id") if artifact else None})
+        result_payload = {"agent_run_id": run["id"], "answer": answer, "artifact": artifact, "source_inbox_id": item_id}
+        updated_item = update_work_item_record(item_id, {"status": "done", "result_json": json.dumps(result_payload, ensure_ascii=False), "completed_at": now_iso(), "last_error": ""}) or item
+        notification = create_notification_record(title=f"{agent_display_name(project_id)}已完成收件箱交接", body=f"{item.get('title', '交接工作项')} · 已生成{'知识笔记' if project_id == 'knowledge' else '版本化文档草稿'}，结果可回溯。", project_id=project_id, kind="agent_result", level="success", href=project_href(project_id), event_key=f"work-item-run:{item_id}:{run['id']}", dedupe_seconds=0)
+        return {"ok": True, "work_item": updated_item, "run": get_agent_run(run["id"]) or run, "relation": relation, "artifact": artifact, "notification": notification, "session": session, "message": assistant_message, "answer": answer, "messages": list_agent_messages(session["id"], limit=40), "agent": agent_detail(project_id, llm_ready=True), "links": project_link_summary(project_id)}
+    except HTTPException as exc:
+        error = str(exc.detail)
+        update_agent_run_record(run["id"], status="failed", error=error)
+        add_agent_run_event(run["id"], "failed", error, level="error")
+        update_work_item_record(item_id, {"status": "failed", "completed_at": now_iso(), "last_error": error})
+        try:
+            relation = create_relation_record(
+                from_type="work_item",
+                from_id=str(item_id),
+                to_type="agent_run",
+                to_id=run["id"],
+                relation_type="processed_by",
+                metadata={"project_id": project_id, "status": "failed", "error": error},
+            )
+            create_notification_record(
+                title=f"{agent_display_name(project_id)}收件箱交接失败",
+                body=f"{item.get('title', '交接工作项')} · {error}",
+                project_id=project_id,
+                kind="agent_result",
+                level="error",
+                href=project_href(project_id),
+                event_key=f"work-item-run:{item_id}:{run['id']}",
+                dedupe_seconds=0,
+            )
+        except Exception:
+            log.debug("忽略异常（run_inbox_handoff_work_item）", exc_info=True)
+        raise
+    except Exception as exc:
+        error = str(exc)
+        update_agent_run_record(run["id"], status="failed", error=error)
+        add_agent_run_event(run["id"], "failed", f"收件箱交接失败：{error}", level="error")
+        update_work_item_record(item_id, {"status": "failed", "completed_at": now_iso(), "last_error": error})
+        try:
+            create_relation_record(
+                from_type="work_item",
+                from_id=str(item_id),
+                to_type="agent_run",
+                to_id=run["id"],
+                relation_type="processed_by",
+                metadata={"project_id": project_id, "status": "failed", "error": error},
+            )
+            create_notification_record(title=f"{agent_display_name(project_id)}收件箱交接失败", body=f"{item.get('title', '交接工作项')} · {error}", project_id=project_id, kind="agent_result", level="error", href=project_href(project_id), event_key=f"work-item-run:{item_id}:{run['id']}", dedupe_seconds=0)
+        except Exception:
+            log.debug("忽略异常（run_inbox_handoff_work_item）", exc_info=True)
+        raise HTTPException(502, f"{agent_display_name(project_id)}处理交接失败：{error}") from exc
+
+
 __all__ = [
     "create_agent_run_record",
     "update_agent_run_record",
@@ -932,4 +1065,6 @@ __all__ = [
     "accept_and_run_inbox_route",
     "update_inbox_item",
     "delete_inbox_item",
+    "handoff_title",
+    "run_inbox_handoff_work_item",
 ]

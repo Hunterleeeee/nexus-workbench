@@ -1656,3 +1656,22 @@
     run_project_work_item 改转发（inbox→agent_engine→projects 循环导入）；
   - **app.py 从 3.27 万行累计降至 5219 行（-27481，84% 已拆出）**，全量 509 通过，
     3.11 + eager 注解全检 + 真实执行 smoke（artifact/work_item/relation/inbox 建单）通过。
+
+## v0.3.207 · 2026-08-14
+
+- **第 21 批：REACT/ACT 工具适配器 → agent_engine + 引擎粘合归位 + 新建 cloud_dev/feishu_events**：
+  - `agent_engine.py` 追加约 1300 行：REACT 工具表（_react_* 20 个/ACT_TOOLS/execute_react_tool/
+    react_tool_schemas/assert_subagent_tools_exist）+ route_child_agents/react_gather_evidence/
+    initial_analysis；
+  - `inbox.py` 追加 handoff_title/run_inbox_handoff_work_item；`idea_analysis.py` 追加
+    stream_idea_agent_turn；`browser.py` 追加 stream_crawl_chat_turn/public_run；
+  - **新建 `app_pkg/cloud_dev.py`**（云开发审批/补丁/生成/状态 ~350 行）+ **新建
+    `app_pkg/feishu_events.py`**（卡片回调/快捷命令/摘要/事件入口 ~390 行）；
+  - 兼容：**feishu_bot 是外部 SDK 对象不是函数——`_app_call` 会误调用（'module' object is
+    not callable），专写 `_FEISHU_BOT()` 运行时读 app.feishu_bot**（测试 patch
+    app.feishu_bot.send_message 生效）；模块间循环导入（agent_engine↔browser↔artifacts）
+    用转发切断；被测试 patch 的私有常量符号（_browser_sessions 等 AnnAssign）统一补
+    __all__；源码断言 1 处适配 agent_engine.py；既有 bug 修复（notifications.py 缺
+    integration_status 导入）；
+  - **app.py 从 3.27 万行累计降至 3072 行（-29628，91% 已拆出）**，全量 509 通过，
+    3.11 + eager 全检 + smoke（REACT 工具执行/feishu 路由拒绝）通过。
