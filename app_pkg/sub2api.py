@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import sqlite3
@@ -19,8 +20,49 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from .core import DATA_DIR, SUB2API_SNAPSHOT_FILE, clip, load_json_file, log, now_iso, save_json_atomic
+from fastapi import Header, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from .core import DATA_DIR, SUB2API_SNAPSHOT_FILE, WORKBENCH_PUBLIC_URL, clip, load_json_file, log, now_iso, save_json_atomic
+from .instance import app
 from .db import db_connection
+
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
+
+
+class Sub2APISnapshotRequest(BaseModel):
+    snapshot: dict[str, Any] = Field(default_factory=dict)
+    source: str = Field(default="browser_session", max_length=80)
+
+
+
+
+
+
+
+
+
+
+# 允许 Sub2API 面板页面的书签脚本一键同步快照（浏览器端 fetch 面板同源 API 后提交）。
+# 只放行用户自己的面板源，避免其他来源伪造快照。
+_SUB2API_PANEL_ORIGINS = [origin.strip().rstrip("/") for origin in os.getenv("SUB2API_PANEL_ORIGINS", "https://sub.chengsir.asia").split(",") if origin.strip()]
+
+# 这里刻意 **不** 使用全局 CORSMiddleware。
+#
+# 之前的写法是 add_middleware(CORSMiddleware, allow_origins=面板域名,
+# allow_credentials=True)，但中间件是全站生效的：等于声明"面板域名可以带着
+# 浏览器里缓存的 Basic Auth 凭证，POST 到 Workbench 的任意接口并读取响应"。
+# 面板域名一旦被 XSS 或域名过期被抢注，就能触发 Agent 调度、写收件箱等操作。
+#
+# 实际需要跨域的只有 /api/sub2api/sync-raw 一个路由，而它本来就在处理函数里
+# 校验了 Origin。所以改成只给那一个路由回 CORS 头，其余路由维持同源。
+_SUB2API_CORS_PATH = "/api/sub2api/sync-raw"
+
 
 
 def _snapshot_file():
@@ -102,14 +144,14 @@ def load_market_snapshot() -> dict[str, Any]:
 
 def load_sub2api_snapshot() -> dict[str, Any]:
     try:
-        values = json.loads(_snapshot_file().read_text(encoding="utf-8"))
+        values = json.loads(_app_call('_snapshot_file', ).read_text(encoding="utf-8"))
         return values if isinstance(values, dict) else {"logged_in": False, "keys": []}
     except (OSError, json.JSONDecodeError):
         return {"logged_in": False, "keys": []}
 
 
 def save_sub2api_snapshot(values: dict[str, Any]) -> None:
-    save_json_atomic(_snapshot_file(), values, 0o600)
+    save_json_atomic(_app_call('_snapshot_file', ), values, 0o600)
 
 
 def _sub2api_text(value: Any, limit: int = 240) -> str:
@@ -151,7 +193,7 @@ def _sub2api_timestamp(value: Any) -> datetime | None:
 
 
 def _sub2api_quota(value: Any) -> dict[str, Any]:
-    raw = _sub2api_text(value, 80)
+    raw = _app_call('_sub2api_text', value, 80)
     numbers = re.findall(r"-?\d[\d,]*(?:\.\d+)?", raw)
     if len(numbers) < 2:
         return {"raw": raw, "used": None, "limit": None, "remaining": None, "used_pct": None, "remaining_pct": None}
@@ -170,7 +212,7 @@ def _sub2api_quota(value: Any) -> dict[str, Any]:
 
 
 def _sub2api_key_value(value: Any) -> str:
-    text = _sub2api_text(value, 48)
+    text = _app_call('_sub2api_text', value, 48)
     if text and "..." not in text and "*" not in text and len(text) > 16:
         return "[已隐藏]"
     return text
@@ -190,20 +232,20 @@ def sanitize_sub2api_snapshot(values: dict[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     for key in ("source_url", "dashboard_url", "subscription_url", "checked_at", "fetched_at", "error", "source"):
         if key in source:
-            safe[key] = _sub2api_text(source.get(key), 500)
-    client_snapshot_id = sanitize_sub2api_client_snapshot_id(source.get("client_snapshot_id"))
+            safe[key] = _app_call('_sub2api_text', source.get(key), 500)
+    client_snapshot_id = _app_call('sanitize_sub2api_client_snapshot_id', source.get("client_snapshot_id"))
     if client_snapshot_id:
         safe["client_snapshot_id"] = client_snapshot_id
     safe["logged_in"] = bool(source.get("logged_in"))
-    safe["balance"] = _sub2api_text(source.get("balance"), 80)
+    safe["balance"] = _app_call('_sub2api_text', source.get("balance"), 80)
     for section in ("today", "total"):
         raw = source.get(section) if isinstance(source.get(section), dict) else {}
-        safe[section] = {key: _sub2api_text(raw.get(key), 80) for key in ("requests", "cost", "tokens") if key in raw}
+        safe[section] = {key: _app_call('_sub2api_text', raw.get(key), 80) for key in ("requests", "cost", "tokens") if key in raw}
     raw_api_keys = source.get("api_keys") if isinstance(source.get("api_keys"), dict) else {}
     safe["api_keys"] = {key: int(raw_api_keys.get(key) or 0) for key in ("total", "active") if str(raw_api_keys.get(key) or "").strip()}
     raw_subscription = source.get("subscription") if isinstance(source.get("subscription"), dict) else {}
     safe["subscription"] = {
-        key: _sub2api_text(raw_subscription.get(key), 160)
+        key: _app_call('_sub2api_text', raw_subscription.get(key), 160)
         for key in ("name", "provider", "status", "expires_at", "remaining", "weekly_usage", "weekly_reset", "monthly_usage", "monthly_reset")
         if raw_subscription.get(key) is not None
     }
@@ -213,14 +255,14 @@ def sanitize_sub2api_snapshot(values: dict[str, Any]) -> dict[str, Any]:
             continue
         safe_keys.append(
             {
-                "name": _sub2api_text(raw_key.get("name"), 80),
-                "masked": _sub2api_key_value(raw_key.get("masked") or raw_key.get("key")),
-                "group": _sub2api_text(raw_key.get("group"), 100),
-                "concurrency": _sub2api_text(raw_key.get("concurrency"), 40),
-                "today_cost": _sub2api_text(raw_key.get("today_cost"), 80),
-                "month_cost": _sub2api_text(raw_key.get("month_cost"), 80),
-                "expires": _sub2api_text(raw_key.get("expires"), 100),
-                "status": _sub2api_text(raw_key.get("status"), 40),
+                "name": _app_call('_sub2api_text', raw_key.get("name"), 80),
+                "masked": _app_call('_sub2api_key_value', raw_key.get("masked") or raw_key.get("key")),
+                "group": _app_call('_sub2api_text', raw_key.get("group"), 100),
+                "concurrency": _app_call('_sub2api_text', raw_key.get("concurrency"), 40),
+                "today_cost": _app_call('_sub2api_text', raw_key.get("today_cost"), 80),
+                "month_cost": _app_call('_sub2api_text', raw_key.get("month_cost"), 80),
+                "expires": _app_call('_sub2api_text', raw_key.get("expires"), 100),
+                "status": _app_call('_sub2api_text', raw_key.get("status"), 40),
             }
         )
     safe["keys"] = safe_keys[:100]
@@ -230,7 +272,7 @@ def sanitize_sub2api_snapshot(values: dict[str, Any]) -> dict[str, Any]:
 def analyze_sub2api_snapshot(snapshot: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     checked_at = snapshot.get("checked_at") or snapshot.get("fetched_at")
-    checked_dt = _sub2api_timestamp(checked_at)
+    checked_dt = _app_call('_sub2api_timestamp', checked_at)
     age_seconds = max(0, int((now - checked_dt).total_seconds())) if checked_dt else None
     if checked_dt is None:
         freshness_status, freshness_label = "unknown", "没有同步时间"
@@ -241,11 +283,11 @@ def analyze_sub2api_snapshot(snapshot: dict[str, Any], now: datetime | None = No
     else:
         freshness_status, freshness_label = "stale", "数据已过期"
     subscription = snapshot.get("subscription") if isinstance(snapshot.get("subscription"), dict) else {}
-    weekly = _sub2api_quota(subscription.get("weekly_usage"))
-    monthly = _sub2api_quota(subscription.get("monthly_usage"))
-    remaining_days = _sub2api_number(subscription.get("remaining"))
+    weekly = _app_call('_sub2api_quota', subscription.get("weekly_usage"))
+    monthly = _app_call('_sub2api_quota', subscription.get("monthly_usage"))
+    remaining_days = _app_call('_sub2api_number', subscription.get("remaining"))
     if remaining_days is None:
-        expires_dt = _sub2api_timestamp(subscription.get("expires_at"))
+        expires_dt = _app_call('_sub2api_timestamp', subscription.get("expires_at"))
         remaining_days = max(0, int((expires_dt - now).total_seconds() // 86400)) if expires_dt else None
     fields = {
         "balance": bool(str(snapshot.get("balance") or "").strip()),
@@ -258,7 +300,7 @@ def analyze_sub2api_snapshot(snapshot: dict[str, Any], now: datetime | None = No
     if not snapshot.get("logged_in"):
         alerts.append({"key": "not_logged_in", "level": "error", "title": "Sub2API 未确认登录", "message": "无法确认当前浏览器登录状态，请重新打开 API Key 页面同步。"})
     if snapshot.get("error"):
-        alerts.append({"key": "sync_error", "level": "error", "title": "Sub2API 同步失败", "message": _sub2api_text(snapshot.get("error"), 240)})
+        alerts.append({"key": "sync_error", "level": "error", "title": "Sub2API 同步失败", "message": _app_call('_sub2api_text', snapshot.get("error"), 240)})
     if freshness_status in {"stale", "unknown"}:
         alerts.append({"key": "stale", "level": "warning", "title": "Sub2API 数据需要重新同步", "message": f"{freshness_label}；上次同步：{checked_at or '未知'}。"})
     for name, quota in (("weekly", weekly), ("monthly", monthly)):
@@ -294,7 +336,7 @@ def sub2api_prediction(history: list[dict[str, Any]]) -> dict[str, Any]:
         if pct is None:
             continue
         try:
-            checked = _sub2api_timestamp(item.get("checked_at") or item.get("created_at"))
+            checked = _app_call('_sub2api_timestamp', item.get("checked_at") or item.get("created_at"))
         except Exception:  # noqa: BLE001
             continue
         if checked:
@@ -363,7 +405,7 @@ async def explain_sub2api_change(history: list[dict[str, Any]]) -> dict[str, Any
         return {"available": True, "explanation": _explain_change_cache["text"], "cache": True}
     changes_text = "；".join(changes)
     try:
-        answer = await call_llm(
+        answer = await _app_call('call_llm', 
             [
                 {"role": "system", "content": "你是 Sub2API 用量分析师。用一句话（不超过 60 字）解释用户 API 账户快照变化，说明可能原因（如业务增长、自动化任务、额度重置等），不确定就说明是推测。"},
                 {"role": "user", "content": f"最近两次快照变化：{changes_text}。请给出通俗解释。"},
@@ -408,7 +450,7 @@ def _panel_tokens(value: Any) -> str:
 
 def _panel_remaining_days(expires_at: Any) -> str:
     try:
-        parsed = _sub2api_timestamp(str(expires_at))
+        parsed = _app_call('_sub2api_timestamp', str(expires_at))
         if parsed:
             days = (parsed - datetime.now(timezone.utc)).days
             return f"{days} 天" if days >= 0 else "已到期"
@@ -425,7 +467,7 @@ def _panel_usage_aggregate(usage: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     one request. "Today" is matched against the Beijing calendar day because
     the panel timestamps are in +08:00.
     """
-    data = _panel_unwrap(usage)
+    data = _app_call('_panel_unwrap', usage)
     rows = data.get("items") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         return {}, {}
@@ -454,14 +496,14 @@ def _panel_usage_aggregate(usage: Any) -> tuple[dict[str, Any], dict[str, Any]]:
             today["cost"] += cost
             today["tokens"] += tokens
     return (
-        {"requests": today["requests"], "cost": _panel_money(today["cost"]), "tokens": _panel_tokens(today["tokens"])},
-        {"requests": total["requests"], "cost": _panel_money(total["cost"]), "tokens": _panel_tokens(total["tokens"])},
+        {"requests": today["requests"], "cost": _app_call('_panel_money', today["cost"]), "tokens": _app_call('_panel_tokens', today["tokens"])},
+        {"requests": total["requests"], "cost": _app_call('_panel_money', total["cost"]), "tokens": _app_call('_panel_tokens', total["tokens"])},
     )
 
 
 def _panel_keys_list(keys: Any) -> list[dict[str, Any]]:
     """Normalize panel key rows (data.items) into the snapshot keys shape."""
-    data = _panel_unwrap(keys)
+    data = _app_call('_panel_unwrap', keys)
     rows = data.get("items") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         rows = data if isinstance(data, list) else []
@@ -472,7 +514,7 @@ def _panel_keys_list(keys: Any) -> list[dict[str, Any]]:
         normalized.append(
             {
                 "name": str(row.get("name") or ""),
-                "masked": _sub2api_key_value(row.get("key") or row.get("masked") or row.get("sk") or row.get("api_key")),
+                "masked": _app_call('_sub2api_key_value', row.get("key") or row.get("masked") or row.get("sk") or row.get("api_key")),
                 "group": str(row.get("group") or row.get("group_name") or ""),
                 "concurrency": str(row.get("current_concurrency") or row.get("concurrency") or ""),
                 "today_cost": str(row.get("today_cost") or ""),
@@ -492,11 +534,11 @@ def sub2api_cost_breakdown(snapshot: dict[str, Any]) -> dict[str, Any]:
     for raw_key in keys[:100]:
         if not isinstance(raw_key, dict):
             continue
-        label = _sub2api_text(raw_key.get("group"), 80) or "未分组"
+        label = _app_call('_sub2api_text', raw_key.get("group"), 80) or "未分组"
         entry = groups.setdefault(label, {"group": label, "key_count": 0, "today": 0.0, "month": 0.0, "today_count": 0, "month_count": 0})
         entry["key_count"] += 1
-        today = _sub2api_number(raw_key.get("today_cost"))
-        month = _sub2api_number(raw_key.get("month_cost"))
+        today = _app_call('_sub2api_number', raw_key.get("today_cost"))
+        month = _app_call('_sub2api_number', raw_key.get("month_cost"))
         if today is None:
             unpriced_count += 1
         else:
@@ -540,15 +582,15 @@ def parse_sub2api_panel_raw(raw: dict[str, Any]) -> dict[str, Any]:
       /keys                   → data.items (API keys, masked on save)
       /usage                  → data.items (per-request rows, aggregated)
     """
-    me = _panel_unwrap(raw.get("me"))
+    me = _app_call('_panel_unwrap', raw.get("me"))
     if not isinstance(me, dict):
         me = {}
-    subs = _panel_unwrap(raw.get("subscriptions") or raw.get("summary") or raw.get("active"))
+    subs = _app_call('_panel_unwrap', raw.get("subscriptions") or raw.get("summary") or raw.get("active"))
     sub_list = subs.get("subscriptions") if isinstance(subs, dict) and isinstance(subs.get("subscriptions"), list) else []
     sub = sub_list[0] if sub_list else (subs if isinstance(subs, dict) and "group_name" in subs else {})
 
-    today, total = _panel_usage_aggregate(raw.get("usage"))
-    keys = _panel_keys_list(raw.get("keys"))
+    today, total = _app_call('_panel_usage_aggregate', raw.get("usage"))
+    keys = _app_call('_panel_keys_list', raw.get("keys"))
 
     subscription: dict[str, Any] = {}
     if sub:
@@ -558,10 +600,10 @@ def parse_sub2api_panel_raw(raw: dict[str, Any]) -> dict[str, Any]:
             "provider": str(sub.get("provider") or ""),
             "status": str(sub.get("status") or ""),
             "expires_at": expires_raw[:16].replace("T", " ") if expires_raw else "",
-            "remaining": _panel_remaining_days(expires_raw),
-            "weekly_usage": f"{_panel_money(sub.get('weekly_used_usd'))} / {_panel_money(sub.get('weekly_limit_usd'))}",
+            "remaining": _app_call('_panel_remaining_days', expires_raw),
+            "weekly_usage": f"{_app_call('_panel_money', sub.get('weekly_used_usd'))} / {_app_call('_panel_money', sub.get('weekly_limit_usd'))}",
             "weekly_reset": "",
-            "monthly_usage": f"{_panel_money(sub.get('monthly_used_usd'))} / {_panel_money(sub.get('monthly_limit_usd'))}",
+            "monthly_usage": f"{_app_call('_panel_money', sub.get('monthly_used_usd'))} / {_app_call('_panel_money', sub.get('monthly_limit_usd'))}",
             "monthly_reset": "",
         }
 
@@ -569,7 +611,7 @@ def parse_sub2api_panel_raw(raw: dict[str, Any]) -> dict[str, Any]:
     snapshot: dict[str, Any] = {
         "logged_in": True,
         "checked_at": now_iso(),
-        "balance": _panel_money(balance) if isinstance(balance, (int, float)) else str(balance or ""),
+        "balance": _app_call('_panel_money', balance) if isinstance(balance, (int, float)) else str(balance or ""),
         "api_keys": {"total": len(keys), "active": sum(1 for key in keys if str(key.get("status")) == "active")},
         "today": today,
         "total": total,
@@ -586,19 +628,19 @@ SUB2API_PANEL_SETTINGS_FILE = DATA_DIR / "sub2api_panel_settings.json"
 
 def load_sub2api_panel_settings() -> dict[str, Any]:
     try:
-        values = json.loads(_panel_settings_file().read_text(encoding="utf-8"))
+        values = json.loads(_app_call('_panel_settings_file', ).read_text(encoding="utf-8"))
         return values if isinstance(values, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
 
 
 def save_sub2api_panel_settings(values: dict[str, Any]) -> None:
-    save_json_atomic(_panel_settings_file(), values, 0o600)
+    save_json_atomic(_app_call('_panel_settings_file', ), values, 0o600)
 
 
 def sub2api_sync_state() -> dict[str, Any]:
     """Expose a safe, actionable sync status without returning credentials."""
-    settings = load_sub2api_panel_settings()
+    settings = _app_call('load_sub2api_panel_settings', )
     has_refresh_token = bool(str(settings.get("refresh_token") or "").strip())
     raw = settings.get("sync_state") if isinstance(settings.get("sync_state"), dict) else {}
     if not raw:
@@ -635,7 +677,7 @@ def sub2api_sync_state() -> dict[str, Any]:
 
 def update_sub2api_sync_state(status: str, *, source: str = "", error: str = "") -> dict[str, Any]:
     """Persist only operational sync metadata; access/refresh tokens stay untouched."""
-    settings = load_sub2api_panel_settings()
+    settings = _app_call('load_sub2api_panel_settings', )
     previous = settings.get("sync_state") if isinstance(settings.get("sync_state"), dict) else {}
     timestamp = now_iso()
     error_text = clip(str(error or ""), 500)
@@ -665,11 +707,11 @@ def update_sub2api_sync_state(status: str, *, source: str = "", error: str = "")
     }
     settings["sync_state"] = state
     try:
-        save_sub2api_panel_settings(settings)
+        _app_call('save_sub2api_panel_settings', settings)
     except Exception:
         # Sync status is helpful diagnostics, never a reason to fail a valid snapshot.
         log.debug("忽略异常（update_sub2api_sync_state）", exc_info=True)
-    return sub2api_sync_state()
+    return _app_call('sub2api_sync_state', )
 
 
 def sub2api_panel_base_url() -> str:
@@ -682,14 +724,14 @@ async def panel_refresh_access_token(force_refresh: bool = False) -> str:
     access_token via POST /api/v1/auth/refresh; tokens are stored locally so
     the server can keep syncing automatically.
     """
-    settings = load_sub2api_panel_settings()
+    settings = _app_call('load_sub2api_panel_settings', )
     refresh_token = str(settings.get("refresh_token") or "").strip()
     if not refresh_token:
         raise RuntimeError("未配置面板登录凭证（refresh_token）")
     access = str(settings.get("access_token") or "").strip()
     if access and not force_refresh:
         return access
-    base = sub2api_panel_base_url().rstrip("/") + "/api/v1"
+    base = _app_call('sub2api_panel_base_url', ).rstrip("/") + "/api/v1"
     try:
         async with httpx.AsyncClient(timeout=20, trust_env=True) as client:
             response = await client.post(base + "/auth/refresh", json={"refresh_token": refresh_token})
@@ -706,7 +748,7 @@ async def panel_refresh_access_token(force_refresh: bool = False) -> str:
         raise RuntimeError("面板登录凭证已失效，请在 Sub2API 页面重新登录并连接")
     settings["access_token"] = new_access
     settings["refresh_token"] = new_refresh
-    save_sub2api_panel_settings(settings)
+    _app_call('save_sub2api_panel_settings', settings)
     return new_access
 
 
@@ -717,10 +759,10 @@ async def fetch_sub2api_panel_admin() -> dict[str, Any]:
     endpoints are tried last and their 403s never block a successful sync.
     """
     try:
-        access = await panel_refresh_access_token()
+        access = await _app_call('panel_refresh_access_token', )
     except RuntimeError:
         raise
-    base = sub2api_panel_base_url().rstrip("/") + "/api/v1"
+    base = _app_call('sub2api_panel_base_url', ).rstrip("/") + "/api/v1"
     headers = {
         "Authorization": f"Bearer {access}",
         "X-Admin-UI-Request": "true",
@@ -769,7 +811,7 @@ async def fetch_sub2api_panel_admin() -> dict[str, Any]:
             if not denied_any or attempt == 1:
                 break
             try:
-                access = await panel_refresh_access_token(force_refresh=True)
+                access = await _app_call('panel_refresh_access_token', force_refresh=True)
                 headers["Authorization"] = f"Bearer {access}"
                 denied_any = False
             except RuntimeError:
@@ -778,26 +820,26 @@ async def fetch_sub2api_panel_admin() -> dict[str, Any]:
         denied = [path for path, info in results.items() if info.get("status") == "denied"]
         detail = "登录凭证被面板拒绝" if denied else "；".join(f"{path}={info.get('status')}" for path, info in results.items())
         raise RuntimeError(f"面板接口未返回有效数据（{detail}）")
-    payload["source_url"] = f"{sub2api_panel_base_url()}/keys"
-    payload["dashboard_url"] = f"{sub2api_panel_base_url()}/dashboard"
-    payload["subscription_url"] = f"{sub2api_panel_base_url()}/subscriptions"
+    payload["source_url"] = f"{_app_call('sub2api_panel_base_url', )}/keys"
+    payload["dashboard_url"] = f"{_app_call('sub2api_panel_base_url', )}/dashboard"
+    payload["subscription_url"] = f"{_app_call('sub2api_panel_base_url', )}/subscriptions"
     return {"payload": payload, "endpoints": results}
 
 
 async def auto_sync_sub2api_panel() -> dict[str, Any]:
     """Server-side automatic sync: fetch panel with the saved token and store."""
     try:
-        fetched = await fetch_sub2api_panel_admin()
-        snapshot, analysis, artifact = record_sub2api_snapshot(
-            parse_sub2api_panel_raw(fetched["payload"]), source="panel_admin_auto"
+        fetched = await _app_call('fetch_sub2api_panel_admin', )
+        snapshot, analysis, artifact = _app_call('record_sub2api_snapshot', 
+            _app_call('parse_sub2api_panel_raw', fetched["payload"]), source="panel_admin_auto"
         )
-        return {"ok": True, "snapshot": snapshot, "analysis": analysis, "artifact": artifact, "endpoints": fetched["endpoints"], "sync_state": sub2api_sync_state()}
+        return {"ok": True, "snapshot": snapshot, "analysis": analysis, "artifact": artifact, "endpoints": fetched["endpoints"], "sync_state": _app_call('sub2api_sync_state', )}
     except Exception as exc:
-        state = update_sub2api_sync_state("failed", source="panel_admin_auto", error=str(exc))
+        state = _app_call('update_sub2api_sync_state', "failed", source="panel_admin_auto", error=str(exc))
         try:
-            previous = load_sub2api_snapshot()
+            previous = _app_call('load_sub2api_snapshot', )
             previous.update({"error": str(exc)[:500], "last_sync_error_at": state.get("last_attempt_at", now_iso())})
-            save_sub2api_snapshot(previous)
+            _app_call('save_sub2api_snapshot', previous)
         except Exception:
             log.debug("忽略异常（auto_sync_sub2api_panel）", exc_info=True)
         raise
@@ -815,20 +857,20 @@ async def sub2api_auto_sync_loop() -> None:
     if interval <= 0:
         return
     while True:
-        lease = worker_lease("sync-worker", status="running", metadata={"loop": "sub2api_auto_sync"})
+        lease = _app_call('worker_lease', "sync-worker", status="running", metadata={"loop": "sub2api_auto_sync"})
         if lease.get("status") == "held_by_other_instance":
             await asyncio.sleep(min(interval, 60))
             continue
-        settings = load_sub2api_panel_settings()
-        sync_state = sub2api_sync_state()
+        settings = _app_call('load_sub2api_panel_settings', )
+        sync_state = _app_call('sub2api_sync_state', )
         if settings.get("refresh_token") and not sync_state.get("credential_invalid"):
             try:
-                await auto_sync_sub2api_panel()
+                await _app_call('auto_sync_sub2api_panel', )
             except Exception as exc:
                 try:
-                    previous = load_sub2api_snapshot()
+                    previous = _app_call('load_sub2api_snapshot', )
                     previous.update({"error": str(exc)[:500], "last_sync_error_at": now_iso()})
-                    save_sub2api_snapshot(previous)
+                    _app_call('save_sub2api_snapshot', previous)
                 except Exception:
                     log.debug("忽略异常（sub2api_auto_sync_loop）", exc_info=True)
         await asyncio.sleep(interval)
@@ -837,14 +879,14 @@ async def sub2api_auto_sync_loop() -> None:
 
 
 def record_sub2api_snapshot(values: dict[str, Any], source: str = "browser_session", client_snapshot_id: str = "") -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
-    snapshot = sanitize_sub2api_snapshot(values)
-    snapshot["source"] = _sub2api_text(source, 80) or "browser_session"
-    client_snapshot_id = sanitize_sub2api_client_snapshot_id(client_snapshot_id or snapshot.get("client_snapshot_id"))
+    snapshot = _app_call('sanitize_sub2api_snapshot', values)
+    snapshot["source"] = _app_call('_sub2api_text', source, 80) or "browser_session"
+    client_snapshot_id = _app_call('sanitize_sub2api_client_snapshot_id', client_snapshot_id or snapshot.get("client_snapshot_id"))
     if client_snapshot_id:
         snapshot["client_snapshot_id"] = client_snapshot_id
     snapshot.setdefault("checked_at", now_iso())
     snapshot["synced_at"] = now_iso()
-    analysis = analyze_sub2api_snapshot(snapshot)
+    analysis = _app_call('analyze_sub2api_snapshot', snapshot)
     connection = db_connection()
     try:
         if client_snapshot_id:
@@ -854,12 +896,12 @@ def record_sub2api_snapshot(values: dict[str, Any], source: str = "browser_sessi
                     previous = json.loads(row["snapshot_json"] or "{}")
                 except (TypeError, json.JSONDecodeError):
                     previous = {}
-                if sanitize_sub2api_client_snapshot_id(previous.get("client_snapshot_id")) == client_snapshot_id:
-                    existing = sanitize_sub2api_snapshot(previous)
+                if _app_call('sanitize_sub2api_client_snapshot_id', previous.get("client_snapshot_id")) == client_snapshot_id:
+                    existing = _app_call('sanitize_sub2api_snapshot', previous)
                     existing["_deduplicated"] = True
-                    return existing, analyze_sub2api_snapshot(existing), None
-        save_sub2api_snapshot(snapshot)
-        update_sub2api_sync_state("succeeded", source=source)
+                    return existing, _app_call('analyze_sub2api_snapshot', existing), None
+        _app_call('save_sub2api_snapshot', snapshot)
+        _app_call('update_sub2api_sync_state', "succeeded", source=source)
         cursor = connection.execute(
             "INSERT INTO sub2api_snapshots (checked_at, status, snapshot_json, created_at) VALUES (?, ?, ?, ?)",
             (snapshot.get("checked_at", ""), analysis["status"], json.dumps(snapshot, ensure_ascii=False), now_iso()),
@@ -868,10 +910,10 @@ def record_sub2api_snapshot(values: dict[str, Any], source: str = "browser_sessi
         history_id = cursor.lastrowid
     finally:
         connection.close()
-    artifact = register_artifact_safely(
+    artifact = _app_call('register_artifact_safely', 
         project_id="sub2api",
         name="sub2api_snapshot.json",
-        path=str(_snapshot_file()),
+        path=str(_app_call('_snapshot_file', )),
         kind="sub2api_snapshot",
         metadata={"history_id": history_id, "checked_at": snapshot.get("checked_at"), "status": analysis["status"], "source": snapshot.get("source")},
     )
@@ -890,26 +932,26 @@ def list_sub2api_history(limit: int = 30) -> list[dict[str, Any]]:
             snapshot = json.loads(row["snapshot_json"] or "{}")
         except json.JSONDecodeError:
             snapshot = {}
-        analysis = analyze_sub2api_snapshot(snapshot)
+        analysis = _app_call('analyze_sub2api_snapshot', snapshot)
         subscription = snapshot.get("subscription") or {}
         history.append({"id": row["id"], "checked_at": row["checked_at"], "created_at": row["created_at"], "status": row["status"], "weekly_usage": subscription.get("weekly_usage", ""), "monthly_usage": subscription.get("monthly_usage", ""), "remaining": subscription.get("remaining", ""), "expires_at": subscription.get("expires_at", ""), "weekly_remaining_pct": analysis["weekly"].get("remaining_pct"), "monthly_remaining_pct": analysis["monthly"].get("remaining_pct"), "remaining_days": analysis.get("remaining_days")})
     return history
 
 
 def evaluate_sub2api_alerts(snapshot: dict[str, Any] | None = None, create_records: bool = False) -> dict[str, Any]:
-    snapshot = snapshot or load_sub2api_snapshot()
-    analysis = analyze_sub2api_snapshot(snapshot)
+    snapshot = snapshot or _app_call('load_sub2api_snapshot', )
+    analysis = _app_call('analyze_sub2api_snapshot', snapshot)
     created: list[dict[str, Any]] = []
-    existing_items = list_work_items("all", "inbox") if create_records else []
-    latest_artifact = list_artifacts("sub2api")[0] if list_artifacts("sub2api") else None
+    existing_items = _app_call('list_work_items', "all", "inbox") if create_records else []
+    latest_artifact = _app_call('list_artifacts', "sub2api")[0] if _app_call('list_artifacts', "sub2api") else None
     # 恢复闭环：账户恢复正常后，仍挂着的旧告警自动标 done（不重复打扰）
     active_keys = {f"sub2api:{alert['key']}" for alert in analysis["alerts"]}
     restored: list[dict[str, Any]] = []
-    for item in list_work_items("all", "sub2api"):
+    for item in _app_call('list_work_items', "all", "sub2api"):
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         alert_key = str(metadata.get("alert_key") or "")
         if alert_key.startswith("sub2api:") and item.get("status") in {"open", "running", "blocked"} and alert_key not in active_keys:
-            update_work_item_record(item["id"], {"status": "done", "resolved_at": now_iso(), "resolved_by": "sub2api_health_recovery"})
+            _app_call('update_work_item_record', item["id"], {"status": "done", "resolved_at": now_iso(), "resolved_by": "sub2api_health_recovery"})
             restored.append({"alert_key": alert_key, "work_item_id": item["id"]})
     for alert in analysis["alerts"]:
         alert_key = f"sub2api:{alert['key']}"
@@ -924,19 +966,19 @@ def evaluate_sub2api_alerts(snapshot: dict[str, Any] | None = None, create_recor
 
 
 def evaluate_sub2api_alerts(snapshot: dict[str, Any] | None = None, create_records: bool = False) -> dict[str, Any]:
-    snapshot = snapshot or load_sub2api_snapshot()
-    analysis = analyze_sub2api_snapshot(snapshot)
+    snapshot = snapshot or _app_call('load_sub2api_snapshot', )
+    analysis = _app_call('analyze_sub2api_snapshot', snapshot)
     created: list[dict[str, Any]] = []
-    existing_items = list_work_items("all", "inbox") if create_records else []
-    latest_artifact = list_artifacts("sub2api")[0] if list_artifacts("sub2api") else None
+    existing_items = _app_call('list_work_items', "all", "inbox") if create_records else []
+    latest_artifact = _app_call('list_artifacts', "sub2api")[0] if _app_call('list_artifacts', "sub2api") else None
     # 恢复闭环：账户恢复正常后，仍挂着的旧告警自动标 done（不重复打扰）
     active_keys = {f"sub2api:{alert['key']}" for alert in analysis["alerts"]}
     restored: list[dict[str, Any]] = []
-    for item in list_work_items("all", "sub2api"):
+    for item in _app_call('list_work_items', "all", "sub2api"):
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         alert_key = str(metadata.get("alert_key") or "")
         if alert_key.startswith("sub2api:") and item.get("status") in {"open", "running", "blocked"} and alert_key not in active_keys:
-            update_work_item_record(item["id"], {"status": "done", "resolved_at": now_iso(), "resolved_by": "sub2api_health_recovery"})
+            _app_call('update_work_item_record', item["id"], {"status": "done", "resolved_at": now_iso(), "resolved_by": "sub2api_health_recovery"})
             restored.append({"alert_key": alert_key, "work_item_id": item["id"]})
     for alert in analysis["alerts"]:
         alert_key = f"sub2api:{alert['key']}"
@@ -948,7 +990,7 @@ def evaluate_sub2api_alerts(snapshot: dict[str, Any] | None = None, create_recor
             created.append({"alert": alert, "created": False})
             continue
         priority = "urgent" if alert["level"] == "error" else "high"
-        item = create_work_item_record(
+        item = _app_call('create_work_item_record', 
             title=alert["title"],
             description=f"{alert['message']} 数据时间：{analysis['freshness'].get('checked_at') or '未知'}。",
             kind="alert",
@@ -959,9 +1001,307 @@ def evaluate_sub2api_alerts(snapshot: dict[str, Any] | None = None, create_recor
         )
         relation = None
         if latest_artifact:
-            relation = create_relation_record(from_type="artifact", from_id=str(latest_artifact["id"]), to_type="work_item", to_id=str(item["id"]), relation_type="alert_from_snapshot", metadata={"alert_key": alert_key})
+            relation = _app_call('create_relation_record', from_type="artifact", from_id=str(latest_artifact["id"]), to_type="work_item", to_id=str(item["id"]), relation_type="alert_from_snapshot", metadata={"alert_key": alert_key})
         existing_items.append(item)
         created.append({"alert": alert, "work_item": item, "relation": relation, "created": True})
     return {"analysis": analysis, "alerts": analysis["alerts"], "created": created, "restored": restored}
 
-__all__ = ["_snapshot_file", "_panel_settings_file", "load_sub2api_snapshot", "save_sub2api_snapshot", "_sub2api_text", "_sub2api_number", "_sub2api_timestamp", "_sub2api_quota", "_sub2api_key_value", "sanitize_sub2api_client_snapshot_id", "sanitize_sub2api_snapshot", "analyze_sub2api_snapshot", "sub2api_prediction", "explain_sub2api_change", "_panel_unwrap", "_panel_money", "_panel_tokens", "_panel_remaining_days", "_panel_usage_aggregate", "_panel_keys_list", "sub2api_cost_breakdown", "parse_sub2api_panel_raw", "load_sub2api_panel_settings", "save_sub2api_panel_settings", "sub2api_sync_state", "update_sub2api_sync_state", "sub2api_panel_base_url", "panel_refresh_access_token", "fetch_sub2api_panel_admin", "auto_sync_sub2api_panel", "sub2api_auto_sync_loop", "record_sub2api_snapshot", "list_sub2api_history", "evaluate_sub2api_alerts", "SUB2API_PANEL_SETTINGS_FILE", "SUB2API_SNAPSHOT_FILE"]
+@app.get("/api/sub2api")
+def get_sub2api_snapshot() -> dict[str, Any]:
+    snapshot = _app_call('load_sub2api_snapshot', )
+    history = _app_call('list_sub2api_history', limit=30)
+    return {"snapshot": snapshot, "analysis": _app_call('analyze_sub2api_snapshot', snapshot), "history": history, "prediction": _app_call('sub2api_prediction', history), "cost_breakdown": _app_call('sub2api_cost_breakdown', snapshot), "sync_state": _app_call('sub2api_sync_state', )}
+
+
+@app.post("/api/sub2api/explain-change")
+async def explain_sub2api_change_endpoint() -> dict[str, Any]:
+    history = await asyncio.to_thread(list_sub2api_history, limit=30)
+    return await _app_call('explain_sub2api_change', history)
+
+
+@app.post("/api/sub2api/snapshot")
+def sync_sub2api_snapshot(request: Sub2APISnapshotRequest) -> dict[str, Any]:
+    snapshot, analysis, artifact = _app_call('record_sub2api_snapshot', request.snapshot, request.source, request.snapshot.get("client_snapshot_id", ""))
+    deduplicated = bool(snapshot.pop("_deduplicated", False))
+    return {"ok": True, "deduplicated": deduplicated, "snapshot": snapshot, "analysis": analysis, "artifact": artifact, "history": _app_call('list_sub2api_history', limit=30), "sync_state": _app_call('sub2api_sync_state', )}
+
+
+class Sub2APIRawSyncRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    source: str = Field(default="panel_bookmarklet", max_length=80)
+    client_snapshot_id: str = Field(default="", max_length=100)
+
+
+@app.post("/api/sub2api/sync-raw")
+def sync_sub2api_panel_raw(request: Sub2APIRawSyncRequest, origin: str | None = Header(default=None)) -> dict[str, Any]:
+    """Accept raw panel API payloads from the browser bookmarklet.
+
+    The bookmarklet runs inside the Sub2API panel page (with the user's session
+    cookie), so the browser Origin must be one of the configured panel origins.
+    The payload is normalized defensively and stored as a standard snapshot.
+    """
+    allowed = {origin_.rstrip("/") for origin_ in _SUB2API_PANEL_ORIGINS}
+    source = str(request.source or "panel_bookmarklet").strip() or "panel_bookmarklet"
+    # Browser bookmarklets must arrive with the panel Origin.  Keeping the
+    # origin check strict for this path prevents an arbitrary page from
+    # submitting forged account snapshots, while manual/server-side snapshot
+    # routes keep their existing contract.
+    if source.startswith("panel_bookmarklet") and (not origin or origin.rstrip("/") not in allowed):
+        raise HTTPException(403, "不信任的提交来源")
+    if not request.payload:
+        raise HTTPException(400, "缺少面板数据")
+    parsed = _app_call('parse_sub2api_panel_raw', request.payload)
+    snapshot, analysis, artifact = _app_call('record_sub2api_snapshot', parsed, source, request.client_snapshot_id)
+    deduplicated = bool(snapshot.pop("_deduplicated", False))
+    return {"ok": True, "deduplicated": deduplicated, "snapshot": snapshot, "analysis": analysis, "artifact": artifact, "history": _app_call('list_sub2api_history', limit=30), "sync_state": _app_call('sub2api_sync_state', )}
+
+
+class Sub2APIPanelSettingsRequest(BaseModel):
+    clear: bool = False
+
+
+class Sub2APILoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=1, max_length=500)
+
+
+@app.get("/api/sub2api/panel-settings")
+async def get_sub2api_panel_settings() -> dict[str, Any]:
+    settings = _app_call('load_sub2api_panel_settings', )
+    sync_state = _app_call('sub2api_sync_state', )
+    auto_sync_available = bool(str(settings.get("refresh_token") or "").strip()) and not sync_state.get("credential_invalid")
+    return {
+        "has_credential": bool(str(settings.get("refresh_token") or "").strip()),
+        "has_access_token": bool(str(settings.get("access_token") or "").strip()),
+        "auto_sync_available": auto_sync_available,
+        "base_url": _app_call('sub2api_panel_base_url', ),
+        "sync_state": sync_state,
+    }
+
+
+@app.post("/api/sub2api/panel-settings")
+async def save_sub2api_panel_settings_route(request: Sub2APIPanelSettingsRequest) -> dict[str, Any]:
+    settings = _app_call('load_sub2api_panel_settings', )
+    if request.clear:
+        settings.pop("refresh_token", None)
+        settings.pop("access_token", None)
+        settings["sync_state"] = {"status": "not_configured", "last_attempt_at": "", "last_success_at": "", "last_error": "", "next_action": "登录并连接面板"}
+        _app_call('save_sub2api_panel_settings', settings)
+    sync_state = _app_call('sub2api_sync_state', )
+    return {"ok": True, "has_credential": bool(str(settings.get("refresh_token") or "").strip()), "has_access_token": bool(str(settings.get("access_token") or "").strip()), "auto_sync_available": bool(str(settings.get("refresh_token") or "").strip()) and not sync_state.get("credential_invalid"), "sync_state": sync_state}
+
+
+@app.post("/api/sub2api/panel-login")
+async def login_sub2api_panel(request: Sub2APILoginRequest) -> dict[str, Any]:
+    """Log into the Sub2API panel once with the user's panel credentials.
+
+    The password is used only to obtain tokens and is NOT persisted; the
+    refresh_token is stored so the server can keep syncing automatically.
+    """
+    base = _app_call('sub2api_panel_base_url', ).rstrip("/") + "/api/v1"
+    try:
+        async with httpx.AsyncClient(timeout=25, trust_env=True) as client:
+            response = await client.post(base + "/auth/login", json={"email": request.email, "password": request.password})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"面板连接失败：{type(exc).__name__}：{str(exc)[:150]}") from exc
+    try:
+        body = response.json()
+    except Exception:
+        body = {}
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    access = str(data.get("access_token") or "").strip()
+    refresh = str(data.get("refresh_token") or "").strip()
+    if response.status_code not in (200, 201) or not access:
+        reason = str(body.get("reason") or body.get("message") or body.get("code") or f"HTTP {response.status_code}")
+        if "2fa" in reason.lower() or "2FA" in reason:
+            raise HTTPException(400, "面板开启了两步验证（2FA），暂不支持自动登录。请在面板页面登录后，复制浏览器控制台中的 refresh_token 配置到工作台。")
+        raise HTTPException(400, f"面板登录失败：{reason}")
+    settings = _app_call('load_sub2api_panel_settings', )
+    settings["refresh_token"] = refresh
+    settings["access_token"] = access
+    _app_call('save_sub2api_panel_settings', settings)
+    sync_state = _app_call('update_sub2api_sync_state', "connected", source="panel_login")
+    user = data.get("user") if isinstance(data, dict) else {}
+    auto_sync_available = bool(refresh)
+    message = "已连接面板，开始自动同步" if auto_sync_available else "已登录，但面板未提供可续期凭证；请使用浏览器书签同步，或重新登录后再试"
+    return {"ok": True, "message": message, "user": user if isinstance(user, dict) else {}, "has_credential": auto_sync_available, "has_access_token": True, "auto_sync_available": auto_sync_available, "sync_state": sync_state}
+
+
+@app.post("/api/sub2api/sync-auto")
+async def sync_sub2api_panel_auto() -> dict[str, Any]:
+    """Server-side manual sync trigger using the saved panel login token."""
+    try:
+        result = await _app_call('auto_sync_sub2api_panel', )
+    except Exception as exc:
+        raise HTTPException(502, f"面板同步失败：{exc}") from exc
+    return result
+
+
+@app.post("/api/sub2api/alerts/evaluate")
+def evaluate_sub2api_alerts_route() -> dict[str, Any]:
+    return {"ok": True, **_app_call('evaluate_sub2api_alerts', create_records=True)}
+
+def sub2api_forecast(points: list[dict[str, Any]], key: str, *, horizon_days: int = 7) -> dict[str, Any]:
+    """Use a conservative linear trend only when the snapshot history supports it."""
+    usable = []
+    for item in points:
+        value = item.get(key)
+        checked_at = _app_call('_sub2api_timestamp', item.get("checked_at"))
+        if isinstance(value, (int, float)) and checked_at:
+            usable.append((checked_at.timestamp(), float(value)))
+    if len(usable) < 3:
+        return {"status": "unavailable", "confidence": "none", "sample_count": len(usable), "reason": "至少需要 3 个带时间的有效快照"}
+    usable.sort()
+    start = usable[0][0]
+    xs = [(x - start) / 86400 for x, _ in usable]
+    ys = [y for _, y in usable]
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    denominator = sum((x - mean_x) ** 2 for x in xs)
+    if denominator <= 0:
+        return {"status": "unavailable", "confidence": "none", "sample_count": len(usable), "reason": "快照时间没有形成可估计的跨度"}
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denominator
+    intercept = mean_y - slope * mean_x
+    predicted = intercept + slope * (xs[-1] + max(1, horizon_days))
+    residuals = [y - (intercept + slope * x) for x, y in zip(xs, ys)]
+    residual_std = math.sqrt(sum(value * value for value in residuals) / max(1, len(residuals) - 2)) if len(residuals) > 2 else 0.0
+    lower = max(0.0, predicted - max(0.04, 1.96 * residual_std))
+    upper = min(1.0, predicted + max(0.04, 1.96 * residual_std))
+    ss_total = sum((value - mean_y) ** 2 for value in ys)
+    r_squared = 1.0 - sum(value * value for value in residuals) / ss_total if ss_total > 1e-12 else 1.0
+    confidence = "high" if len(usable) >= 5 and r_squared >= 0.55 else "medium" if len(usable) >= 3 and r_squared >= 0.2 else "low"
+    return {
+        "status": "available",
+        "sample_count": len(usable),
+        "horizon_days": horizon_days,
+        "predicted": round(max(0.0, min(1.0, predicted)), 4),
+        "lower": round(lower, 4),
+        "upper": round(upper, 4),
+        "slope_per_day": round(slope, 6),
+        "r_squared": round(max(0.0, min(1.0, r_squared)), 4),
+        "confidence": confidence,
+        "data_from": datetime.fromtimestamp(usable[0][0], timezone.utc).isoformat(),
+        "data_as_of": datetime.fromtimestamp(usable[-1][0], timezone.utc).isoformat(),
+        "reason": "保守线性外推；区间已按 0%–100% 截断，不能解释具体消费原因",
+    }
+
+
+@app.get("/api/sub2api/trend")
+async def get_sub2api_trend(limit: int = 30) -> dict[str, Any]:
+    history = await asyncio.to_thread(list_sub2api_history, max(2, min(100, limit)))
+    points = []
+    for item in reversed(history):
+        weekly = _app_call('_sub2api_quota', item.get("weekly_usage"))
+        monthly = _app_call('_sub2api_quota', item.get("monthly_usage"))
+        points.append({"checked_at": item.get("checked_at") or item.get("created_at"), "weekly_remaining_pct": weekly.get("remaining_pct"), "monthly_remaining_pct": monthly.get("remaining_pct"), "remaining_days": item.get("remaining_days"), "weekly_raw": item.get("weekly_usage", ""), "monthly_raw": item.get("monthly_usage", ""), "status": item.get("status")})
+    delta = {}
+    if len(points) >= 2:
+        for key in ("weekly_remaining_pct", "monthly_remaining_pct"):
+            before, after = points[0].get(key), points[-1].get(key)
+            delta[key] = round(after - before, 4) if isinstance(before, (int, float)) and isinstance(after, (int, float)) else None
+    forecast = {"weekly_remaining_pct": _app_call('sub2api_forecast', points, "weekly_remaining_pct"), "monthly_remaining_pct": _app_call('sub2api_forecast', points, "monthly_remaining_pct")}
+    return {"points": points, "delta": delta, "sample_count": len(points), "forecast": forecast, "data_as_of": points[-1].get("checked_at", "") if points else "", "message": "趋势和预测均基于脱敏快照；样本不足或数据不稳定时明确显示不可预测。"}
+
+
+@app.get("/api/sub2api/browser-sync-script")
+async def get_sub2api_browser_sync_script() -> dict[str, Any]:
+    endpoint_literal = json.dumps(f"{WORKBENCH_PUBLIC_URL}/api/sub2api/sync-raw", ensure_ascii=False)
+    # Keep the bookmarklet generated here so the panel API prefix and the
+    # privacy boundary cannot drift from the server-side sync contract.  The
+    # script never forwards raw panel responses: it picks only the fields the
+    # parser needs and masks every key in the browser before the POST.
+    script = """javascript:(async()=>{const panelOrigin=location.origin;const workbenchEndpoint=__ENDPOINT__;const prefixes=[\"/api/v1\",\"\"];const unwrap=value=>value&&typeof value===\"object\"&&value.data&&typeof value.data===\"object\"?value.data:value;const list=value=>{const data=unwrap(value);if(Array.isArray(data))return data;for(const key of [\"items\",\"keys\",\"list\",\"subscriptions\"]){if(Array.isArray(data?.[key]))return data[key];}return [];};const pick=(row,keys)=>{for(const key of keys){if(row&&row[key]!==undefined&&row[key]!==null&&String(row[key]).trim()!==\"\")return row[key];}return \"\";};const mask=value=>{const text=String(value||\"\");if(!text)return \"\";return text.length>8?`${text.slice(0,3)}...${text.slice(-3)}`:\"[已隐藏]\";};const get=async path=>{for(const prefix of prefixes){try{const response=await fetch(panelOrigin+prefix+path,{credentials:\"include\",headers:{Accept:\"application/json\"}});if(response.ok)return await response.json();}catch(_error){}}return null;};const safeKey=row=>({name:String(pick(row,[\"name\",\"key_name\"])||\"\").slice(0,80),masked:mask(pick(row,[\"masked\",\"key\",\"sk\",\"api_key\"])),group:String(pick(row,[\"group\",\"group_name\"])||\"\").slice(0,100),concurrency:String(pick(row,[\"current_concurrency\",\"concurrency\"])||\"\").slice(0,40),today_cost:String(pick(row,[\"today_cost\"])||\"\").slice(0,80),month_cost:String(pick(row,[\"month_cost\"])||\"\").slice(0,80),expires:String(pick(row,[\"expires_at\",\"expires\"])||\"\").slice(0,100),status:String(pick(row,[\"status\"])||\"\").slice(0,40)});const safeSubscription=row=>({group_name:String(pick(row,[\"group_name\",\"name\"])||\"\").slice(0,160),provider:String(pick(row,[\"provider\"])||\"\").slice(0,160),status:String(pick(row,[\"status\"])||\"\").slice(0,40),expires_at:String(pick(row,[\"expires_at\",\"expires\"])||\"\").slice(0,100),weekly_used_usd:pick(row,[\"weekly_used_usd\"]),weekly_limit_usd:pick(row,[\"weekly_limit_usd\"]),monthly_used_usd:pick(row,[\"monthly_used_usd\"]),monthly_limit_usd:pick(row,[\"monthly_limit_usd\"])});const safeUsage=value=>({items:list(value).slice(0,500).map(row=>({created_at:String(pick(row,[\"created_at\",\"createdAt\"])||\"\").slice(0,80),input_tokens:pick(row,[\"input_tokens\"]),output_tokens:pick(row,[\"output_tokens\"]),total_cost:pick(row,[\"total_cost\"]),actual_cost:pick(row,[\"actual_cost\"])}))});const clientSnapshotId=(globalThis.crypto&&typeof crypto.randomUUID===\"function\"?crypto.randomUUID():`wb-${Date.now()}-${Math.random().toString(36).slice(2,12)}`);const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));const post=async data=>{let lastError=null;for(let attempt=0;attempt<2;attempt+=1){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),12000);try{const response=await fetch(workbenchEndpoint,{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify(data),signal:controller.signal});clearTimeout(timer);if(response.ok||response.status<500)return response;lastError=new Error(`HTTP ${response.status}`);}catch(error){clearTimeout(timer);lastError=error;}if(attempt===0)await wait(350);}throw lastError||new Error(\"同步请求失败\");};try{const[me,subscriptions,active,usage,keys,user]=await Promise.all([get(\"/auth/me\"),get(\"/subscriptions/summary\"),get(\"/subscriptions/active\"),get(\"/usage\"),get(\"/keys\"),get(\"/user\")]);if(![me,subscriptions,active,usage,keys,user].some(Boolean))throw new Error(\"面板没有返回可用数据，请确认已登录并停留在面板页面\");const meData=unwrap(me)||{};const subscriptionRows=[...list(subscriptions),...list(active)];const subscription=subscriptionRows[0]||{};const userData=unwrap(user)||{};const payload={me:{balance:pick(meData,[\"balance\"])||pick(userData,[\"balance\"])},subscriptions:{subscriptions:[safeSubscription(subscription)]},usage:safeUsage(usage),keys:{items:list(keys).slice(0,100).map(safeKey)},source_url:panelOrigin+\"/keys\",dashboard_url:panelOrigin+\"/dashboard\",subscription_url:panelOrigin+\"/subscriptions\",client_snapshot_id:clientSnapshotId};const response=await post({payload,source:\"panel_bookmarklet_v2\",client_snapshot_id:clientSnapshotId});const body=await response.json().catch(()=>({}));const checkedAt=String(body.snapshot?.checked_at||\"\").slice(0,16).replace(\"T\",\" ");alert(response.ok?`Sub2API 同步成功 · ${checkedAt}${body.deduplicated?\" · 重复快照已忽略\":\" · 已记录新快照\"}`:`同步失败：${body.detail||`HTTP ${response.status}`}`);}catch(error){alert(`Sub2API 同步未完成：${error?.message||\"请重新登录后重试\"}`);}})()""".replace("__ENDPOINT__", endpoint_literal)
+    return {"script": script, "policy": "v2 书签脚本只读取面板同源 JSON，并在浏览器端仅保留余额、订阅、用量和脱敏 Key 字段；不读取或提交 Cookie、密码、完整 API Key，也会自动尝试 /api/v1 与旧路径。"}
+
+
+@app.middleware("http")
+async def scoped_cors_middleware(request: Request, call_next: Any) -> Any:
+    """只为 Sub2API 书签同步这一个路由发放跨域许可。"""
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    allowed = origin and origin in _SUB2API_PANEL_ORIGINS and request.url.path == _SUB2API_CORS_PATH
+
+    if request.method == "OPTIONS" and request.url.path == _SUB2API_CORS_PATH:
+        from starlette.responses import Response as _Response
+
+        preflight = _Response(status_code=204 if allowed else 403)
+        if allowed:
+            preflight.headers["Access-Control-Allow-Origin"] = origin
+            preflight.headers["Access-Control-Allow-Credentials"] = "true"
+            preflight.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            preflight.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            preflight.headers["Access-Control-Max-Age"] = "600"
+            preflight.headers["Vary"] = "Origin"
+        return preflight
+
+    response = await call_next(request)
+    if allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
+
+__all__ = [
+    "Sub2APISnapshotRequest",
+    "scoped_cors_middleware",
+    "_SUB2API_CORS_PATH",
+    "_SUB2API_PANEL_ORIGINS",
+    "SUB2API_PANEL_SETTINGS_FILE",
+    "Sub2APILoginRequest",
+    "Sub2APIPanelSettingsRequest",
+    "Sub2APIRawSyncRequest",
+    "_panel_keys_list",
+    "_panel_money",
+    "_panel_remaining_days",
+    "_panel_settings_file",
+    "_panel_tokens",
+    "_panel_unwrap",
+    "_panel_usage_aggregate",
+    "_snapshot_file",
+    "_sub2api_key_value",
+    "_sub2api_number",
+    "_sub2api_quota",
+    "_sub2api_text",
+    "_sub2api_timestamp",
+    "analyze_sub2api_snapshot",
+    "auto_sync_sub2api_panel",
+    "call_llm",
+    "create_relation_record",
+    "create_work_item_record",
+    "evaluate_sub2api_alerts",
+    "evaluate_sub2api_alerts_route",
+    "explain_sub2api_change",
+    "explain_sub2api_change_endpoint",
+    "fetch_sub2api_panel_admin",
+    "get_sub2api_browser_sync_script",
+    "get_sub2api_panel_settings",
+    "get_sub2api_snapshot",
+    "get_sub2api_trend",
+    "list_artifacts",
+    "list_sub2api_history",
+    "list_work_items",
+    "load_market_snapshot",
+    "load_sub2api_panel_settings",
+    "load_sub2api_snapshot",
+    "login_sub2api_panel",
+    "panel_refresh_access_token",
+    "parse_sub2api_panel_raw",
+    "record_sub2api_snapshot",
+    "register_artifact_safely",
+    "sanitize_sub2api_client_snapshot_id",
+    "sanitize_sub2api_snapshot",
+    "save_sub2api_panel_settings",
+    "save_sub2api_panel_settings_route",
+    "save_sub2api_snapshot",
+    "sub2api_auto_sync_loop",
+    "sub2api_cost_breakdown",
+    "sub2api_forecast",
+    "sub2api_panel_base_url",
+    "sub2api_prediction",
+    "sub2api_sync_state",
+    "sync_sub2api_panel_auto",
+    "sync_sub2api_panel_raw",
+    "sync_sub2api_snapshot",
+    "update_sub2api_sync_state",
+    "update_work_item_record",
+    "worker_lease",
+]

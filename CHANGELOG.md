@@ -1675,3 +1675,22 @@
     integration_status 导入）；
   - **app.py 从 3.27 万行累计降至 3072 行（-29628，91% 已拆出）**，全量 509 通过，
     3.11 + eager 全检 + smoke（REACT 工具执行/feishu 路由拒绝）通过。
+
+## v0.3.208 · 2026-08-14
+
+- **第 22 批：sub2api/server/memories/push 路由归位 + backup 工具 → db**（app.py 跌破 2500 行）：
+  - `sub2api.py` 补路由 11 个（snapshot/explain-change/sync-raw/panel-settings/panel-login/
+    sync-auto/alerts/forecast/trend/browser-sync-script）+ 模型 4 + **CORS 中间件归位**
+    （_SUB2API_PANEL_ORIGINS/_SUB2API_CORS_PATH/scoped_cors_middleware 从 aihot 迁回，
+    aihot 改 import _SUB2API_CORS_PATH）；
+  - `server.py` 补路由 4 个 + 模型 2；`memories.py` 补路由 10 个 + 模型 3；
+    `push.py` 补路由 6 个 + PushSubscriptionRequest 模型；`db.py` 补 backup 工具
+    （backup_root/database_metadata/create/list/restore）；
+  - 兼容：**模型追加到文件尾导致 FastAPI 注册时（get_type_hints）解析不到 → 降级为
+    query 参数（422）→ 模型必须移到模块头部**（0.3.203 教训重现，只是错误形式变 422）；
+    **core 真实现与旧模块转发器同名冲突 → 自递归**（server.decode_json_column 转发器
+    覆盖 core 实现，删转发器改直连）；**app.py 对 db 用显式导入只取 4 符号 → backup
+    函数没进 app 命名空间 → 改 import \***；5 个老数据层模块补全套（pydantic/fastapi/
+    app 实例/_app_call helper）；模块内互调 226 处转发；
+  - app.py 从 3.27 万行累计降至 **2493 行（-30207，92% 已拆出）**，全量 509 通过，
+    3.11 + eager 全检 + smoke（backup/memories/sub2api/server/push/CORS）通过。

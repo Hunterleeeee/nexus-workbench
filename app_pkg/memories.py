@@ -15,6 +15,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from fastapi import HTTPException, Request
+from pydantic import BaseModel, Field
+
 from .core import (
     MAX_MEMORY_CONTEXT_ITEMS,
     MEMORY_OWNER_ID,
@@ -26,7 +29,99 @@ from .core import (
     query_terms,
 )
 from .db import db_connection
+from .instance import app
 
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
+
+
+class MemoryCreateRequest(BaseModel):
+    content: str = Field(min_length=2, max_length=1_000)
+    scope: str = Field(default="global", pattern="^(global|project)$")
+    project_id: str = Field(default="", max_length=80)
+    kind: str = Field(default="preference", pattern="^(preference|constraint|routine|decision|profile)$")
+    memory_key: str = Field(default="", max_length=160)
+    value: dict[str, Any] = Field(default_factory=dict)
+    status: str = Field(default="confirmed", pattern="^(candidate|confirmed)$")
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    pinned: bool = False
+
+
+
+class MemoryUpdateRequest(BaseModel):
+    content: str | None = Field(default=None, min_length=2, max_length=1_000)
+    scope: str | None = Field(default=None, pattern="^(global|project)$")
+    project_id: str | None = Field(default=None, max_length=80)
+    kind: str | None = Field(default=None, pattern="^(preference|constraint|routine|decision|profile)$")
+    value: dict[str, Any] | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    pinned: bool | None = None
+
+
+
+class MemoryImportRequest(BaseModel):
+    confirmed: bool = False
+
+
+
+
+
+
+
+
+
+
+__all__ = [
+    "MemoryImportRequest",
+    "MemoryUpdateRequest",
+    "MemoryCreateRequest",
+    "MAX_MEMORY_CONTEXT_CHARS",
+    "MAX_MEMORY_ITEM_CONTEXT_CHARS",
+    "MAX_MEMORY_MATCHED_ITEMS",
+    "MAX_MEMORY_PINNED_ITEMS",
+    "MEMORY_KINDS",
+    "MEMORY_SCOPES",
+    "MEMORY_SECRET_MARKERS",
+    "MEMORY_STALE_DAYS",
+    "MEMORY_STATUSES",
+    "MemoryArchiveRequest",
+    "_memory_event",
+    "_memory_is_secret_like",
+    "_memory_kind_for_text",
+    "archive_memory_items",
+    "confirm_memory",
+    "create_memory",
+    "create_memory_item",
+    "delete_memory",
+    "delete_memory_item",
+    "ensure_legacy_cid_memories",
+    "get_memories",
+    "get_memory_hygiene",
+    "get_memory_item",
+    "import_workbuddy_memories",
+    "import_workbuddy_memory",
+    "learn_memories_from_message",
+    "list_memory_items",
+    "load_cid_preferences",
+    "memory_context_for_llm",
+    "memory_hygiene",
+    "memory_item_row",
+    "memory_match_reason",
+    "memory_summary",
+    "post_memory_archive",
+    "preview_workbuddy_memory_import",
+    "reject_memory",
+    "retrieve_memories",
+    "set_memory_status",
+    "sync_cid_preferences_to_memories",
+    "update_memory",
+    "update_memory_item",
+    "workbuddy_memory_preview",
+]
 
 def load_cid_preferences() -> dict[str, Any]:
     """延迟转发 app.load_cid_preferences（cid 领域仍在 app.py）。"""
@@ -62,10 +157,10 @@ def ensure_legacy_cid_memories() -> None:
         connection.close()
     if imported:
         return
-    sync_cid_preferences_to_memories(load_cid_preferences())
+    _app_call('sync_cid_preferences_to_memories', _app_call('load_cid_preferences', ))
     connection = db_connection()
     try:
-        _memory_event(connection, "system:cid-legacy", "legacy_import_completed", source_type="cid_preferences")
+        _app_call('_memory_event', connection, "system:cid-legacy", "legacy_import_completed", source_type="cid_preferences")
         connection.commit()
     finally:
         connection.close()
@@ -118,7 +213,7 @@ def get_memory_item(memory_id: str) -> dict[str, Any] | None:
     connection = db_connection()
     try:
         row = connection.execute("SELECT * FROM memory_items WHERE id = ? AND owner_id = ?", (memory_id, MEMORY_OWNER_ID)).fetchone()
-        return memory_item_row(row) if row else None
+        return _app_call('memory_item_row', row) if row else None
     finally:
         connection.close()
 
@@ -141,7 +236,7 @@ def create_memory_item(
     clean_content = re.sub(r"\s+", " ", str(content or "")).strip()
     if len(clean_content) < 2:
         raise ValueError("记忆内容太短")
-    if _memory_is_secret_like(clean_content):
+    if _app_call('_memory_is_secret_like', clean_content):
         raise ValueError("这段内容可能包含凭据或敏感个人信息，不会保存为记忆")
     clean_scope = scope if scope in MEMORY_SCOPES else "global"
     clean_project_id = clip(project_id.strip(), 80) if clean_scope == "project" else ""
@@ -181,13 +276,13 @@ def create_memory_item(
                 WHERE id = ?""",
                 (next_status, next_confidence, int(bool(existing["pinned"]) or pinned), timestamp, clip(source_type, 80), clip(source_id, 160), memory_id),
             )
-            _memory_event(connection, memory_id, "reinforced", source_type=source_type, source_id=source_id, payload={"status": next_status, "confidence": next_confidence})
+            _app_call('_memory_event', connection, memory_id, "reinforced", source_type=source_type, source_id=source_id, payload={"status": next_status, "confidence": next_confidence})
             connection.commit()
             row = connection.execute("SELECT * FROM memory_items WHERE id = ?", (memory_id,)).fetchone()
-            return {**memory_item_row(row), "created": False}
+            return {**_app_call('memory_item_row', row), "created": False}
         if existing and clean_key and clean_status == "confirmed":
             connection.execute("UPDATE memory_items SET status = 'superseded', updated_at = ? WHERE id = ?", (timestamp, existing["id"]))
-            _memory_event(connection, str(existing["id"]), "superseded", source_type=source_type, source_id=source_id)
+            _app_call('_memory_event', connection, str(existing["id"]), "superseded", source_type=source_type, source_id=source_id)
         memory_id = uuid.uuid4().hex[:16]
         connection.execute(
             """INSERT INTO memory_items
@@ -200,10 +295,10 @@ def create_memory_item(
                 clip(source_id, 160), clip(evidence_text, 1_000), timestamp, timestamp,
             ),
         )
-        _memory_event(connection, memory_id, "created", source_type=source_type, source_id=source_id, payload={"status": clean_status})
+        _app_call('_memory_event', connection, memory_id, "created", source_type=source_type, source_id=source_id, payload={"status": clean_status})
         connection.commit()
         row = connection.execute("SELECT * FROM memory_items WHERE id = ?", (memory_id,)).fetchone()
-        return {**memory_item_row(row), "created": True}
+        return {**_app_call('memory_item_row', row), "created": True}
     finally:
         connection.close()
 
@@ -226,19 +321,19 @@ def list_memory_items(*, status: str = "all", project_id: str = "", limit: int =
             f"SELECT * FROM memory_items WHERE {' AND '.join(clauses)} ORDER BY pinned DESC, updated_at DESC LIMIT ?",
             values,
         ).fetchall()
-        return [memory_item_row(row) for row in rows]
+        return [_app_call('memory_item_row', row) for row in rows]
     finally:
         connection.close()
 
 
 def update_memory_item(memory_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-    current = get_memory_item(memory_id)
+    current = _app_call('get_memory_item', memory_id)
     if not current:
         return None
     content = re.sub(r"\s+", " ", str(updates.get("content", current["content"]))).strip()
     if len(content) < 2:
         raise ValueError("记忆内容太短")
-    if _memory_is_secret_like(content):
+    if _app_call('_memory_is_secret_like', content):
         raise ValueError("这段内容可能包含凭据或敏感个人信息，不会保存为记忆")
     scope = updates.get("scope") if updates.get("scope") in MEMORY_SCOPES else current["scope"]
     project_id = str(updates.get("project_id", current["project_id"])).strip() if scope == "project" else ""
@@ -261,11 +356,11 @@ def update_memory_item(memory_id: str, updates: dict[str, Any]) -> dict[str, Any
             confidence = ?, pinned = ?, updated_at = ? WHERE id = ? AND owner_id = ?""",
             (clip(content, 1_000), scope, clip(project_id, 80), kind, json.dumps(value, ensure_ascii=False), confidence, int(pinned), now_iso(), memory_id, MEMORY_OWNER_ID),
         )
-        _memory_event(connection, memory_id, "corrected", source_type="user", payload={"changed_fields": changed_fields})
+        _app_call('_memory_event', connection, memory_id, "corrected", source_type="user", payload={"changed_fields": changed_fields})
         connection.commit()
     finally:
         connection.close()
-    return get_memory_item(memory_id)
+    return _app_call('get_memory_item', memory_id)
 
 
 def set_memory_status(memory_id: str, status: str) -> dict[str, Any] | None:
@@ -278,11 +373,11 @@ def set_memory_status(memory_id: str, status: str) -> dict[str, Any] | None:
             return None
         confidence = max(float(row["confidence"] or 0), 0.9) if status == "confirmed" else float(row["confidence"] or 0)
         connection.execute("UPDATE memory_items SET status = ?, confidence = ?, updated_at = ? WHERE id = ?", (status, confidence, now_iso(), memory_id))
-        _memory_event(connection, memory_id, status, source_type="user")
+        _app_call('_memory_event', connection, memory_id, status, source_type="user")
         connection.commit()
     finally:
         connection.close()
-    return get_memory_item(memory_id)
+    return _app_call('get_memory_item', memory_id)
 
 
 def delete_memory_item(memory_id: str) -> bool:
@@ -392,7 +487,7 @@ def archive_memory_items(memory_ids: list[str]) -> dict[str, Any]:
         connection.close()
     if archived:
         log.info("归档了 %d 条记忆", archived)
-    return {"archived": archived, "ids": wanted, "summary": memory_summary()}
+    return {"archived": archived, "ids": wanted, "summary": _app_call('memory_summary', )}
 
 
 def _memory_kind_for_text(text: str) -> str:
@@ -426,18 +521,18 @@ def learn_memories_from_message(message: str, *, project_id: str, source_type: s
             if not match:
                 continue
             content = re.sub(r"\s+", " ", match.group(1).strip(" ，,：:\"'“”"))
-            if len(content) < 3 or content in seen or _memory_is_secret_like(content):
+            if len(content) < 3 or content in seen or _app_call('_memory_is_secret_like', content):
                 break
             seen.add(content)
             project_specific = any(marker in sentence for marker in ("这个项目", "当前项目", "这个页面", "在这里"))
             scope = "project" if project_specific else "global"
             memory_project_id = project_id if scope == "project" else ""
             digest = hashlib.sha256(f"{scope}\n{memory_project_id}\n{content}".encode("utf-8", errors="ignore")).hexdigest()[:20]
-            item = create_memory_item(
+            item = _app_call('create_memory_item', 
                 content=content,
                 scope=scope,
                 project_id=memory_project_id,
-                kind=_memory_kind_for_text(sentence),
+                kind=_app_call('_memory_kind_for_text', sentence),
                 memory_key=f"learned:{digest}",
                 value={"learning_reason": reason},
                 status="confirmed" if explicit else "candidate",
@@ -460,7 +555,7 @@ def sync_cid_preferences_to_memories(preferences: dict[str, Any]) -> None:
             normalized = re.sub(r"\s+", "-", tag.lower())[:80]
             content = f"独立开发机会中{'偏好' if polarity == 'preferred' else '避开'}赛道标签：{tag}"
             try:
-                create_memory_item(
+                _app_call('create_memory_item', 
                     content=content,
                     scope="project",
                     project_id="cid-dashboard",
@@ -485,10 +580,10 @@ def ensure_legacy_cid_memories() -> None:
         connection.close()
     if imported:
         return
-    sync_cid_preferences_to_memories(load_cid_preferences())
+    _app_call('sync_cid_preferences_to_memories', _app_call('load_cid_preferences', ))
     connection = db_connection()
     try:
-        _memory_event(connection, "system:cid-legacy", "legacy_import_completed", source_type="cid_preferences")
+        _app_call('_memory_event', connection, "system:cid-legacy", "legacy_import_completed", source_type="cid_preferences")
         connection.commit()
     finally:
         connection.close()
@@ -525,7 +620,7 @@ def retrieve_memories(
 ) -> list[dict[str, Any]]:
     """Return a small prompt window, never the whole durable memory store."""
     if project_id == "cid-dashboard":
-        ensure_legacy_cid_memories()
+        _app_call('ensure_legacy_cid_memories', )
     connection = db_connection()
     try:
         rows = connection.execute(
@@ -549,7 +644,7 @@ def retrieve_memories(
             # 看不见它凭什么被选中，就没法判断一个奇怪的回答是不是它带偏的。
             # query_terms 会把中文切成二元片段，所以这里只展示最长的几个——
             # 「服务」这种碎片作为理由没有意义，「服务器磁盘」才有。
-            reason = "置顶记忆，每轮都会带上" if row["pinned"] else memory_match_reason(hit_terms, haystack)
+            reason = "置顶记忆，每轮都会带上" if row["pinned"] else _app_call('memory_match_reason', hit_terms, haystack)
             if row["pinned"]:
                 pinned.append((score, row, reason))
             elif hit_terms:
@@ -564,7 +659,7 @@ def retrieve_memories(
             selected.extend(matched[:matched_limit])
         results = []
         for score, row, reason in selected:
-            item = memory_item_row(row)
+            item = _app_call('memory_item_row', row)
             item["match_reason"] = reason
             item["match_score"] = round(float(score), 1)
             results.append(item)
@@ -574,7 +669,7 @@ def retrieve_memories(
 
 
 def memory_context_for_llm(project_id: str, message: str, *, core_only: bool = False) -> dict[str, Any]:
-    candidates = retrieve_memories(message, project_id=project_id, core_only=core_only)
+    candidates = _app_call('retrieve_memories', message, project_id=project_id, core_only=core_only)
     empty_stats = {
         "items": 0,
         "chars": 0,
@@ -650,19 +745,118 @@ def workbuddy_memory_preview() -> list[dict[str, Any]]:
             break
         if in_preferences and stripped.startswith("- "):
             content = stripped[2:].strip()
-            if content and not _memory_is_secret_like(content):
-                candidates.append({"content": clip(content, 1_000), "kind": _memory_kind_for_text(content), "source": str(path)})
+            if content and not _app_call('_memory_is_secret_like', content):
+                candidates.append({"content": clip(content, 1_000), "kind": _app_call('_memory_kind_for_text', content), "source": str(path)})
     return candidates[:30]
 
 
 def import_workbuddy_memories() -> list[dict[str, Any]]:
     imported = []
-    for candidate in workbuddy_memory_preview():
+    for candidate in _app_call('workbuddy_memory_preview', ):
         digest = hashlib.sha256(candidate["content"].encode("utf-8", errors="ignore")).hexdigest()[:20]
-        imported.append(create_memory_item(
+        imported.append(_app_call('create_memory_item', 
             content=candidate["content"], scope="global", kind=candidate["kind"], memory_key=f"workbuddy:{digest}",
             status="confirmed", confidence=1.0, source_type="workbuddy", source_id="MEMORY.md",
         ))
     return imported
 
-__all__ = ["ensure_legacy_cid_memories", "memory_item_row", "_memory_is_secret_like", "_memory_event", "get_memory_item", "create_memory_item", "list_memory_items", "update_memory_item", "set_memory_status", "delete_memory_item", "memory_summary", "memory_hygiene", "archive_memory_items", "_memory_kind_for_text", "learn_memories_from_message", "sync_cid_preferences_to_memories", "memory_match_reason", "retrieve_memories", "memory_context_for_llm", "workbuddy_memory_preview", "import_workbuddy_memories", "MEMORY_STALE_DAYS", "MEMORY_SCOPES", "MEMORY_KINDS", "MEMORY_STATUSES", "MEMORY_SECRET_MARKERS", "MAX_MEMORY_MATCHED_ITEMS", "MAX_MEMORY_PINNED_ITEMS", "MAX_MEMORY_ITEM_CONTEXT_CHARS", "MAX_MEMORY_CONTEXT_CHARS"]
+class MemoryArchiveRequest(BaseModel):
+    memory_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+@app.get("/api/memories/hygiene")
+def get_memory_hygiene(limit: int = 40) -> dict[str, Any]:
+    """记忆体检：哪些记忆从没被用过、很久没用、或者互相重复。"""
+    return _app_call('memory_hygiene', limit)
+
+
+@app.post("/api/memories/archive")
+def post_memory_archive(request: MemoryArchiveRequest) -> dict[str, Any]:
+    if not request.memory_ids:
+        raise HTTPException(400, "请至少选择一条记忆")
+    return {"ok": True, **_app_call('archive_memory_items', request.memory_ids)}
+
+
+@app.get("/api/memories")
+def get_memories(status: str = "active", project_id: str = "", limit: int = 200) -> dict[str, Any]:
+    if status not in {*MEMORY_STATUSES, "all", "active"}:
+        raise HTTPException(400, "不支持的记忆状态")
+    _app_call('ensure_legacy_cid_memories', )
+    return {
+        "items": _app_call('list_memory_items', status=status, project_id=project_id.strip(), limit=limit),
+        "summary": _app_call('memory_summary', ),
+        "policy": "只有已确认记忆会进入 Agent 上下文；候选记忆必须由你确认。凭据和敏感个人信息不会保存。",
+    }
+
+
+@app.post("/api/memories")
+def create_memory(request: MemoryCreateRequest) -> dict[str, Any]:
+    try:
+        item = _app_call('create_memory_item', 
+            content=request.content,
+            scope=request.scope,
+            project_id=request.project_id,
+            kind=request.kind,
+            memory_key=request.memory_key,
+            value=request.value,
+            status=request.status,
+            confidence=request.confidence,
+            pinned=request.pinned,
+            source_type="user",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "item": item, "summary": _app_call('memory_summary', )}
+
+
+@app.patch("/api/memories/{memory_id}")
+def update_memory(memory_id: str, request: MemoryUpdateRequest) -> dict[str, Any]:
+    updates = request.model_dump(exclude_none=True) if hasattr(request, "model_dump") else request.dict(exclude_none=True)
+    try:
+        item = _app_call('update_memory_item', memory_id, updates)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not item:
+        raise HTTPException(404, "记忆不存在")
+    return {"ok": True, "item": item, "summary": _app_call('memory_summary', )}
+
+
+@app.post("/api/memories/{memory_id}/confirm")
+def confirm_memory(memory_id: str) -> dict[str, Any]:
+    item = _app_call('set_memory_status', memory_id, "confirmed")
+    if not item:
+        raise HTTPException(404, "记忆不存在")
+    return {"ok": True, "item": item, "summary": _app_call('memory_summary', )}
+
+
+@app.post("/api/memories/{memory_id}/reject")
+def reject_memory(memory_id: str) -> dict[str, Any]:
+    item = _app_call('set_memory_status', memory_id, "rejected")
+    if not item:
+        raise HTTPException(404, "记忆不存在")
+    return {"ok": True, "item": item, "summary": _app_call('memory_summary', )}
+
+
+@app.delete("/api/memories/{memory_id}")
+def delete_memory(memory_id: str) -> dict[str, Any]:
+    if not _app_call('delete_memory_item', memory_id):
+        raise HTTPException(404, "记忆不存在")
+    return {"ok": True, "deleted": True, "summary": _app_call('memory_summary', )}
+
+
+@app.get("/api/memories-import/workbuddy")
+async def preview_workbuddy_memory_import() -> dict[str, Any]:
+    return {
+        "items": _app_call('workbuddy_memory_preview', ),
+        "policy": "这里只预览 MEMORY.md 的“用户偏好”段落；服务器、部署和环境信息不会导入。",
+    }
+
+
+@app.post("/api/memories-import/workbuddy")
+def import_workbuddy_memory(request: MemoryImportRequest) -> dict[str, Any]:
+    if not request.confirmed:
+        raise HTTPException(409, "请先确认预览内容，再导入已有偏好")
+    imported = _app_call('import_workbuddy_memories', )
+    return {"ok": True, "items": imported, "summary": _app_call('memory_summary', )}
+
+

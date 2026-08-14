@@ -11,11 +11,19 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import datetime, timezone
 import sqlite3
 import threading
 from typing import Any
 
-from .core import log, now_iso
+from .core import DATA_DIR, WORKBENCH_VERSION, log, now_iso
+
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
 
 
 def _database_file():
@@ -1243,5 +1251,107 @@ def _ensure_db_schema() -> None:
         app._DB_SCHEMA_READY = True
 
 
+def backup_root() -> Path:
+    path = DATA_DIR / "backups"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def database_metadata(path: Path | None = None) -> dict[str, Any]:
+    if path is None:
+        path = _database_file()
+    """Return a small, non-sensitive health marker for backup/restore checks."""
+    connection = sqlite3.connect(path)
+    try:
+        integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0] or "unknown")
+        user_version = int(connection.execute("PRAGMA user_version").fetchone()[0] or 0)
+        tables = int(connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'").fetchone()[0] or 0)
+        migration_count = 0
+        try:
+            migration_count = int(connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] or 0)
+        except sqlite3.Error:
+            # Backups made before schema versioning remain inspectable and can
+            # be upgraded on the next application connection.
+            migration_count = 0
+        return {
+            "application_version": WORKBENCH_VERSION,
+            "sqlite_user_version": user_version,
+            "expected_schema_version": DB_SCHEMA_VERSION,
+            "migration_count": migration_count,
+            "table_count": tables,
+            "integrity": integrity,
+            "checked_at": now_iso(),
+        }
+    finally:
+        connection.close()
+
+
+def create_database_backup(reason: str = "manual") -> dict[str, Any]:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = backup_root() / f"workbench-{stamp}-{_app_call('safe_filename', reason, 'manual')}.db"
+    source = sqlite3.connect(_database_file())
+    destination = sqlite3.connect(target)
+    try:
+        source.backup(destination)
+    finally:
+        destination.close()
+        source.close()
+    metadata = database_metadata(target)
+    return {"name": target.name, "path": str(target), "size": target.stat().st_size, "created_at": now_iso(), "reason": reason, "database": metadata}
+
+
+def list_database_backups() -> list[dict[str, Any]]:
+    items = []
+    for path in sorted(backup_root().glob("*.db"), key=lambda item: item.stat().st_mtime, reverse=True):
+        if path.is_file():
+            items.append({"name": path.name, "path": str(path), "size": path.stat().st_size, "updated_at": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(), "database": database_metadata(path)})
+    return items[:50]
+
+
+def restore_database_backup(name: str) -> dict[str, Any]:
+    safe_name = Path(name).name
+    source = backup_root() / safe_name
+    if source.parent != backup_root() or not source.is_file() or source.suffix != ".db":
+        raise ValueError("备份文件不存在或不在受控备份目录")
+    pre_restore = create_database_backup("before-restore")
+    connection = sqlite3.connect(source)
+    try:
+        integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0] or "")
+        table_count = int(connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'").fetchone()[0] or 0)
+        if integrity.lower() != "ok" or table_count == 0:
+            raise ValueError("备份校验失败：SQLite 完整性检查未通过")
+    finally:
+        connection.close()
+    source_conn = sqlite3.connect(source)
+    target_conn = sqlite3.connect(_database_file())
+    try:
+        source_conn.backup(target_conn)
+    finally:
+        target_conn.close()
+        source_conn.close()
+    global _DB_SCHEMA_READY
+    _DB_SCHEMA_READY = False
+    verification = database_metadata(_database_file())
+    if verification.get("integrity") != "ok" or verification.get("table_count", 0) == 0:
+        raise ValueError("恢复后的数据库健康检查失败")
+    return {"ok": True, "restored": safe_name, "safety_backup": pre_restore, "restored_at": now_iso(), "verification": verification}
+
+
 __all__ = [
-    "_DB_SCHEMA_READY","db_connection", "db_scope"]
+    "DB_SCHEMA_VERSION",
+    "_DB_SCHEMA_LOCK",
+    "_DB_SCHEMA_READY",
+    "_SharedConnection",
+    "_database_file",
+    "_ensure_db_schema",
+    "_initialize_database_schema",
+    "_initialize_extended_schema",
+    "_open_db_connection",
+    "backup_root",
+    "create_database_backup",
+    "database_metadata",
+    "db_connection",
+    "db_scope",
+    "list_database_backups",
+    "restore_database_backup",
+]

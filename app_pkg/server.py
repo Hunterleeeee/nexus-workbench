@@ -6,6 +6,7 @@ db；路由与 React 工具仍留 app.py。
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -16,8 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException, Request
+from pydantic import BaseModel, Field
+
 from .core import (
-    SERVER_MONITOR_SNAPSHOT_FILE,
+    decode_json_column,    SERVER_MONITOR_SNAPSHOT_FILE,
     SERVER_MONITOR_THRESHOLDS_FILE,
     clip,
     load_json_file,
@@ -26,7 +30,58 @@ from .core import (
     save_json_atomic,
 )
 from .db import db_connection
+from .instance import app
 
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
+
+
+class ServerMonitorRequest(BaseModel):
+    refresh: bool = True
+
+
+
+class ServerThresholdsRequest(BaseModel):
+    thresholds: dict[str, float] = Field(default_factory=dict, max_length=10)
+
+
+
+
+__all__ = [
+    "ServerThresholdsRequest",
+    "ServerMonitorRequest",
+    "DEFAULT_SERVER_THRESHOLDS",
+    "SERVER_MONITOR_PROBE_COMMAND",
+    "_sub2api_timestamp",
+    "analyze_server_snapshot",
+    "create_notification_record",
+    "create_relation_record",
+    "create_work_item_record",
+    "decode_json_column",
+    "evaluate_server_monitor",
+    "get_server_monitor",
+    "get_server_thresholds",
+    "list_artifacts",
+    "list_server_monitor_history",
+    "list_work_items",
+    "load_server_monitor_snapshot",
+    "load_server_monitor_thresholds",
+    "read_server_monitor",
+    "record_server_monitor_snapshot",
+    "refresh_server_monitor",
+    "save_server_monitor_snapshot",
+    "save_server_monitor_thresholds",
+    "server_monitor_config",
+    "server_monitor_snapshot_row",
+    "server_number",
+    "server_target_is_local",
+    "update_server_thresholds",
+    "update_work_item_record",
+]
 
 def _sub2api_timestamp(*args: Any, **kwargs: Any) -> Any:
     """直接转发 app_pkg.sub2api._sub2api_timestamp（不经过 app 命名空间，避免
@@ -34,13 +89,6 @@ def _sub2api_timestamp(*args: Any, **kwargs: Any) -> Any:
     from app_pkg.sub2api import _sub2api_timestamp as _real
 
     return _real(*args, **kwargs)
-
-
-def decode_json_column(value: str | None) -> dict[str, Any]:
-    """延迟转发 app.decode_json_column（仍在 app.py）。"""
-    import app as _app
-
-    return _app.decode_json_column(value)
 
 
 def create_notification_record(*args: Any, **kwargs: Any) -> Any:
@@ -96,7 +144,7 @@ def save_server_monitor_snapshot(values: dict[str, Any]) -> None:
 
 
 def server_monitor_snapshot_row(row: sqlite3.Row) -> dict[str, Any]:
-    snapshot = decode_json_column(row["snapshot_json"])
+    snapshot = _app_call('decode_json_column', row["snapshot_json"])
     return {
         "id": row["id"],
         "checked_at": row["checked_at"],
@@ -117,7 +165,7 @@ def record_server_monitor_snapshot(snapshot: dict[str, Any]) -> dict[str, Any] |
             (checked_at,),
         ).fetchone()
         if existing:
-            return server_monitor_snapshot_row(existing)
+            return _app_call('server_monitor_snapshot_row', existing)
         cursor = connection.execute(
             """INSERT INTO server_monitor_snapshots (checked_at, status, snapshot_json, created_at)
             VALUES (?, ?, ?, ?)""",
@@ -125,7 +173,7 @@ def record_server_monitor_snapshot(snapshot: dict[str, Any]) -> dict[str, Any] |
         )
         connection.commit()
         row = connection.execute("SELECT * FROM server_monitor_snapshots WHERE id = ?", (cursor.lastrowid,)).fetchone()
-        return server_monitor_snapshot_row(row) if row else None
+        return _app_call('server_monitor_snapshot_row', row) if row else None
     finally:
         connection.close()
 
@@ -137,7 +185,7 @@ def list_server_monitor_history(limit: int = 30) -> list[dict[str, Any]]:
             "SELECT * FROM server_monitor_snapshots ORDER BY checked_at DESC, id DESC LIMIT ?",
             (max(1, min(limit, 100)),),
         ).fetchall()
-        return [server_monitor_snapshot_row(row) for row in rows]
+        return [_app_call('server_monitor_snapshot_row', row) for row in rows]
     finally:
         connection.close()
 
@@ -161,7 +209,7 @@ def analyze_server_snapshot(
     now = now or datetime.now(timezone.utc)
     history = history or []
     checked_at = str(snapshot.get("checked_at") or "").strip()
-    checked_dt = _sub2api_timestamp(checked_at)
+    checked_dt = _app_call('_sub2api_timestamp', checked_at)
     age_seconds = max(0, int((now - checked_dt).total_seconds())) if checked_dt else None
     if checked_dt is None:
         freshness = {"status": "unknown", "label": "没有检查时间"}
@@ -175,12 +223,12 @@ def analyze_server_snapshot(
 
     disk = snapshot.get("disk") if isinstance(snapshot.get("disk"), dict) else {}
     memory = snapshot.get("memory") if isinstance(snapshot.get("memory"), dict) else {}
-    disk_used_pct = server_number(disk.get("used_pct"))
-    memory_total_mb = server_number(memory.get("total_mb"))
-    memory_used_mb = server_number(memory.get("used_mb"))
-    memory_available_mb = server_number(memory.get("available_mb"))
+    disk_used_pct = _app_call('server_number', disk.get("used_pct"))
+    memory_total_mb = _app_call('server_number', memory.get("total_mb"))
+    memory_used_mb = _app_call('server_number', memory.get("used_mb"))
+    memory_available_mb = _app_call('server_number', memory.get("available_mb"))
     memory_used_pct = round(memory_used_mb / memory_total_mb * 100, 1) if memory_total_mb and memory_used_mb is not None else None
-    load_values = [server_number(item) for item in str(snapshot.get("load") or "").split()]
+    load_values = [_app_call('server_number', item) for item in str(snapshot.get("load") or "").split()]
     load_values = [item for item in load_values if item is not None]
     load_1m = load_values[0] if load_values else None
 
@@ -198,7 +246,7 @@ def analyze_server_snapshot(
         add_alert("probe_failed", "error", "服务器检查失败", str(snapshot.get("error") or "SSH 只读检查失败。"))
     if freshness["status"] in {"stale", "unknown", "aging"}:
         add_alert("snapshot_stale", "warning", "服务器快照需要刷新", f"{freshness['label']}；上次检查：{checked_at or '未知'}。")
-    thresholds = load_server_monitor_thresholds()
+    thresholds = _app_call('load_server_monitor_thresholds', )
     disk_warn, disk_critical = thresholds["disk_warn"], thresholds["disk_critical"]
     memory_warn, memory_critical = thresholds["memory_warn"], thresholds["memory_critical"]
     load_warn, load_critical = thresholds["load_warn"], thresholds["load_critical"]
@@ -227,7 +275,7 @@ def analyze_server_snapshot(
     previous_snapshot = (previous_entry.get("snapshot") if previous_entry else None) or {}
     previous_alerts: list[dict[str, Any]] = []
     if previous_snapshot and str(previous_snapshot.get("checked_at") or "") != checked_at:
-        previous_alerts = analyze_server_snapshot(previous_snapshot, [], now).get("alerts", [])
+        previous_alerts = _app_call('analyze_server_snapshot', previous_snapshot, [], now).get("alerts", [])
     current_keys = {item["key"] for item in alerts}
     previous_keys = {item["key"] for item in previous_alerts}
     recovered = [item for item in previous_alerts if item["key"] not in current_keys]
@@ -296,9 +344,9 @@ def analyze_server_snapshot(
         snap_disk = snap.get("disk") if isinstance(snap.get("disk"), dict) else {}
         snap_mem = snap.get("memory") if isinstance(snap.get("memory"), dict) else {}
         checked = str(entry.get("checked_at") or "")
-        disk_val = server_number(snap_disk.get("used_pct"))
-        mem_total = server_number(snap_mem.get("total_mb"))
-        mem_used = server_number(snap_mem.get("used_mb"))
+        disk_val = _app_call('server_number', snap_disk.get("used_pct"))
+        mem_total = _app_call('server_number', snap_mem.get("total_mb"))
+        mem_used = _app_call('server_number', snap_mem.get("used_mb"))
         mem_val = round(mem_used / mem_total * 100, 1) if mem_total and mem_used is not None else None
         history_pairs.append((checked, disk_val))
         memory_pairs.append((checked, mem_val))
@@ -333,21 +381,21 @@ def analyze_server_snapshot(
 
 
 def evaluate_server_monitor(snapshot: dict[str, Any] | None = None, create_records: bool = False) -> dict[str, Any]:
-    snapshot = snapshot or load_server_monitor_snapshot()
-    history = list_server_monitor_history(limit=12)
-    analysis = analyze_server_snapshot(snapshot, history)
+    snapshot = snapshot or _app_call('load_server_monitor_snapshot', )
+    history = _app_call('list_server_monitor_history', limit=12)
+    analysis = _app_call('analyze_server_snapshot', snapshot, history)
     created: list[dict[str, Any]] = []
     if not create_records:
         return {"analysis": analysis, "created": created, "history": history}
-    active_items = list_work_items("all", "server")
-    latest_artifact = next(iter(list_artifacts("server")), None)
+    active_items = _app_call('list_work_items', "all", "server")
+    latest_artifact = next(iter(_app_call('list_artifacts', "server")), None)
     for alert in analysis["new_alerts"] or analysis["alerts"]:
         alert_key = f"server:{alert['key']}"
         existing = next((item for item in active_items if item.get("metadata", {}).get("alert_key") == alert_key and item.get("status") in {"open", "running", "blocked"}), None)
         if existing:
             created.append({"alert": alert, "work_item": existing, "created": False})
             continue
-        item = create_work_item_record(
+        item = _app_call('create_work_item_record', 
             title=alert["title"],
             description=f"{alert['message']} 数据时间：{analysis['freshness'].get('checked_at') or '未知'}。",
             kind="alert",
@@ -356,7 +404,7 @@ def evaluate_server_monitor(snapshot: dict[str, Any] | None = None, create_recor
             target_project="inbox",
             metadata={"alert_key": alert_key, "notification_project": "server", "checked_at": analysis["freshness"].get("checked_at", ""), "source": "server_monitor_agent"},
         )
-        relation = create_relation_record(
+        relation = _app_call('create_relation_record', 
             from_type="artifact" if latest_artifact else "project",
             from_id=str(latest_artifact["id"] if latest_artifact else "server"),
             to_type="work_item",
@@ -370,8 +418,8 @@ def evaluate_server_monitor(snapshot: dict[str, Any] | None = None, create_recor
         alert_key = f"server:{recovery['key']}"
         existing = next((item for item in active_items if item.get("metadata", {}).get("alert_key") == alert_key and item.get("status") in {"open", "running", "blocked"}), None)
         if existing:
-            update_work_item_record(existing["id"], {"status": "done", "completed_at": now_iso(), "result_json": json.dumps({"recovered_at": snapshot.get("checked_at"), "message": "监控项已恢复"}, ensure_ascii=False)})
-        create_notification_record(
+            _app_call('update_work_item_record', existing["id"], {"status": "done", "completed_at": now_iso(), "result_json": json.dumps({"recovered_at": snapshot.get("checked_at"), "message": "监控项已恢复"}, ensure_ascii=False)})
+        _app_call('create_notification_record', 
             title=f"服务器监控已恢复：{recovery['title']}",
             body=f"{recovery['message']} 当前检查已恢复正常。",
             project_id="server",
@@ -466,14 +514,14 @@ def load_server_monitor_thresholds() -> dict[str, float]:
 def save_server_monitor_thresholds(values: dict[str, float]) -> dict[str, float]:
     normalized = {key: float(value) for key, value in values.items() if key in DEFAULT_SERVER_THRESHOLDS}
     save_json_atomic(SERVER_MONITOR_THRESHOLDS_FILE, normalized, 0o600)
-    return load_server_monitor_thresholds()
+    return _app_call('load_server_monitor_thresholds', )
 
 
 def read_server_monitor() -> dict[str, Any]:
-    config = server_monitor_config()
+    config = _app_call('server_monitor_config', )
     command = SERVER_MONITOR_PROBE_COMMAND
     target = config["server"]
-    is_local = server_target_is_local(target)
+    is_local = _app_call('server_target_is_local', target)
     if is_local:
         # Deployment mode: Workbench runs on the very server it monitors.
         # Probe locally so the monitor keeps working without SSH credentials.
@@ -512,4 +560,72 @@ def read_server_monitor() -> dict[str, Any]:
             parsed[key.lower()] = value
     return parsed
 
-__all__ = ["load_server_monitor_snapshot", "save_server_monitor_snapshot", "server_monitor_snapshot_row", "record_server_monitor_snapshot", "list_server_monitor_history", "server_number", "analyze_server_snapshot", "evaluate_server_monitor", "server_monitor_config", "server_target_is_local", "load_server_monitor_thresholds", "save_server_monitor_thresholds", "read_server_monitor"]
+@app.get("/api/server")
+async def get_server_monitor() -> dict[str, Any]:
+    snapshot = _app_call('load_server_monitor_snapshot', )
+    safe_config = _app_call('server_monitor_config', )
+    history = await asyncio.to_thread(list_server_monitor_history, limit=30)
+    return {
+        "server": snapshot,
+        "analysis": _app_call('analyze_server_snapshot', snapshot, history),
+        "history": history,
+        "target": safe_config["server"],
+        "configured": bool(safe_config["server"]),
+        "thresholds": _app_call('load_server_monitor_thresholds', ),
+    }
+
+
+@app.get("/api/server/thresholds")
+async def get_server_thresholds() -> dict[str, Any]:
+    return {"thresholds": _app_call('load_server_monitor_thresholds', ), "defaults": DEFAULT_SERVER_THRESHOLDS}
+
+
+@app.put("/api/server/thresholds")
+def update_server_thresholds(request: ServerThresholdsRequest) -> dict[str, Any]:
+    thresholds = _app_call('save_server_monitor_thresholds', request.thresholds)
+    snapshot = _app_call('load_server_monitor_snapshot', )
+    history = _app_call('list_server_monitor_history', limit=30)
+    return {"ok": True, "thresholds": thresholds, "analysis": _app_call('analyze_server_snapshot', snapshot, history)}
+
+
+@app.post("/api/server/refresh")
+async def refresh_server_monitor(request: ServerMonitorRequest) -> dict[str, Any]:
+    if not request.refresh:
+        return await _app_call('get_server_monitor', )
+    try:
+        snapshot = await asyncio.to_thread(read_server_monitor)
+    except Exception as exc:
+        previous = _app_call('load_server_monitor_snapshot', )
+        previous.update({"status": "error", "error": str(exc), "checked_at": now_iso()})
+        _app_call('save_server_monitor_snapshot', previous)
+        await asyncio.to_thread(record_server_monitor_snapshot, previous)
+        artifact = await asyncio.to_thread(register_artifact_safely, 
+            project_id="server",
+            name="server_monitor_snapshot.json",
+            path=str(SERVER_MONITOR_SNAPSHOT_FILE),
+            kind="server_snapshot",
+            metadata={"status": "error", "error": str(exc)},
+        )
+        evaluation = await asyncio.to_thread(evaluate_server_monitor, previous, create_records=True)
+        raise HTTPException(502, f"服务器检查失败：{exc}") from exc
+    _app_call('save_server_monitor_snapshot', snapshot)
+    await asyncio.to_thread(record_server_monitor_snapshot, snapshot)
+    artifact = await asyncio.to_thread(register_artifact_safely, 
+        project_id="server",
+        name="server_monitor_snapshot.json",
+        path=str(SERVER_MONITOR_SNAPSHOT_FILE),
+        kind="server_snapshot",
+        metadata={"status": snapshot.get("status"), "checked_at": snapshot.get("checked_at")},
+    )
+    evaluation = await asyncio.to_thread(evaluate_server_monitor, snapshot, create_records=True)
+    return {
+        "server": snapshot,
+        "analysis": evaluation["analysis"],
+        "history": evaluation["history"],
+        "evaluation": evaluation,
+        "target": _app_call('server_monitor_config', )["server"],
+        "configured": True,
+        "artifact": artifact,
+    }
+
+

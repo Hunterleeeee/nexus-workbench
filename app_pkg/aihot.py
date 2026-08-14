@@ -53,6 +53,7 @@ from .core import (
 )
 from .db import db_connection
 from .instance import app
+from .sub2api import _SUB2API_CORS_PATH
 from .evidence import evidence_quality_descriptor, evidence_quality_summary
 from .llm import call_llm, llm_settings
 from .memories import sync_cid_preferences_to_memories
@@ -1377,47 +1378,6 @@ def _aihot_relevant(entry: dict[str, Any]) -> bool:
 
 
 
-# 允许 Sub2API 面板页面的书签脚本一键同步快照（浏览器端 fetch 面板同源 API 后提交）。
-# 只放行用户自己的面板源，避免其他来源伪造快照。
-_SUB2API_PANEL_ORIGINS = [origin.strip().rstrip("/") for origin in os.getenv("SUB2API_PANEL_ORIGINS", "https://sub.chengsir.asia").split(",") if origin.strip()]
-
-# 这里刻意 **不** 使用全局 CORSMiddleware。
-#
-# 之前的写法是 add_middleware(CORSMiddleware, allow_origins=面板域名,
-# allow_credentials=True)，但中间件是全站生效的：等于声明"面板域名可以带着
-# 浏览器里缓存的 Basic Auth 凭证，POST 到 Workbench 的任意接口并读取响应"。
-# 面板域名一旦被 XSS 或域名过期被抢注，就能触发 Agent 调度、写收件箱等操作。
-#
-# 实际需要跨域的只有 /api/sub2api/sync-raw 一个路由，而它本来就在处理函数里
-# 校验了 Origin。所以改成只给那一个路由回 CORS 头，其余路由维持同源。
-_SUB2API_CORS_PATH = "/api/sub2api/sync-raw"
-
-
-@app.middleware("http")
-async def scoped_cors_middleware(request: Request, call_next: Any) -> Any:
-    """只为 Sub2API 书签同步这一个路由发放跨域许可。"""
-    origin = (request.headers.get("origin") or "").rstrip("/")
-    allowed = origin and origin in _SUB2API_PANEL_ORIGINS and request.url.path == _SUB2API_CORS_PATH
-
-    if request.method == "OPTIONS" and request.url.path == _SUB2API_CORS_PATH:
-        from starlette.responses import Response as _Response
-
-        preflight = _Response(status_code=204 if allowed else 403)
-        if allowed:
-            preflight.headers["Access-Control-Allow-Origin"] = origin
-            preflight.headers["Access-Control-Allow-Credentials"] = "true"
-            preflight.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-            preflight.headers["Access-Control-Allow-Headers"] = "Content-Type"
-            preflight.headers["Access-Control-Max-Age"] = "600"
-            preflight.headers["Vary"] = "Origin"
-        return preflight
-
-    response = await call_next(request)
-    if allowed:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Vary"] = "Origin"
-    return response
 
 
 # ---------------------------------------------------------------------------
@@ -2225,9 +2185,6 @@ __all__ = [
     "_AIHOT_DOMAIN_BY_HOST",
     "_aihot_domain",
     "_aihot_relevant",
-    "_SUB2API_PANEL_ORIGINS",
-    "_SUB2API_CORS_PATH",
-    "scoped_cors_middleware",
     "AUTH_EXEMPT_PREFIXES",
     "AUTH_EXEMPT_PATHS",
     "app_token_auth_middleware",

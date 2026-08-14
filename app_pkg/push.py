@@ -10,13 +10,26 @@ app.py 通过 `from app_pkg.push import *` 拿到这些符号。
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .core import VAPID_PRIVATE_KEY_FILE, WORKBENCH_PUBLIC_URL, log, now_iso
+from fastapi import HTTPException, Request
+from pydantic import BaseModel, Field
+
+from .core import VAPID_PRIVATE_KEY_FILE, WORKBENCH_PUBLIC_URL, clip, log, now_iso
+from .instance import app
 from .db import db_connection
+from .llm import valid_http_url
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
+
 
 def vapid_private_key_source() -> str:
     configured_file = os.getenv("WORKBENCH_VAPID_PRIVATE_KEY_FILE", "").strip()
@@ -30,7 +43,7 @@ def vapid_private_key_source() -> str:
 
 
 def vapid_private_key_configured() -> bool:
-    return bool(vapid_private_key_source())
+    return bool(_app_call('vapid_private_key_source', ))
 
 
 def _push_error_status(exc: Exception) -> int | None:
@@ -88,20 +101,20 @@ def deliver_push(
             private_key = pem_path.read_text(encoding="utf-8").strip()
         except Exception as exc:
             error = f"读取 VAPID 私钥文件失败：{exc}"
-            _finish_push_delivery(delivery_id, subscription_id, "failed", error, disable=False)
+            _app_call('_finish_push_delivery', delivery_id, subscription_id, "failed", error, disable=False)
             return {"id": delivery_id, "status": "failed", "error": error}
     if not private_key:
         private_key = os.getenv("WORKBENCH_VAPID_PRIVATE_KEY", "").strip()
     subject = os.getenv("WORKBENCH_VAPID_SUBJECT", "mailto:workbench@localhost").strip()
     if not private_key:
         error = "尚未配置 VAPID 私钥"
-        _finish_push_delivery(delivery_id, subscription_id, "failed", error, disable=False)
+        _app_call('_finish_push_delivery', delivery_id, subscription_id, "failed", error, disable=False)
         return {"id": delivery_id, "status": "failed", "error": error}
     try:
         from pywebpush import webpush
     except ImportError:
         error = "当前环境未安装 pywebpush"
-        _finish_push_delivery(delivery_id, subscription_id, "failed", error, disable=False)
+        _app_call('_finish_push_delivery', delivery_id, subscription_id, "failed", error, disable=False)
         return {"id": delivery_id, "status": "failed", "error": error}
     # 若仍取到的是裸 base64url DER（无头尾），自动包装成 PKCS8 PEM（兼容旧 .env 值）
     if not private_key.startswith("-----BEGIN"):
@@ -116,7 +129,7 @@ def deliver_push(
             private_key = "\n".join(pem_lines)
         except Exception as exc:
             error = f"VAPID 私钥格式无法识别：{exc}"
-            _finish_push_delivery(delivery_id, subscription_id, "failed", error, disable=False)
+            _app_call('_finish_push_delivery', delivery_id, subscription_id, "failed", error, disable=False)
             return {"id": delivery_id, "status": "failed", "error": error}
     # pywebpush 1.14.1 期望 vapid_private_key 是文件路径或 Vapid 实例（PEM 字符串会被当路径处理）。
     # 每次发送写到临时 PEM 文件，确保并发安全（用 delivery_id 隔离）。
@@ -128,7 +141,7 @@ def deliver_push(
         vapid_key_path = _tmp_pem.name
     except Exception as exc:
         error = f"写入 VAPID 临时文件失败：{exc}"
-        _finish_push_delivery(delivery_id, subscription_id, "failed", error, disable=False)
+        _app_call('_finish_push_delivery', delivery_id, subscription_id, "failed", error, disable=False)
         return {"id": delivery_id, "status": "failed", "error": error}
     try:
         push_kwargs: dict[str, Any] = {
@@ -147,17 +160,17 @@ def deliver_push(
             push_kwargs["requests_session"] = session
         webpush(**push_kwargs)
         os.unlink(vapid_key_path)
-        _finish_push_delivery(delivery_id, subscription_id, "sent", "", disable=False)
+        _app_call('_finish_push_delivery', delivery_id, subscription_id, "sent", "", disable=False)
         return {"id": delivery_id, "status": "sent"}
     except Exception as exc:
         try:
             os.unlink(vapid_key_path)
         except OSError:
             pass
-        status_code = _push_error_status(exc)
+        status_code = _app_call('_push_error_status', exc)
         expired = status_code in {404, 410}
         error = clip(str(exc), 500)
-        _finish_push_delivery(delivery_id, subscription_id, "expired" if expired else "failed", error, disable=expired)
+        _app_call('_finish_push_delivery', delivery_id, subscription_id, "expired" if expired else "failed", error, disable=expired)
         return {"id": delivery_id, "status": "expired" if expired else "failed", "error": error, "http_status": status_code}
 
 
@@ -188,7 +201,7 @@ def list_push_deliveries(limit: int = 80) -> list[dict[str, Any]]:
             "SELECT d.*, s.endpoint, s.user_agent FROM push_deliveries d LEFT JOIN push_subscriptions s ON s.id = d.subscription_id ORDER BY d.created_at DESC LIMIT ?",
             (max(1, min(limit, 200)),),
         ).fetchall()
-        return [_push_delivery_row(row) for row in rows]
+        return [_app_call('_push_delivery_row', row) for row in rows]
     finally:        connection.close()
 
 
@@ -216,13 +229,101 @@ async def _push_to_all_subscriptions(title: str, body: str, href: str = "/", eve
 
 
 
+class PushSubscriptionRequest(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=2_000)
+    keys: dict[str, str] = Field(default_factory=dict)
+    user_agent: str = Field(default="", max_length=500)
+    quiet_start: str = Field(default="22:00", max_length=5)
+    quiet_end: str = Field(default="08:00", max_length=5)
+    enabled: bool = True
+
+@app.get("/api/push/subscriptions")
+def get_push_subscriptions() -> dict[str, Any]:
+    connection = db_connection()
+    try:
+        rows = connection.execute("SELECT id, endpoint, user_agent, enabled, quiet_start, quiet_end, failure_count, last_error, last_sent_at, last_failed_at, created_at, updated_at FROM push_subscriptions ORDER BY updated_at DESC").fetchall()
+        return {"subscriptions": [dict(row) | {"enabled": bool(row["enabled"])} for row in rows], "configured": _app_call('vapid_private_key_configured', ), "private_key_source": _app_call('vapid_private_key_source', ), "proxy_configured": bool(os.getenv("WORKBENCH_PUSH_PROXY", "").strip())}
+    finally:
+        connection.close()
+
+
+@app.get("/api/push/config")
+async def get_push_config() -> dict[str, Any]:
+    """Expose only the public VAPID key and delivery readiness to the browser."""
+    return {
+        "configured": _app_call('vapid_private_key_configured', ),
+        "private_key_source": _app_call('vapid_private_key_source', ),
+        "public_key": os.getenv("WORKBENCH_VAPID_PUBLIC_KEY", "").strip(),
+        "subject": os.getenv("WORKBENCH_VAPID_SUBJECT", "mailto:workbench@localhost").strip(),
+        "proxy_configured": bool(os.getenv("WORKBENCH_PUSH_PROXY", "").strip()),
+    }
+
+
+@app.post("/api/push/subscriptions")
+def save_push_subscription(request: PushSubscriptionRequest) -> dict[str, Any]:
+    if not valid_http_url(request.endpoint):
+        raise HTTPException(400, "Push endpoint 必须是 http/https 地址")
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        connection.execute(
+            "INSERT INTO push_subscriptions(endpoint, p256dh, auth, user_agent, enabled, quiet_start, quiet_end, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth, user_agent=excluded.user_agent, enabled=excluded.enabled, quiet_start=excluded.quiet_start, quiet_end=excluded.quiet_end, updated_at=excluded.updated_at",
+            (request.endpoint, str(request.keys.get("p256dh") or ""), str(request.keys.get("auth") or ""), request.user_agent, int(request.enabled), request.quiet_start, request.quiet_end, timestamp, timestamp),
+        )
+        connection.commit()
+        row = connection.execute("SELECT id, endpoint, user_agent, enabled, quiet_start, quiet_end, failure_count, last_error, last_sent_at, last_failed_at, created_at, updated_at FROM push_subscriptions WHERE endpoint = ?", (request.endpoint,)).fetchone()
+        return {"subscription": dict(row) | {"enabled": bool(row["enabled"])}, "delivery": "vapid-ready" if _app_call('vapid_private_key_configured', ) else "stored-awaiting-vapid"}
+    finally:
+        connection.close()
+
+
+@app.delete("/api/push/subscriptions")
+def delete_push_subscription(endpoint: str) -> dict[str, Any]:
+    connection = db_connection()
+    try:
+        connection.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+        connection.commit()
+        return {"ok": True}
+    finally:
+        connection.close()
+
+
+
+@app.get("/api/push/deliveries")
+def get_push_deliveries(limit: int = 80) -> dict[str, Any]:
+    return {"deliveries": _app_call('list_push_deliveries', limit), "policy": "仅保存送达状态、失败摘要和订阅状态，不保存 VAPID 私钥。"}
+
+
+@app.post("/api/push/deliveries/{delivery_id}/retry")
+async def retry_push_delivery(delivery_id: int) -> dict[str, Any]:
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT d.*, s.endpoint, s.p256dh, s.auth, s.enabled FROM push_deliveries d JOIN push_subscriptions s ON s.id = d.subscription_id WHERE d.id = ?", (delivery_id,)).fetchone()
+    finally:
+        connection.close()
+    if not row:
+        raise HTTPException(404, "Push 送达记录不存在")
+    if not row["endpoint"]:
+        raise HTTPException(409, "对应订阅已不存在，无法重试")
+    subscription = dict(row)
+    result = await asyncio.to_thread(deliver_push, subscription, title=row["title"], body=row["body"], href=row["href"], event_key=row["event_key"], delivery_id=delivery_id)
+    return {"ok": result.get("status") == "sent", "delivery": result}
+
+
 __all__ = [
-    "vapid_private_key_source",
-    "vapid_private_key_configured",
-    "_push_error_status",
-    "_push_delivery_row",
-    "deliver_push",
+    "PushSubscriptionRequest",
     "_finish_push_delivery",
-    "list_push_deliveries",
+    "_push_delivery_row",
+    "_push_error_status",
     "_push_to_all_subscriptions",
+    "delete_push_subscription",
+    "deliver_push",
+    "get_push_config",
+    "get_push_deliveries",
+    "get_push_subscriptions",
+    "list_push_deliveries",
+    "retry_push_delivery",
+    "save_push_subscription",
+    "vapid_private_key_configured",
+    "vapid_private_key_source",
 ]
