@@ -2468,6 +2468,36 @@ READ_ONLY_REACT_TOOLS = frozenset({
 })
 
 
+# 项目插拔（能力层）：enabled=false 的项目对应的 ReAct 工具一并移除。
+# REACT_TOOLS 里项目专属的只有少数（market_read / cloud_dev_*），通用工具
+# （web_search/web_fetch/notify/work_items_read）不属于任何单一项目。
+PROJECT_REACT_TOOLS: dict[str, set[str]] = {
+    "market": {"market_read"},
+    "cloud-dev": {"cloud_dev_generate", "cloud_dev_patch"},
+}
+
+
+def _project_disabled_react_tools() -> set[str]:
+    """projects.json 中 enabled=false 的项目在 REACT 层的工具 id 集合。"""
+    try:
+        import json as _json
+
+        from .core import PROJECTS_FILE
+
+        values = _json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, ImportError):
+        return set()
+    disabled = {str(item.get("id")) for item in values if isinstance(item, dict) and item.get("enabled") is False}
+    return {tool for project_id, tools in PROJECT_REACT_TOOLS.items() if project_id in disabled for tool in tools}
+
+
+_DISABLED_REACT_TOOLS = _project_disabled_react_tools()
+if _DISABLED_REACT_TOOLS:
+    REACT_TOOLS = {name: entry for name, entry in REACT_TOOLS.items() if name not in _DISABLED_REACT_TOOLS}
+    REACT_TOOL_LABELS = {name: label for name, label in REACT_TOOL_LABELS.items() if name not in _DISABLED_REACT_TOOLS}
+    READ_ONLY_REACT_TOOLS = frozenset(name for name in READ_ONLY_REACT_TOOLS if name not in _DISABLED_REACT_TOOLS)
+
+
 def _react_tool_cache_key(name: str, arguments: dict[str, Any]) -> str | None:
     if name not in READ_ONLY_REACT_TOOLS:
         return None

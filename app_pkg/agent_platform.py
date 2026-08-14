@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from .core import (
     MAX_CONVERSATION_MESSAGES,
+    PROJECTS_FILE,
     clip,
     clip_for_llm,
     log,
@@ -66,6 +67,33 @@ SUBAGENT_TOOL_MAP: dict[str, list[str]] = {
     # handler、被静默丢掉的名字。
     "cloud-dev": ["cloud_dev_generate", "cloud_dev_patch", "cloud_dev_status", "cloud_dev_test", "work_items_read", "notify", "web_search", "web_fetch"],
 }
+
+
+def _disabled_project_ids() -> set[str]:
+    """projects.json 中 enabled=false 的项目 id（项目插拔的部署级开关）。
+
+    独立读文件而不是 `from .projects import load_projects`：projects 依赖本模块，
+    反向导入会循环。工具注册表在模块加载时构建，这里读到的是静态快照——
+    插拔属于「这份部署装不装这个项目」，本来就不是运行时热开关。
+    """
+    try:
+        import json as _json
+
+        values = _json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(item.get("id")) for item in values if isinstance(item, dict) and item.get("enabled") is False}
+
+
+# 项目插拔（能力层）：enabled=false 的项目从子 Agent 工具表整体移除——
+# Agent 拿不到该项目的任何工具，等于「这份部署里没有这个项目」。
+_DISABLED_PROJECT_IDS = _disabled_project_ids()
+if _DISABLED_PROJECT_IDS:
+    SUBAGENT_TOOL_MAP = {
+        project_id: tools
+        for project_id, tools in SUBAGENT_TOOL_MAP.items()
+        if project_id not in _DISABLED_PROJECT_IDS
+    }
 
 
 

@@ -1719,3 +1719,18 @@
     源码断言测试 3 处适配（post_cross_tab_ask → chat.py）；
   - **app.py 从 3.27 万行累计降至 1005 行（-31695，96.9% 已拆出）**，全量 509 通过，
     3.11 + eager 全检 + smoke（approvals/agent_queue/chat/workers/backups）通过。
+
+## v0.3.210 · 2026-08-14
+
+- **项目插拔化 + 选择性开源**：每个项目可以整份部署「装或不装」：
+  - **入口级**：`projects.json` 项目条目支持 `enabled` 字段（缺省启用），`public_projects()`
+    过滤 → 首页卡片/导航自动跟随（部署级开关，区别于运行时的「隐藏 ×」个人偏好）；
+  - **能力级**：`SUBAGENT_TOOL_MAP`（agent_platform.py）按 enabled 过滤——禁用的项目
+    子 Agent 拿不到任何工具；`REACT_TOOLS`/`REACT_TOOL_LABELS`/`READ_ONLY_REACT_TOOLS`
+    （agent_engine.py）同步过滤项目专属工具（market_read / cloud_dev_*），通用工具
+    （web_search/web_fetch/notify）不受影响；独立读 projects.json 避免 projects↔
+    agent_platform 循环导入（工具注册表在模块加载时构建，静态快照）；
+  - **开源模板**：`projects.open-source.json`（crawl4ai `enabled: false` + 说明字段）——
+    开源发布时替换 projects.json 即不引导爬虫入口，Agent 也不碰爬虫工具；
+  - 验证：模拟 crawl4ai/market disabled → 首页排除 + 工具表移除（真实执行）；
+    默认配置零影响（工具齐全）；全量 509 通过 + 3.11。

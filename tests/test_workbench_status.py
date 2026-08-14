@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -274,6 +275,30 @@ class WorkbenchStatusTests(unittest.TestCase):
             self.assertIn("web_search", app.AGENT_TOOL_POLICIES)
             self.assertTrue(app.AGENT_TOOL_POLICIES["web_search"]["enabled"])
             self.assertTrue(app.AGENT_TOOL_POLICIES["web_fetch"]["enabled"])
+
+    def test_creating_project_preserves_projects_hidden_by_user_preference(self):
+        import app_pkg.projects as projects_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            projects_file = Path(temp_dir) / "projects.json"
+            preferences_file = Path(temp_dir) / "project_preferences.json"
+            configured = [
+                {"id": "visible", "title": "可见项目"},
+                {"id": "hidden", "title": "隐藏项目"},
+            ]
+            projects_file.write_text(json.dumps(configured, ensure_ascii=False), encoding="utf-8")
+            preferences_file.write_text(json.dumps({"hidden_ids": ["hidden"]}), encoding="utf-8")
+
+            with patch.object(projects_module, "PROJECTS_FILE", projects_file), \
+                 patch.object(projects_module, "PROJECT_PREFERENCES_FILE", preferences_file), \
+                 patch.object(projects_module, "public_projects", return_value=[]):
+                projects_module.create_project(
+                    projects_module.ProjectCreateRequest(id="new-project", title="新项目")
+                )
+
+            saved_ids = [item["id"] for item in json.loads(projects_file.read_text(encoding="utf-8"))]
+
+        self.assertEqual(saved_ids, ["visible", "hidden", "new-project"])
 
     def test_public_project_health_exposes_counts_source_and_data_time(self):
         activity = {

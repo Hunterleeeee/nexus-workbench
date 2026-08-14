@@ -61,14 +61,20 @@ def save_project_preferences(values: dict[str, Any]) -> None:
     save_json_atomic(PROJECT_PREFERENCES_FILE, values, 0o600)
 
 
-def load_projects() -> list[dict[str, Any]]:
+def _load_configured_projects() -> list[dict[str, Any]]:
+    """读取 projects.json 原始项目列表，不应用任何用户显示偏好。"""
     try:
         values = json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     if not isinstance(values, list):
         return []
-    projects = [item for item in values if isinstance(item, dict) and item.get("id")]
+    return [item for item in values if isinstance(item, dict) and item.get("id")]
+
+
+def load_projects() -> list[dict[str, Any]]:
+    values = _load_configured_projects()
+    projects = values
     preferences = load_project_preferences()
     order = [str(item) for item in preferences.get("order", []) if item]
     order_index = {project_id: index for index, project_id in enumerate(order)}
@@ -235,6 +241,9 @@ def _public_projects_uncached() -> list[dict[str, Any]]:
     # /api/projects 每次都要走这里，服务重启后的首个请求会白白慢近一秒。
     crawl_available = importlib.util.find_spec("crawl4ai") is not None
     all_projects = _app_call("load_projects")
+    # 项目插拔：projects.json 里 enabled=false 的项目不进入首页/导航（部署级开关，
+    # 与运行时的隐藏（×）不同——那是个人偏好，这是这份部署要不要这个项目）。
+    all_projects = [item for item in all_projects if item.get("enabled") is not False]
     # 一次把所有项目的计数取齐，替代每张卡片各查一遍。
     activity_batch = project_activity_batch([str(item.get("id") or "") for item in all_projects] + ["crawl4ai"])
     for project in all_projects:
@@ -853,7 +862,9 @@ def projects() -> dict[str, Any]:
 @app.post("/api/projects")
 def create_project(request: ProjectCreateRequest) -> dict[str, Any]:
     """新增一个项目入口（写入 projects.json，前端主页立即可见）。"""
-    existing = load_projects()
+    # 写配置时必须读取未经个人偏好过滤的原始列表。若使用 load_projects()，
+    # 用户在首页隐藏的项目会在新增项目时被当成“不存在”并从 projects.json 永久删掉。
+    existing = _load_configured_projects()
     if any(str(item.get("id")) == request.id for item in existing):
         raise HTTPException(409, f"项目入口 {request.id} 已存在")
     entry = {
