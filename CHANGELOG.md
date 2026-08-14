@@ -1374,3 +1374,11 @@
   - 通用工具进一步入 core：decode_json_column/extract_json_block/decode_json_value/query_terms/_int_env；
   - 兼容处理：领域常量（MEMORY_STALE_DAYS 等）必须进 `__all__`（测试与 app 引用）、ROOT 路径运行时读取（测试 patch）、转发器（agent_display_name/work_item_row/agent_run_row）绝不 export；
   - app.py 从 3.27 万行降至 **2.78 万行**，全量 509 通过。
+
+## v0.3.189 · 2026-08-14
+
+- **拆分第五批补充：usage 统计领域拆到 `app_pkg/usage.py`**（333 行）：
+  - 运行次数/趋势/一句话概况 + 口径常量（USAGE_WINDOW_CHOICES/USAGE_EXCLUDED_RUN_KINDS）随领域走；
+  - load_projects 延迟转发（projects 领域仍留 app.py）；路由经 instance 注册；
+  - app.py 从 3.27 万行降至 **2.75 万行**，全量 509 通过。
+  - 注：automations/plans/evidence/knowledge/market 与 agent 平台（AGENT_REGISTRY/PLAYBOOKS）或跨域深度耦合，判断为「平台执行层」，待最后一批与 agent 平台一起拆。

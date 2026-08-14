@@ -1,16 +1,16 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.188"></script>
+  <script src="/static/theme.js?v=0.3.189"></script>
   <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="theme-color" content="#f4f6f8" />
-  <title>Git 项目中心 · Workbench</title><link rel="stylesheet" href="/static/platform.css?v=0.3.188" />
+  <title>Git 项目中心 · Workbench</title><link rel="stylesheet" href="/static/platform.css?v=0.3.189" />
 </head>
 <body data-page="git">
-  <div class="platform-shell"><header class="platform-topbar"><a class="platform-brand" href="/"><span class="platform-brand-mark">⌘</span><span><strong>Workbench</strong><small>平台工具</small></span></a><nav class="platform-nav" aria-label="平台导航"><a href="/automation">自动化中心</a><a class="active" href="/git">Git 项目中心</a><a href="/github-tools">GitHub 工具目录</a><a href="/approvals">审批与交付</a></nav><div class="platform-topbar-actions"><a class="platform-back-link" href="/" aria-label="返回工作台"><span aria-hidden="true">←</span><span>返回工作台</span></a><span class="platform-version">v0.3.188</span></div></header>
+  <div class="platform-shell"><header class="platform-topbar"><a class="platform-brand" href="/"><span class="platform-brand-mark">⌘</span><span><strong>Workbench</strong><small>平台工具</small></span></a><nav class="platform-nav" aria-label="平台导航"><a href="/automation">自动化中心</a><a class="active" href="/git">Git 项目中心</a><a href="/github-tools">GitHub 工具目录</a><a href="/approvals">审批与交付</a></nav><div class="platform-topbar-actions"><a class="platform-back-link" href="/" aria-label="返回工作台"><span aria-hidden="true">←</span><span>返回工作台</span></a><span class="platform-version">v0.3.189</span></div></header>
     <main class="platform-main"><section class="platform-hero"><div><span class="platform-eyebrow">本地 Git 项目</span><h1>知道每个项目现在是什么状态</h1><p>只读扫描本机 Git 仓库，展示当前分支、未提交修改、最近提交和可关联的工作项。页面不执行提交、切换分支或删除操作。</p><div class="platform-howto"><strong>怎么用：</strong>① 打开即自动扫描本机 Git 仓库 → ② 每张卡片看「分支 / 未提交改动 / 最近提交」→ ③ 有未提交改动的项目标红提示，处理完再扫一次确认。适合每天看一眼所有代码项目的状态。</div></div><div class="platform-hero-actions"><span id="git-status" class="platform-status" role="status">正在读取…</span><button id="scan-git" class="platform-button orange" type="button">重新扫描</button></div></section>
       <section class="platform-kpi-row"><div class="platform-kpi"><strong id="repo-count">—</strong><span>扫描到仓库</span></div><div class="platform-kpi"><strong>只读</strong><span>操作边界</span></div><div class="platform-kpi"><strong id="git-roots">—</strong><span>扫描根目录</span></div><div class="platform-kpi"><strong>8</strong><span>每仓库最多展示提交</span></div></section>
       <section class="platform-card"><div class="platform-card-head"><div><h2>仓库清单</h2><p>状态来源于本次扫描，不把目录存在误判成 Git 仓库。</p></div></div><div id="repo-grid" class="repo-grid"><div class="platform-list-empty">读取中…</div></div></section>
       <footer class="platform-footer"><span>Workbench · local-first · Git inventory Artifact 可被自动化规则复用</span><span>扫描不会读取或上传远程凭据</span></footer>
-    </main></div><script src="/static/request.js?v=0.3.188"></script><script src="/static/platform.js?v=0.3.188"></script>
+    </main></div><script src="/static/request.js?v=0.3.189"></script><script src="/static/platform.js?v=0.3.189"></script>
 </body>
 </html>
