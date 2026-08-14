@@ -1382,3 +1382,16 @@
   - load_projects 延迟转发（projects 领域仍留 app.py）；路由经 instance 注册；
   - app.py 从 3.27 万行降至 **2.75 万行**，全量 509 通过。
   - 注：automations/plans/evidence/knowledge/market 与 agent 平台（AGENT_REGISTRY/PLAYBOOKS）或跨域深度耦合，判断为「平台执行层」，待最后一批与 agent 平台一起拆。
+
+## v0.3.190 · 2026-08-14
+
+- **拆分第六批：LLM 基础设施配置层拆到 `app_pkg/llm.py`**（约 1000 行）：
+  - 模型配置（llm_settings/provider 归一化/环境回退/能力表）、Provider 健康/冷却/回退、
+    用量事件（record/schedule/metrics）、URL 校验工具（valid_http_url/valid_research_url）；
+  - LLM 全局状态（LLM_PROVIDER_HEALTH/COOLDOWN/_PRIMARY_*_KEYS）与 LLMSettingsRequest/LLMTestRequest 随模块走；
+  - 兼容关键：模块内对「测试 patch 敏感」函数的调用（load_saved_llm_settings/_llm_health/llm_provider_state）
+    改为 `_app_call` 运行时经 app 命名空间转发（patch app.X 生效）；__all__ 显式导出下划线函数与 class；
+  - **修复历史 bug**：0.3.186 sub2api 搬迁误删 evaluate_sub2api_alerts 的 def 行，函数体成了挂在
+    load_saved_llm_settings 里的死代码（语法合法但不执行）——从 0.3.184 恢复完整函数到 app_pkg/sub2api.py 并清理死代码；
+  - 顺手发现 app.py 178 行残留一份 INTEGRATION_DEFINITIONS（0.3.187 行号漂移未删净，重复定义）——待下一轮清理；
+  - app.py 降至 **2.66 万行**，全量 509 通过。call_llm/stream 调用层与 /api/settings 路由下一批并入。

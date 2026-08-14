@@ -622,11 +622,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 runs: dict[str, dict[str, Any]] = {}
 run_tasks: dict[str, asyncio.Task[Any]] = {}
 
-# Provider health is intentionally kept separate from credentials.  It gives
-# the UI a useful explanation after a failed primary call without persisting
-# upstream response bodies or secrets into the shared database.
-LLM_PROVIDER_HEALTH: dict[str, dict[str, Any]] = {}
-LLM_PROVIDER_COOLDOWN_SECONDS = 60
 WORKBENCH_INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"
 WORKER_LEASE_SECONDS = max(60, int(os.getenv("WORKBENCH_WORKER_LEASE_SECONDS", "120")))
 # 本进程启动时刻：用来判断哪些 running 的 run 是上一个进程留下的孤儿。
@@ -3665,17 +3660,6 @@ def validate_document_factory_payload(request: DocumentFactoryRequest, materials
     }
 
 
-_PRIMARY_TOKEN_KEYS = (
-    "api_key", "apikey", "api-key", "token", "access_token", "access-token",
-    "accessToken", "authorization", "bearer_token", "bearerToken", "key", "secret",
-)
-_PRIMARY_BASE_URL_KEYS = (
-    "base_url", "base-url", "baseUrl", "baseURL", "endpoint", "api_url", "api-url",
-    "apiUrl", "apiURL", "api_base", "api-base", "apiBase", "url",
-)
-_PRIMARY_MODEL_KEYS = (
-    "model", "model_name", "model-name", "modelName", "model_id", "model-id", "modelId",
-)
 
 
 def _nested_config_value(value: Any, keys: tuple[str, ...]) -> str:
