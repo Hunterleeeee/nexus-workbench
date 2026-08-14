@@ -98,6 +98,22 @@ def now_iso() -> str:
     """当前 UTC 时间戳（ISO 8601）。数据库所有 created_at/updated_at 的规范格式。"""
     return datetime.now(timezone.utc).isoformat()
 
+
+def clip(value: str | None, limit: int) -> str:
+    value = value or ""
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n\n[…内容已截断…]"
+
+
+def clip_for_llm(value: str | None, limit: int) -> str:
+    value = value or ""
+    if len(value) <= limit:
+        return value
+    head = int(limit * 0.72)
+    tail = limit - head
+    return value[:head] + "\n\n[…中间内容已压缩…]\n\n" + value[-tail:]
+
 __all__ = [
     "ROOT",
     "STATIC_DIR",
@@ -138,4 +154,6 @@ __all__ = [
     "MEMORY_OWNER_ID",
     "MAX_MEMORY_CONTEXT_ITEMS",
     "now_iso",
+    "clip",
+    "clip_for_llm",
 ]

@@ -1339,3 +1339,11 @@
   - `db_connection`/`db_scope` 及 schema（59 张表）迁入 db.py，`app.py` 从 3.27 万行降至 3.15 万行；
   - 兼容层保证**测试零改动**（全量 509 通过）：`_DB_SCHEMA_READY` 标志留在 app 模块（延迟读写）、数据库路径运行时读 `app.DATABASE_FILE`（patch 生效）、`DB_SCHEMA_VERSION`/`_SharedConnection` 在 app 模块 re-export；
   - 4 个 worker 与 uvicorn 启动验证通过。
+
+## v0.3.185 · 2026-08-14
+
+- **拆分第三步：Web Push 领域拆到 `app_pkg/push.py`**（VAPID 密钥/订阅/投递服务函数，215 行）：
+  - 依赖只有 core + db，零业务耦合，是第一个落地的领域模块；路由留 app.py（需 app 实例）；
+  - `clip`/`clip_for_llm` 从 app.py 抽到 core（测试与后续模块共用）；
+  - 全量 509 通过，app.py 从 3.15 万行降至约 3.13 万行。
+  - 注：知识库领域（knowledge/obsidian）与 market/server/doc-factory 等 7 个领域深度耦合（来源体检会跨域分析），暂缓独立，待跨域函数收敛后再拆。

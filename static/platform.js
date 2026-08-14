@@ -21,7 +21,7 @@ const api = async (url, options = {}) => {
 };
 const jsonOptions = (body, method = "POST") => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 function setupThemeToggle() {
-  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.184"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
+  if (!document.querySelector("link[data-workbench-theme]")) { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = "/static/theme.css?v=0.3.185"; link.dataset.workbenchTheme = "true"; document.head.append(link); }
   const topbar = qs(".platform-topbar");
   if (!topbar || topbar.querySelector("[data-theme-toggle]")) return;
   const theme = window.WorkbenchTheme;
