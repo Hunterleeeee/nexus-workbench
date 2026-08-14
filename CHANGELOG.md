@@ -1694,3 +1694,28 @@
     app 实例/_app_call helper）；模块内互调 226 处转发；
   - app.py 从 3.27 万行累计降至 **2493 行（-30207，92% 已拆出）**，全量 509 通过，
     3.11 + eager 全检 + smoke（backup/memories/sub2api/server/push/CORS）通过。
+
+## v0.3.209 · 2026-08-14
+
+- **第 23 批（收官）：chat / approvals / agent_queue 三个新模块 + 8 模块并入 + auth 归位**
+  （app.py 首次跌破 1000 行，2493 → 1043 → 1005 行，92% → 96% 已拆出）：
+  - **新建 `app_pkg/chat.py`**（chat_stream/chat/cross-tab 3 路由 + ChatStreamRequest/
+    CrossTabAskRequest/ChatRequest 3 模型）；**新建 `app_pkg/approvals.py`**
+    （create_approval_request/queue/approvals/decide 4 函数 + ApprovalDecisionRequest）；
+    **新建 `app_pkg/agent_queue.py`**（AGENT_QUEUE_LEASE_SECONDS + 队列数据层 10 函数 +
+    4 路由 + run_queued_agent_task/agent_queue_worker_loop + 2 模型）；
+  - 并入：browser（enqueue_crawl_request）、git（github-tools 2 路由）、db（backups
+    3 路由）、agent_platform（capability_graph_route/get_capability_graph/get_system_
+    architecture/get_workers/heartbeat_worker/WorkerHeartbeatRequest）、agent_runs
+    （get_recent_trace）、doc_factory（docx 工具 4 函数）、inbox（merge 3 路由 +
+    InboxBatchMergeRequest）、push（send_push_test）、server（server actions 域
+    SERVER_SAFE_ACTIONS + 3 路由 + ServerActionRequest）、product_manager
+    （PRODUCT_*_STATUSES 3 常量）；
+  - **auth 中间件（AUTH_EXEMPT_PREFIXES/PATHS/app_token_auth_middleware）从 aihot 移回
+    app.py 主入口**；删除悬挂装饰器死代码（@app.post("/api/runs/{run_id}/cancel")）；
+  - 兼容：**`_app_call` 不能转发常量（str object is not callable）**——_PROCESS_STARTED_AT
+    等常量改用函数内 `import app as _app` 运行时读；to_thread(函数引用) 2 处；模块间
+    循环转发（create_approval_request/register_artifact_safely/markitdown_status 等）；
+    源码断言测试 3 处适配（post_cross_tab_ask → chat.py）；
+  - **app.py 从 3.27 万行累计降至 1005 行（-31695，96.9% 已拆出）**，全量 509 通过，
+    3.11 + eager 全检 + smoke（approvals/agent_queue/chat/workers/backups）通过。

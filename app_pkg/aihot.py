@@ -1380,43 +1380,6 @@ def _aihot_relevant(entry: dict[str, Any]) -> bool:
 
 
 
-# ---------------------------------------------------------------------------
-# 应用层鉴权（纵深防御）
-#
-# 线上所有保护都来自 nginx 的 auth_basic。这意味着 nginx 配置改错一行、或者
-# 服务器上任何本地进程直连 127.0.0.1:18765，全部 300 多个接口就完全裸奔——包括
-# 写库、触发 Agent、提交云开发构建。
-#
-# 这里加一道独立的应用层校验：设置 WORKBENCH_API_TOKEN 后，非白名单路径必须带
-# X-Workbench-Token 头或 workbench_token Cookie。默认不设置时保持原有行为
-# （只依赖 nginx），所以升级不会把自己锁在门外；确认前端能正常带 token 之后再
-# 在 .env 里打开即可。
-# ---------------------------------------------------------------------------
-AUTH_EXEMPT_PREFIXES = ("/static/", "/feishu/")
-AUTH_EXEMPT_PATHS = {
-    "/api/health",              # 健康检查脚本，无凭证
-    "/api/git/inventory-push",  # 有自己的 WORKBENCH_GIT_PUSH_TOKEN 常数时间校验
-    _SUB2API_CORS_PATH,         # 有自己的 Origin 校验
-    "/favicon.ico",
-    "/manifest.webmanifest",
-}
-
-
-@app.middleware("http")
-async def app_token_auth_middleware(request: Request, call_next: Any) -> Any:
-    expected = os.getenv("WORKBENCH_API_TOKEN", "").strip()
-    if not expected:
-        return await call_next(request)
-    path = request.url.path
-    if path in AUTH_EXEMPT_PATHS or path.startswith(AUTH_EXEMPT_PREFIXES) or request.method == "OPTIONS":
-        return await call_next(request)
-    provided = str(request.headers.get("x-workbench-token") or request.cookies.get("workbench_token") or "")
-    if not secrets.compare_digest(provided, expected):
-        from starlette.responses import JSONResponse as _JSONResponse
-
-        log.warning("拒绝未携带有效 token 的请求：%s %s", request.method, path)
-        return _JSONResponse({"detail": "缺少或错误的 Workbench 访问令牌"}, status_code=401)
-    return await call_next(request)
 
 
 @app.get("/static/sw.js")
@@ -2185,9 +2148,6 @@ __all__ = [
     "_AIHOT_DOMAIN_BY_HOST",
     "_aihot_domain",
     "_aihot_relevant",
-    "AUTH_EXEMPT_PREFIXES",
-    "AUTH_EXEMPT_PATHS",
-    "app_token_auth_middleware",
     "service_worker_file",
     "favicon_file",
     "WORKBENCH_INSTANCE_ID",

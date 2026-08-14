@@ -1556,4 +1556,150 @@ async def dispatch_agent_task(request: AgentDispatchRequest, *, parent_run_id: s
             log.debug("忽略异常（dispatch_agent_task）", exc_info=True)
         raise HTTPException(502, f"总调度 Agent 调用失败：{exc}") from exc
 
-__all__ = ["runtime_tool_policy", "assert_runtime_tool_policies", "subagent_tool_schemas", "_contract_source_ref", "_contract_source_refs", "_contract_source_coverage", "agent_result_contract", "available_child_agents", "capability_route_explanation", "agent_declared_tools", "validate_agent_tool_requests", "build_agent_execution_plan", "capability_graph_payload", "call_llm_with_tools", "dispatch_agent_task", "AgentDispatchRequest", "AGENT_REGISTRY", "AGENT_TOOL_POLICIES", "RUNTIME_TOOL_POLICIES", "AGENT_ROUTE_HINTS", "AGENT_PLAYBOOKS", "AGENT_RUN_STATUS_LABELS", "AGENT_IMPLEMENTATIONS", "AGENT_STATUS_LABELS", "SUBAGENT_TOOL_MAP", "AGENT_RESULT_SECTION_ALIASES", "AGENT_RESULT_CONTRACT_VERSION"]
+def capability_graph_route(message: str, children: list[str] | None = None) -> list[str]:
+    """Route by declared tools, freshness and current load, not keywords alone."""
+    candidates = children or available_child_agents()
+    lowered = str(message or "").lower()
+    scored: list[tuple[float, str]] = []
+    for project_id in candidates:
+        if project_id not in AGENT_REGISTRY or project_id == "workbench":
+            continue
+        hints = AGENT_ROUTE_HINTS.get(project_id, ())
+        playbook = AGENT_PLAYBOOKS.get(project_id, {})
+        score = sum(3.0 for hint in hints if hint.lower() in lowered)
+        score += sum(0.35 for term in str(playbook.get("mission", "")).lower().split() if term and term in lowered)
+        detail = agent_detail(project_id, llm_ready=bool(llm_settings()["configured"]))
+        tools = set(detail.get("tools") or detail.get("implemented_tools") or [])
+        if any(term in lowered for term in ("最新", "同步", "刷新", "数据时间", "变化")):
+            freshness = project_data_freshness(project_id)
+            if freshness.get("status") in {"stale", "missing"}:
+                score += 2.0
+        if tools:
+            score += min(1.5, len(tools) * 0.1)
+        active = int((agent_run_summary(project_id) or {}).get("active", 0))
+        score -= min(1.5, active * 0.25)
+        if score > 0:
+            scored.append((score, project_id))
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
+    return [project_id for _score, project_id in scored[:3]] or ["inbox"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+@app.get("/api/agent/capability-graph")
+def get_capability_graph() -> dict[str, Any]:
+    return capability_graph_payload()
+
+@app.get("/api/system/architecture")
+def get_system_architecture() -> dict[str, Any]:
+    workers = worker_status_payload()
+    worker_by_id = {worker["id"]: worker for worker in workers}
+
+    def component_status(worker_id: str) -> str:
+        worker = worker_by_id.get(worker_id) or {}
+        if worker.get("stale"):
+            return "stale"
+        return str(worker.get("status") or "unclaimed")
+
+    try:
+        crawl4ai_available = importlib.util.find_spec("crawl4ai") is not None
+    except (ImportError, ValueError):
+        crawl4ai_available = False
+    components = [
+        {"id": "core-api", "label": "Core API", "status": "online", "scope": "FastAPI + SQLite"},
+        {"id": "crawl-worker", "label": "Crawl Worker", "status": component_status("crawl-worker") if crawl4ai_available else "optional", "scope": "网页抓取与证据产物"},
+        {"id": "sync-worker", "label": "Sync Worker", "status": component_status("sync-worker"), "scope": "AI 热点、Sub2API、行情自动化"},
+        {"id": "monitor-worker", "label": "Monitor Worker", "status": component_status("monitor-worker"), "scope": "服务器巡检与告警"},
+        {"id": "agent-worker", "label": "Agent Worker", "status": component_status("agent-worker"), "scope": "计划、重试、交接与 LLM"},
+    ]
+    return {
+        "components": components,
+        "workers": workers,
+        "isolation": "每类任务拥有独立 Run 和错误边界；状态只以 Worker 心跳/租约为准，不把已注册当成正在运行。",
+        "version": WORKBENCH_VERSION,
+    }
+
+@app.get("/api/workers")
+def get_workers() -> dict[str, Any]:
+    import app as _app
+    return {"instance_id": _app_call('worker_instance_id'), "workers": _app_call('worker_status_payload'), "lease_seconds": _app.WORKER_LEASE_SECONDS, "policy": "同一 Worker 通过 SQLite 短租约避免多实例重复执行；过期租约可被新实例接管。"}
+
+class WorkerHeartbeatRequest(BaseModel):
+    status: str = Field(default="ready", max_length=40)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+@app.post("/api/workers/{worker_id}/heartbeat")
+def heartbeat_worker(worker_id: str, request: WorkerHeartbeatRequest) -> dict[str, Any]:
+    try:
+        worker = worker_lease(worker_id, status=request.status.strip() or "ready", metadata=request.metadata)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if worker.get("status") == "held_by_other_instance":
+        raise HTTPException(409, f"Worker {worker_id} 当前由其他实例持有")
+    return {"ok": True, "worker": worker, "workers": worker_status_payload()}
+
+
+__all__ = [
+    "AGENT_IMPLEMENTATIONS",
+    "AGENT_PLAYBOOKS",
+    "AGENT_REGISTRY",
+    "AGENT_RESULT_CONTRACT_VERSION",
+    "AGENT_RESULT_SECTION_ALIASES",
+    "AGENT_ROUTE_HINTS",
+    "AGENT_RUN_STATUS_LABELS",
+    "AGENT_STATUS_LABELS",
+    "AGENT_TOOL_POLICIES",
+    "AgentDispatchRequest",
+    "RUNTIME_TOOL_POLICIES",
+    "SUBAGENT_TOOL_MAP",
+    "WorkerHeartbeatRequest",
+    "_contract_source_coverage",
+    "_contract_source_ref",
+    "_contract_source_refs",
+    "_react_tools",
+    "_subagent_extra_tools",
+    "add_agent_message",
+    "add_agent_run_event",
+    "add_conversation",
+    "add_log",
+    "agent_declared_tools",
+    "agent_detail",
+    "agent_display_name",
+    "agent_result_contract",
+    "assert_runtime_tool_policies",
+    "available_child_agents",
+    "build_agent_execution_plan",
+    "call_llm_with_tools",
+    "capability_graph_payload",
+    "capability_graph_route",
+    "capability_route_explanation",
+    "create_agent_run_record",
+    "create_agent_session",
+    "create_work_item_record",
+    "dispatch_agent_task",
+    "get_agent_session",
+    "get_capability_graph",
+    "get_system_architecture",
+    "get_workers",
+    "heartbeat_worker",
+    "list_agent_messages",
+    "load_projects",
+    "project_link_summary",
+    "public_project_link",
+    "run_agent_react_loop",
+    "runtime_tool_policy",
+    "subagent_tool_schemas",
+    "update_agent_run_record",
+    "update_agent_session_summary",
+    "update_work_item_record",
+    "validate_agent_tool_requests",
+]

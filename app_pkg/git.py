@@ -7,15 +7,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
 import os
 import secrets
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from .core import DATA_DIR, now_iso, save_json_atomic
+from .core import DATA_DIR, ROOT, now_iso, save_json_atomic
 from .db import db_connection
 from .instance import app
+from .integrations import INTEGRATION_DEFINITIONS, integration_status
+
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
 
 
 def register_artifact_safely(*args: Any, **kwargs: Any) -> Any:
@@ -84,7 +94,7 @@ def git_repository_roots() -> list[Path]:
 
 def git_inventory() -> list[dict[str, Any]]:
     repositories = []
-    work_items = list_work_items("all")
+    work_items = _app_call('list_work_items', "all")
     for path in git_repository_roots():
         code, branch, branch_error = git_command(path, ["branch", "--show-current"])
         _status_code, status_text, status_error = git_command(path, ["status", "--short", "--branch"], timeout=6)
@@ -187,4 +197,58 @@ USAGE_WINDOW_CHOICES = (7, 30, 90)
 # approval_decision。
 USAGE_EXCLUDED_RUN_KINDS = ("dispatch_child", "evidence_acceptance", "manual_takeover", "approval_decision")
 
-__all__ = ["register_artifact_safely", "git_command", "_find_git_repos", "git_repository_roots", "git_inventory", "get_git_repositories", "scan_git_repositories", "load_remote_git_inventory", "push_git_inventory"]
+@app.get("/api/github-tools")
+def get_github_tools() -> dict[str, Any]:
+    markitdown = _app_call('markitdown_status', )
+    tools = [
+        {"id": "markitdown", "name": "Microsoft MarkItDown", "url": "https://github.com/microsoft/markitdown", "scenario": "文档、网页和演示材料转 Markdown", "cost": "免费·可选依赖", "fit": "已接入文档工厂；未安装时回退内置解析器", "trial": "在文档工厂上传一份 PPTX 或复杂表格，检查 Markdown 结构和来源保留", "state": "integrated", "installed": bool(markitdown.get("available")), "data_boundary": "文件只在 Workbench 进程内转换，不自动上传"},
+        {"id": "activitywatch", "name": "ActivityWatch", "url": "https://github.com/ActivityWatch/activitywatch", "scenario": "个人时间和效率反馈", "cost": "免费·本地", "fit": "已接入近 7 天聚合观察，不保存窗口标题和 URL", "trial": "配置本机服务后导入一次聚合观察 WorkItem", "state": "integrated", "installed": None, "data_boundary": "只回传聚合时长、事件数量和数据时间"},
+        {"id": "github-issues", "name": "GitHub Issues / Pull Requests", "url": "https://github.com/cli/cli", "scenario": "代码项目待办和评审", "cost": "免费·API", "fit": "已接入只读读取与收件箱导入", "trial": "配置一个仓库，读取开放 Issue/PR 并人工勾选导入", "state": "integrated", "installed": None, "data_boundary": "只读仓库条目；写操作仍需人工确认"},
+        {"id": "zotero", "name": "Zotero", "url": "https://github.com/zotero/zotero", "scenario": "论文、资料和 DOI 学习入口", "cost": "免费·API", "fit": "已接入研究条目读取并导入知识库", "trial": "读取最近研究条目，人工选择后生成知识库工作项", "state": "integrated", "installed": None, "data_boundary": "只读取用户选定条目的元数据和摘要"},
+        {"id": "linkding", "name": "Linkding", "url": "https://github.com/sissbruecker/linkding", "scenario": "低噪书签与稍后读入口", "cost": "免费·自托管", "fit": "已接入只读书签读取和人工勾选导入", "trial": "配置 Linkding 后导入一批待读书签，观察网页研究和知识库的分流质量", "state": "integrated", "installed": None, "data_boundary": "只读标题、链接、描述和标签；不修改书签"},
+        {"id": "paperless", "name": "Paperless-ngx", "url": "https://github.com/paperless-ngx/paperless-ngx", "scenario": "个人文档归档与资料再利用", "cost": "免费·自托管", "fit": "已接入文档元数据读取和人工导入知识库", "trial": "配置 Paperless-ngx 后选择几份文档，验证来源和数据时间是否保留", "state": "integrated", "installed": None, "data_boundary": "只读文档元数据；不自动下载或修改归档文件"},
+        {"id": "searxng", "name": "SearXNG", "url": "https://github.com/searxng/searxng", "scenario": "隐私友好的学习资料搜索", "cost": "免费·自托管", "fit": "已接入搜索结果读取和人工选择进入网页研究", "trial": "配置一个 SearXNG 实例，搜索一个学习主题并人工选择结果进入网页研究", "state": "integrated", "installed": None, "data_boundary": "只读聚合搜索结果；不保存原始搜索日志，不自动抓取全文"},
+        {"id": "wallabag", "name": "Wallabag", "url": "https://github.com/wallabag/wallabag", "scenario": "稍后读文章进入学习流程", "cost": "免费·自托管", "fit": "已接入未归档文章读取和人工选择进入网页研究", "trial": "配置 Access Token，选择一篇稍后读文章进入网页研究，验证来源回溯", "state": "integrated", "installed": None, "data_boundary": "只读文章元数据和摘要；不修改 Wallabag 的归档状态"},
+        {"id": "lazygit", "name": "lazygit", "url": "https://github.com/jesseduffield/lazygit", "scenario": "终端 Git 审查与提交", "cost": "免费·本地", "fit": "Workbench 已有只读 Git 项目中心；lazygit 作为本机审查补充", "trial": "安装后扫描一个仓库并完成一次分支审查；Workbench 不自动执行提交或 push", "state": "candidate", "installed": bool(shutil.which("lazygit")), "data_boundary": "本地 Git 元数据；不要把密钥或完整 diff 放入通知"},
+        {"id": "super-productivity", "name": "Super Productivity", "url": "https://github.com/super-productivity/super-productivity", "scenario": "任务执行、时间记录和学习计划", "cost": "免费·本地", "fit": "仅作为单向导入候选，不替代 Workbench 收件箱主库", "trial": "先导出一份任务 JSON，验证去重、截止时间和来源映射", "state": "candidate", "installed": None, "data_boundary": "只读导出；不做双向同步，不创建第二套主任务库"},
+    ]
+    connection = db_connection()
+    try:
+        rows = connection.execute("SELECT * FROM work_items WHERE kind = 'github_tool_trial' ORDER BY created_at DESC LIMIT 50").fetchall()
+        trials = [_app_call('work_item_row', row) for row in rows]
+    finally:
+        connection.close()
+    return {
+        "tools": tools,
+        "trials": trials,
+        "integrations": [integration_status(integration_id) for integration_id in INTEGRATION_DEFINITIONS],
+        "generated_at": now_iso(),
+    }
+
+
+@app.post("/api/github-tools/{tool_id}/trial")
+async def create_github_tool_trial(tool_id: str) -> dict[str, Any]:
+    catalog = await asyncio.to_thread(get_github_tools)
+    tool = next((item for item in catalog["tools"] if item["id"] == tool_id), None)
+    if not tool:
+        raise HTTPException(404, "GitHub 工具不存在")
+    item = _app_call('create_work_item_record', title=f"试用 GitHub 工具：{tool['name']}", description=f"场景：{tool['scenario']}\n试用建议：{tool['trial']}\n仓库：{tool['url']}", kind="github_tool_trial", source_project="workbench", target_project="workbench", metadata={"tool": tool, "repo_path": ""})
+    return {"ok": True, "item": item}
+
+
+__all__ = [
+    "GIT_INVENTORY_REMOTE_FILE",
+    "USAGE_EXCLUDED_RUN_KINDS",
+    "USAGE_WINDOW_CHOICES",
+    "_find_git_repos",
+    "create_github_tool_trial",
+    "get_git_repositories",
+    "get_github_tools",
+    "git_command",
+    "git_inventory",
+    "git_repository_roots",
+    "load_remote_git_inventory",
+    "push_git_inventory",
+    "register_artifact_safely",
+    "scan_git_repositories",
+]

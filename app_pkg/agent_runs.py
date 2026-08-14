@@ -21,6 +21,7 @@ from .db import db_connection
 from .notifications import create_notification_record
 from .projects import _audit_datetime, agent_display_name
 from .usage import USAGE_EXCLUDED_RUN_KINDS
+from .instance import app
 
 
 def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
@@ -591,4 +592,121 @@ def update_agent_action_record(
         connection.close()
 
 
-__all__ = ["agent_action_row", "agent_run_row", "create_agent_run_record", "get_agent_run", "list_agent_runs", "update_agent_run_record", "add_agent_run_event", "list_agent_run_events", "agent_run_timeline", "agent_run_summary", "agent_quality_metrics", "agent_session_row", "agent_message_row", "create_agent_session", "get_agent_session", "list_agent_sessions", "list_agent_messages", "add_agent_message", "update_agent_session_summary", "create_agent_action_record", "get_agent_action_record", "update_agent_action_record"]
+@app.get("/api/trace/recent")
+def get_recent_trace(limit: int = 24) -> dict[str, Any]:
+    """Provide one compact, body-free activity feed across the core records.
+
+    面向日常使用者输出「人话动态」：每条记录用一句话说明发生了什么，
+    过滤掉纯内部对象（关系边、空工作项等）噪声。
+    """
+    limit = max(4, min(int(limit or 24), 80))
+    connection = db_connection()
+    try:
+        work_items = connection.execute(
+            "SELECT id, source_project, target_project, title, kind, status, updated_at, created_at FROM work_items ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        runs = connection.execute(
+            "SELECT id, project_id, kind, title, status, error, updated_at, created_at FROM agent_runs ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        artifacts = connection.execute(
+            "SELECT id, project_id, name, kind, created_at FROM artifacts ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    finally:
+        connection.close()
+    project_names = {item.get("id"): item.get("title") or item.get("id") for item in load_projects()}
+    status_names = {"open": "待处理", "running": "处理中", "blocked": "待确认", "failed": "失败", "done": "已完成", "archived": "已归档", "succeeded": "成功", "partial": "部分完成", "queued": "排队中", "cancelled": "已取消"}
+
+    def project_label(project_id: str) -> str:
+        return project_names.get(project_id, project_id or "工作台")
+
+    items: list[dict[str, Any]] = []
+
+    # 工作项 → 人话动态（过滤纯内部证据验收与空标题）
+    for row in work_items:
+        title = str(row["title"] or "").strip()
+        kind = str(row["kind"] or "")
+        if not title or kind == "evidence_acceptance":
+            continue
+        status = str(row["status"] or "open")
+        project_id = str(row["target_project"] or row["source_project"] or "workbench")
+        action = "新增待办" if status == "open" else status_names.get(status, status)
+        items.append({
+            "type": "work_item",
+            "title": f"{action}：{title}",
+            "status": status_names.get(status, status),
+            "project_id": project_id,
+            "project_label": project_label(project_id),
+            "updated_at": str(row["updated_at"] or row["created_at"] or ""),
+            "href": "/" if project_id == "workbench" else project_href(project_id),
+        })
+
+    # Agent 运行 → 人话动态
+    for row in runs:
+        kind = str(row["kind"] or "")
+        if kind in {"dispatch_child", "evidence_acceptance", "manual_takeover"}:
+            continue
+        status = str(row["status"] or "queued")
+        title = str(row["title"] or "").strip()
+        project_id = str(row["project_id"] or "workbench")
+        verb = "运行成功" if status == "succeeded" else "运行失败" if status == "failed" else "部分完成" if status == "partial" else "开始运行" if status == "running" else "已取消" if status == "cancelled" else "排队等待"
+        items.append({
+            "type": "run",
+            "title": f"{project_label(project_id)} Agent {verb}：{title or '任务'}",
+            "status": status_names.get(status, status),
+            "project_id": project_id,
+            "project_label": project_label(project_id),
+            "updated_at": str(row["updated_at"] or row["created_at"] or ""),
+            "detail": str(row["error"] or "") if status == "failed" else "",
+            "href": f"/api/agent/{row['project_id']}/runs/{row['id']}",
+        })
+
+    # 产物 → 人话动态（过滤定期快照等自动化产物，避免刷屏）
+    snapshot_artifacts = {"server_monitor_snapshot.json", "sub2api_snapshot.json", "aihot_snapshot.json", "cid_snapshot.json"}
+    for row in artifacts:
+        name = str(row["name"] or "").strip()
+        kind = str(row["kind"] or "")
+        if not name or name.startswith("crawl-result") or name in snapshot_artifacts:
+            continue
+        project_id = str(row["project_id"] or "workbench")
+        items.append({
+            "type": "artifact",
+            "title": f"保存了产物：{name}",
+            "status": kind or "产物",
+            "project_id": project_id,
+            "project_label": project_label(project_id),
+            "updated_at": str(row["created_at"] or ""),
+            "href": "/" if project_id == "workbench" else project_href(project_id),
+        })
+
+    items.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    return {"items": items[:limit], "generated_at": now_iso(), "policy": "面向日常使用者的人话动态流：说明发生了什么，不含内部请求/响应正文。"}
+
+
+__all__ = [
+    "add_agent_message",
+    "add_agent_run_event",
+    "agent_action_row",
+    "agent_message_row",
+    "agent_quality_metrics",
+    "agent_run_row",
+    "agent_run_summary",
+    "agent_run_timeline",
+    "agent_session_row",
+    "create_agent_action_record",
+    "create_agent_run_record",
+    "create_agent_session",
+    "get_agent_action_record",
+    "get_agent_run",
+    "get_agent_session",
+    "get_recent_trace",
+    "list_agent_messages",
+    "list_agent_run_events",
+    "list_agent_runs",
+    "list_agent_sessions",
+    "update_agent_action_record",
+    "update_agent_run_record",
+    "update_agent_session_summary",
+]

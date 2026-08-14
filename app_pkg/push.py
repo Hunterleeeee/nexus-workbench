@@ -310,6 +310,33 @@ async def retry_push_delivery(delivery_id: int) -> dict[str, Any]:
     return {"ok": result.get("status") == "sent", "delivery": result}
 
 
+@app.post("/api/push/test")
+async def send_push_test() -> dict[str, Any]:
+    connection = db_connection()
+    try:
+        rows = connection.execute("SELECT * FROM push_subscriptions WHERE enabled = 1 ORDER BY updated_at DESC").fetchall()
+    finally:
+        connection.close()
+    if not rows:
+        return {"ok": False, "sent": 0, "message": "还没有启用的 Push 订阅。"}
+    sent = 0
+    expired = 0
+    errors = []
+    for row in rows:
+        # deliver_push 内含 pywebpush 同步网络请求，放到线程池避免阻塞事件循环
+        result = await asyncio.to_thread(deliver_push, row, title="Workbench 测试通知", body="远程 Web Push 已连通。", href="/", event_key=f"push-test:{now_iso()}")
+        if result.get("status") == "sent":
+            sent += 1
+        elif result.get("status") == "expired":
+            expired += 1
+        elif result.get("error"):
+            errors.append(result["error"])
+    message = f"已送达 {sent}/{len(rows)} 个订阅"
+    if expired:
+        message += f"，已停用 {expired} 个失效订阅"
+    return {"ok": sent > 0, "sent": sent, "stored": len(rows), "expired": expired, "errors": list(dict.fromkeys(errors))[:10], "message": message}
+
+
 __all__ = [
     "PushSubscriptionRequest",
     "_finish_push_delivery",
@@ -324,6 +351,7 @@ __all__ = [
     "list_push_deliveries",
     "retry_push_delivery",
     "save_push_subscription",
+    "send_push_test",
     "vapid_private_key_configured",
     "vapid_private_key_source",
 ]

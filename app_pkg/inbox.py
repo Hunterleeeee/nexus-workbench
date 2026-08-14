@@ -1025,46 +1025,176 @@ async def run_inbox_handoff_work_item(project_id: str, item: dict[str, Any]) -> 
         raise HTTPException(502, f"{agent_display_name(project_id)}处理交接失败：{error}") from exc
 
 
+class InboxBatchMergeRequest(BaseModel):
+    source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=20)
+    confirmed: bool = False
+
+@app.get("/api/inbox/merge-suggestions")
+def get_inbox_merge_suggestions(limit: int = 50) -> dict[str, Any]:
+    items = list_inbox("inbox")
+    suggestions = []
+    for index, first in enumerate(items):
+        left = knowledge_tokens(first.get("content", ""))
+        if len(left) < 2:
+            continue
+        for second in items[index + 1:]:
+            right = knowledge_tokens(second.get("content", ""))
+            similarity = len(left.intersection(right)) / max(1, len(left.union(right)))
+            if similarity >= 0.45:
+                suggestions.append({"source": first, "duplicate": second, "similarity": round(similarity, 3), "reason": "文本关键词高度重叠，请人工确认是否合并。"})
+    return {"suggestions": sorted(suggestions, key=lambda item: -item["similarity"])[:limit], "policy": "只建议不自动删除；合并后原条目进入 archived 并保留来源。"}
+
+
+@app.post("/api/inbox/{item_id}/merge-batch")
+def merge_inbox_items(item_id: int, request: InboxBatchMergeRequest) -> dict[str, Any]:
+    if not request.confirmed:
+        raise HTTPException(409, "合并收件箱条目前需要明确确认")
+    source = get_inbox_record(item_id)
+    if not source:
+        raise HTTPException(404, "主收件箱条目不存在")
+    merged = [source.get("content", "")]
+    ids = [item_id]
+    for source_id in request.source_ids:
+        if source_id == item_id:
+            continue
+        item = get_inbox_record(source_id)
+        if item and item.get("status") == "inbox":
+            merged.append(item.get("content", ""))
+            ids.append(source_id)
+    if len(ids) < 2:
+        raise HTTPException(400, "至少需要两条待处理条目")
+    merged_item = create_inbox_record(content="\n\n--- 合并条目 ---\n\n".join(merged), kind=source.get("kind", "note"), tags=source.get("tags", ""), priority=source.get("priority", "normal"))
+    connection = db_connection()
+    try:
+        connection.executemany("UPDATE inbox SET status = 'archived', updated_at = ? WHERE id = ?", [(now_iso(), value) for value in ids])
+        connection.commit()
+    finally:
+        connection.close()
+    relation = create_relation_record(from_type="inbox", from_id=str(item_id), to_type="inbox", to_id=str(merged_item["id"]), relation_type="merged_into", metadata={"source_ids": ids})
+    return {"ok": True, "merged": merged_item, "archived_ids": ids, "relation": relation}
+
+
+@app.get("/api/inbox/classifier-stats")
+def inbox_classifier_stats() -> dict[str, Any]:
+    minimum_samples = 10
+    labels = {
+        "note": "笔记",
+        "task": "待办",
+        "link": "链接",
+        "idea": "想法",
+        "alert": "告警",
+        "document": "文档",
+        "research": "研究",
+    }
+    connection = db_connection()
+    try:
+        rows = connection.execute("SELECT classification, COUNT(*) AS count FROM inbox WHERE classification != '' GROUP BY classification ORDER BY count DESC").fetchall()
+        totals = connection.execute(
+            """SELECT COUNT(*) AS total_count,
+                SUM(CASE WHEN classification != '' THEN 1 ELSE 0 END) AS classified_count
+               FROM inbox"""
+        ).fetchone()
+        feedback = connection.execute(
+            """SELECT COUNT(*) AS sample_count,
+                SUM(CASE WHEN predicted = accepted THEN 1 ELSE 0 END) AS confirmed_count,
+                SUM(CASE WHEN predicted != accepted THEN 1 ELSE 0 END) AS correction_count
+               FROM inbox_classification_feedback"""
+        ).fetchone()
+        feedback_pairs = connection.execute(
+            "SELECT predicted, accepted FROM inbox_classification_feedback WHERE predicted != '' AND accepted != ''"
+        ).fetchall()
+        sample_count = int(feedback["sample_count"] or 0)
+        confirmed_count = int(feedback["confirmed_count"] or 0)
+        correction_count = int(feedback["correction_count"] or 0)
+        classes = [
+            {"classification": str(row["classification"]), "label": labels.get(str(row["classification"]), str(row["classification"])), "count": int(row["count"] or 0)}
+            for row in rows
+        ]
+        feedback_labels = sorted({str(row["predicted"] or "") for row in feedback_pairs} | {str(row["accepted"] or "") for row in feedback_pairs})
+        per_class = []
+        f1_values = []
+        for label in feedback_labels:
+            true_positive = sum(1 for row in feedback_pairs if str(row["predicted"]) == label and str(row["accepted"]) == label)
+            predicted_count = sum(1 for row in feedback_pairs if str(row["predicted"]) == label)
+            actual_count = sum(1 for row in feedback_pairs if str(row["accepted"]) == label)
+            precision = true_positive / predicted_count if predicted_count else None
+            recall = true_positive / actual_count if actual_count else None
+            f1 = (2 * precision * recall / (precision + recall)) if precision is not None and recall is not None and precision + recall else None
+            if f1 is not None:
+                f1_values.append(f1)
+            per_class.append({
+                "classification": label,
+                "label": labels.get(label, label),
+                "precision": round(precision, 3) if precision is not None else None,
+                "recall": round(recall, 3) if recall is not None else None,
+                "f1": round(f1, 3) if f1 is not None else None,
+                "predicted_count": predicted_count,
+                "actual_count": actual_count,
+            })
+        return {
+            "classes": classes,
+            "total_count": int(totals["total_count"] or 0),
+            "classified_count": int(totals["classified_count"] or 0),
+            "sample_count": sample_count,
+            "confirmed_count": confirmed_count,
+            "correction_count": correction_count,
+            "confirmation_rate": round(confirmed_count / sample_count, 3) if sample_count else None,
+            "accuracy": round(confirmed_count / sample_count, 3) if sample_count else None,
+            "macro_f1": round(sum(f1_values) / len(f1_values), 3) if f1_values else None,
+            "per_class": per_class,
+            "minimum_samples": minimum_samples,
+            "sample_status": "ready" if sample_count >= minimum_samples else "insufficient",
+            "model": "deterministic triage v1",
+            "learning": "用户确认/修正可作为后续分类样本；不会自动改写历史条目，也不会因样本不足宣称模型已学会。",
+        }
+    finally:
+        connection.close()
+
+
 __all__ = [
-    "create_agent_run_record",
-    "update_agent_run_record",
-    "add_agent_run_event",
-    "knowledge_tokens",
-    "agent_display_name",
-    "project_href",
-    "inbox_row",
-    "inbox_route_candidate_row",
-    "list_inbox_route_candidates",
-    "get_inbox_record",
-    "get_inbox_route_candidate",
-    "update_inbox_route_candidate",
-    "list_inbox",
-    "inbox_summary",
-    "create_inbox_record",
-    "normalized_inbox_text",
-    "extract_inbox_due",
-    "extract_inbox_next_steps",
-    "inbox_duplicate_match",
-    "inbox_learned_classification",
-    "infer_inbox_triage",
-    "analyze_inbox_record",
-    "triage_inbox_record",
+    "InboxBatchMergeRequest",
+    "InboxBatchRequest",
+    "InboxClassificationFeedbackRequest",
+    "InboxMergeRequest",
     "InboxRequest",
     "InboxUpdateRequest",
-    "InboxClassificationFeedbackRequest",
-    "InboxBatchRequest",
-    "InboxMergeRequest",
-    "get_inbox",
-    "create_inbox_item",
-    "batch_update_inbox_items",
-    "analyze_inbox_item",
-    "inbox_classification_feedback",
-    "merge_inbox_item",
-    "accept_inbox_route",
-    "reject_inbox_route",
     "accept_and_run_inbox_route",
-    "update_inbox_item",
+    "accept_inbox_route",
+    "add_agent_run_event",
+    "agent_display_name",
+    "analyze_inbox_item",
+    "analyze_inbox_record",
+    "batch_update_inbox_items",
+    "create_agent_run_record",
+    "create_inbox_item",
+    "create_inbox_record",
     "delete_inbox_item",
+    "extract_inbox_due",
+    "extract_inbox_next_steps",
+    "get_inbox",
+    "get_inbox_merge_suggestions",
+    "get_inbox_record",
+    "get_inbox_route_candidate",
     "handoff_title",
+    "inbox_classification_feedback",
+    "inbox_classifier_stats",
+    "inbox_duplicate_match",
+    "inbox_learned_classification",
+    "inbox_route_candidate_row",
+    "inbox_row",
+    "inbox_summary",
+    "infer_inbox_triage",
+    "knowledge_tokens",
+    "list_inbox",
+    "list_inbox_route_candidates",
+    "merge_inbox_item",
+    "merge_inbox_items",
+    "normalized_inbox_text",
+    "project_href",
+    "reject_inbox_route",
     "run_inbox_handoff_work_item",
+    "triage_inbox_record",
+    "update_agent_run_record",
+    "update_inbox_item",
+    "update_inbox_route_candidate",
 ]

@@ -801,27 +801,229 @@ def validate_document_factory_payload(request: DocumentFactoryRequest, materials
     }
 
 
+def set_docx_run_font(run: Any, name: str = "Hiragino Sans GB", size: float = 11, color: str = "1F2937", bold: bool | None = None) -> None:
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor
+
+    run.font.name = name
+    run._element.get_or_add_rPr().rFonts.set(qn("w:ascii"), name)
+    run._element.get_or_add_rPr().rFonts.set(qn("w:hAnsi"), name)
+    run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), name)
+    run._element.get_or_add_rPr().rFonts.set(qn("w:cs"), name)
+    run.font.size = Pt(size)
+    run.font.color.rgb = RGBColor.from_string(color)
+    if bold is not None:
+        run.bold = bold
+
+
+def set_docx_cell_shading(cell: Any, fill: str) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = tc_pr.find(qn("w:shd"))
+    if shd is None:
+        shd = OxmlElement("w:shd")
+        tc_pr.append(shd)
+    shd.set(qn("w:fill"), fill)
+
+
+def build_docx_delivery(title: str, text: str, target: Path) -> None:
+    from docx import Document
+    from docx.enum.section import WD_SECTION
+    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Inches, Pt
+
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Inches(1)
+    section.bottom_margin = Inches(1)
+    section.left_margin = Inches(1)
+    section.right_margin = Inches(1)
+    section.header_distance = Inches(0.492)
+    section.footer_distance = Inches(0.492)
+    normal = document.styles["Normal"]
+    normal.font.name = "Hiragino Sans GB"
+    normal.font.size = Pt(11)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.1
+    for name, size, color, before, after in (("Heading 1", 16, "2E74B5", 16, 8), ("Heading 2", 13, "2E74B5", 12, 6), ("Heading 3", 12, "1F4D78", 8, 4)):
+        style = document.styles[name]
+        style.font.name = "Hiragino Sans GB"
+        style._element.get_or_add_rPr().rFonts.set(qn("w:ascii"), "Hiragino Sans GB")
+        style._element.get_or_add_rPr().rFonts.set(qn("w:hAnsi"), "Hiragino Sans GB")
+        style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Hiragino Sans GB")
+        style._element.get_or_add_rPr().rFonts.set(qn("w:cs"), "Hiragino Sans GB")
+        style.font.size = Pt(size)
+        style.font.color.rgb = __import__("docx").shared.RGBColor.from_string(color)
+        style.font.bold = True
+        style.paragraph_format.space_before = Pt(before)
+        style.paragraph_format.space_after = Pt(after)
+        style.paragraph_format.line_spacing = 1.1
+    header = section.header.paragraphs[0]
+    header.text = "Workbench · 文档交付包"
+    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    for run in header.runs:
+        set_docx_run_font(run, size=9, color="6B7280")
+    footer = section.footer.paragraphs[0]
+    footer.text = f"{WORKBENCH_VERSION} · 生成于 {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')}"
+    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    for run in footer.runs:
+        set_docx_run_font(run, size=8.5, color="6B7280")
+    title_paragraph = document.add_paragraph()
+    title_paragraph.paragraph_format.space_after = Pt(4)
+    title_run = title_paragraph.add_run(title or "未命名文档")
+    set_docx_run_font(title_run, size=23, color="0B2545", bold=True)
+    meta = document.add_paragraph()
+    meta.paragraph_format.space_after = Pt(14)
+    meta_run = meta.add_run(f"Workbench 正式交付草稿 · 版本 {WORKBENCH_VERSION}")
+    set_docx_run_font(meta_run, size=10, color="6B7280")
+    rule = document.add_paragraph()
+    rule.paragraph_format.space_after = Pt(12)
+    p_pr = rule._p.get_or_add_pPr()
+    from docx.oxml import OxmlElement
+    p_bdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "8")
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), "D8DEE8")
+    p_bdr.append(bottom)
+    p_pr.append(p_bdr)
+
+    def add_markdown_runs(paragraph: Any, content: str) -> None:
+        """Render the small Markdown subset accepted by the document factory."""
+        chunks = re.split(r"(\*\*.+?\*\*)", str(content or ""))
+        for chunk in chunks:
+            if not chunk:
+                continue
+            is_bold = chunk.startswith("**") and chunk.endswith("**") and len(chunk) >= 4
+            value = chunk[2:-2] if is_bold else chunk
+            run = paragraph.add_run(value)
+            set_docx_run_font(run, bold=is_bold)
+
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            document.add_paragraph().paragraph_format.space_after = Pt(2)
+            continue
+        if line in {"*", "_"}:
+            continue
+        if line.startswith("### "):
+            document.add_paragraph(line[4:], style="Heading 3")
+        elif line.startswith("## "):
+            document.add_paragraph(line[3:], style="Heading 2")
+        elif line.startswith("# "):
+            document.add_paragraph(line[2:], style="Heading 1")
+        elif line.startswith(("- ", "* ")):
+            paragraph = document.add_paragraph(style="List Bullet")
+            paragraph.paragraph_format.left_indent = Inches(0.5)
+            paragraph.paragraph_format.first_line_indent = Inches(-0.25)
+            paragraph.paragraph_format.space_after = Pt(8)
+            add_markdown_runs(paragraph, line[2:])
+        elif re.match(r"^\d+[.)] ", line):
+            paragraph = document.add_paragraph(style="List Number")
+            paragraph.paragraph_format.left_indent = Inches(0.5)
+            paragraph.paragraph_format.first_line_indent = Inches(-0.25)
+            paragraph.paragraph_format.space_after = Pt(8)
+            add_markdown_runs(paragraph, re.sub(r"^\d+[.)] ", "", line))
+        else:
+            paragraph = document.add_paragraph()
+            paragraph.paragraph_format.space_after = Pt(6)
+            paragraph.paragraph_format.line_spacing = 1.1
+            add_markdown_runs(paragraph, line)
+    document.save(target)
+
+
+def convert_docx_to_pdf(docx_path: Path, pdf_path: Path) -> tuple[bool, str]:
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return False, "未找到 LibreOffice/soffice"
+    temp_dir = pdf_path.parent / f".pdf-convert-{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # The bundled headless LibreOffice build does not always inherit the
+        # macOS font database, so Chinese TTC fonts can otherwise become
+        # missing-glyph boxes.  Give fontconfig an explicit, per-conversion
+        # search path.  WORKBENCH_DOCX_FONT_DIR is also supported for Linux
+        # deployments where a CJK font package is mounted separately.
+        font_dirs: list[Path] = []
+        configured_font_dir = os.getenv("WORKBENCH_DOCX_FONT_DIR", "").strip()
+        if configured_font_dir:
+            font_dirs.append(Path(configured_font_dir).expanduser())
+        font_dirs.extend(
+            Path(path)
+            for path in (
+                "/System/Library/Fonts",
+                "/System/Library/Fonts/Supplemental",
+                "/Library/Fonts",
+                str(Path.home() / "Library" / "Fonts"),
+                "/usr/share/fonts",
+                "/usr/local/share/fonts",
+            )
+        )
+        font_dirs = [path for path in font_dirs if path.exists() and path.is_dir()]
+        conversion_env = os.environ.copy()
+        if font_dirs:
+            fontconfig_path = temp_dir / "fontconfig.conf"
+            fontconfig_dirs = "".join(f"    <dir>{str(path)}</dir>\n" for path in font_dirs)
+            fontconfig_path.write_text(
+                "<?xml version=\"1.0\"?>\n"
+                "<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n"
+                "<fontconfig>\n"
+                f"{fontconfig_dirs}"
+                "    <dir prefix=\"xdg\">fonts</dir>\n"
+                "    <dir>~/.fonts</dir>\n"
+                "</fontconfig>\n",
+                encoding="utf-8",
+            )
+            conversion_env["FONTCONFIG_FILE"] = str(fontconfig_path)
+        result = subprocess.run(
+            [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(temp_dir), str(docx_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env=conversion_env,
+        )
+        converted = temp_dir / f"{docx_path.stem}.pdf"
+        if result.returncode != 0 or not converted.exists():
+            return False, clip(result.stderr or result.stdout or "PDF 转换失败", 500)
+        shutil.copy2(converted, pdf_path)
+        return True, ""
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 __all__ = [
     "DOC_FACTORY_TEMPLATES",
-    "_DOC_FACTORY_TEMPLATES",
+    "DocumentDeliveryRequest",
+    "DocumentFactoryRegenerateRequest",
     "DocumentFactoryRequest",
     "DocumentFactoryReviewRequest",
-    "DocumentFactoryRegenerateRequest",
-    "DocumentDeliveryRequest",
-    "document_factory_source_descriptors",
+    "_DOC_FACTORY_TEMPLATES",
+    "build_docx_delivery",
     "collect_document_factory_materials",
+    "convert_docx_to_pdf",
+    "deliver_document_factory",
     "document_factory_citation_coverage",
-    "document_factory_review_checks",
-    "extract_document",
-    "get_document_factory_templates",
-    "get_document_factory_sources",
     "document_factory_history",
+    "document_factory_review_checks",
+    "document_factory_source_descriptors",
+    "document_factory_templates",
+    "extract_document",
     "get_document_factory_history",
-    "validate_document_factory",
-    "run_document_factory",
+    "get_document_factory_sources",
+    "get_document_factory_templates",
     "regenerate_document_factory",
     "review_document_factory_output",
-    "deliver_document_factory",
-    "document_factory_templates",
+    "run_document_factory",
+    "set_docx_cell_shading",
+    "set_docx_run_font",
+    "validate_document_factory",
     "validate_document_factory_payload",
 ]

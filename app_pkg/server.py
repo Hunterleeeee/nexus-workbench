@@ -6,6 +6,7 @@ db；路由与 React 工具仍留 app.py。
 
 from __future__ import annotations
 
+import uuid
 import asyncio
 import json
 import os
@@ -51,37 +52,191 @@ class ServerThresholdsRequest(BaseModel):
 
 
 
-__all__ = [
-    "ServerThresholdsRequest",
-    "ServerMonitorRequest",
-    "DEFAULT_SERVER_THRESHOLDS",
-    "SERVER_MONITOR_PROBE_COMMAND",
-    "_sub2api_timestamp",
-    "analyze_server_snapshot",
-    "create_notification_record",
-    "create_relation_record",
-    "create_work_item_record",
-    "decode_json_column",
-    "evaluate_server_monitor",
-    "get_server_monitor",
-    "get_server_thresholds",
-    "list_artifacts",
-    "list_server_monitor_history",
-    "list_work_items",
-    "load_server_monitor_snapshot",
-    "load_server_monitor_thresholds",
-    "read_server_monitor",
-    "record_server_monitor_snapshot",
-    "refresh_server_monitor",
-    "save_server_monitor_snapshot",
-    "save_server_monitor_thresholds",
-    "server_monitor_config",
-    "server_monitor_snapshot_row",
-    "server_number",
-    "server_target_is_local",
-    "update_server_thresholds",
-    "update_work_item_record",
-]
+class ServerActionRequest(BaseModel):
+    action: str = Field(min_length=1, max_length=60)
+    reason: str = Field(default="", max_length=2_000)
+    confirmed: bool = False
+
+SERVER_SAFE_ACTIONS = {"refresh": {"label": "重新执行只读检查", "risk": "low"}, "inspect_logs": {"label": "记录服务日志检查请求", "risk": "low"}, "restart": {"label": "申请重启 Workbench 服务", "risk": "high"}}
+
+
+def _server_action_execution_payload(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["result"] = _app_call('platform_decode_json', item.pop("result_json", "{}"), {})
+    item["rollback"] = _app_call('platform_decode_json', item.pop("rollback_json", "{}"), {})
+    item["rollback_available"] = bool(item.get("rollback", {}).get("previous_snapshot")) and not item.get("rolled_back_at")
+    return item
+
+
+def latest_server_action_execution(approval_id: str) -> dict[str, Any] | None:
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT * FROM server_action_executions WHERE approval_id = ? ORDER BY created_at DESC LIMIT 1", (approval_id,)).fetchone()
+        return _server_action_execution_payload(row)
+    finally:
+        connection.close()
+
+
+def list_server_action_executions(limit: int = 80) -> list[dict[str, Any]]:
+    connection = db_connection()
+    try:
+        rows = connection.execute("SELECT * FROM server_action_executions ORDER BY created_at DESC LIMIT ?", (max(1, min(200, int(limit or 80))),)).fetchall()
+        return [item for row in rows if (item := _server_action_execution_payload(row))]
+    finally:
+        connection.close()
+
+
+def create_server_action_execution(approval_id: str, action: str) -> dict[str, Any]:
+    execution_id = uuid.uuid4().hex
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        connection.execute(
+            "INSERT INTO server_action_executions(id, approval_id, action, status, created_at) VALUES (?, ?, ?, 'running', ?)",
+            (execution_id, approval_id, action, timestamp),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return {"id": execution_id, "approval_id": approval_id, "action": action, "status": "running", "result": {}, "rollback": {}, "rollback_available": False, "created_at": timestamp, "finished_at": "", "rolled_back_at": ""}
+
+
+def finish_server_action_execution(execution_id: str, *, status: str, result: dict[str, Any] | None = None, error: str = "", rollback: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        connection.execute(
+            "UPDATE server_action_executions SET status = ?, result_json = ?, error = ?, rollback_json = ?, finished_at = ?, updated_at = ? WHERE id = ?",
+            (status, json.dumps(result or {}, ensure_ascii=False), error, json.dumps(rollback or {}, ensure_ascii=False), timestamp, timestamp, execution_id),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM server_action_executions WHERE id = ?", (execution_id,)).fetchone()
+        return _server_action_execution_payload(row)
+    finally:
+        connection.close()
+
+
+async def execute_approved_server_action(approval_id: str) -> dict[str, Any]:
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT * FROM approval_requests WHERE id = ?", (approval_id,)).fetchone()
+    finally:
+        connection.close()
+    if not row:
+        raise HTTPException(404, "审批请求不存在")
+    if row["kind"] != "server_action":
+        raise HTTPException(409, "这不是服务器动作审批")
+    if row["status"] != "approved":
+        raise HTTPException(409, "服务器动作必须先审批通过")
+    payload = _app_call('platform_decode_json', row["payload_json"], {})
+    action = str(payload.get("action") or "").strip()
+    definition = SERVER_SAFE_ACTIONS.get(action)
+    if not definition:
+        raise HTTPException(400, "审批中的服务器动作已不在安全白名单")
+    existing = latest_server_action_execution(approval_id)
+    if existing and existing.get("status") in {"succeeded", "manual_required"} and not existing.get("rolled_back_at"):
+        return {"ok": existing.get("status") == "succeeded", "execution": existing, "message": "这条审批已经执行过，避免重复执行。"}
+    execution = create_server_action_execution(approval_id, action)
+    run = _app_call('create_agent_run_record', 
+        project_id="server",
+        kind="server_action_execution",
+        title=f"执行服务器动作：{definition['label']}",
+        request={"approval_id": approval_id, "action": action, "risk": definition["risk"]},
+        max_attempts=1,
+    )
+    _app_call('update_agent_run_record', run["id"], status="running")
+    _app_call('add_agent_run_event', run["id"], "execution_started", f"已按审批执行：{definition['label']}。", metadata={"approval_id": approval_id, "execution_id": execution["id"]})
+    try:
+        if action == "refresh":
+            previous_snapshot = load_server_monitor_snapshot()
+            result = await refresh_server_monitor(ServerMonitorRequest(refresh=True))
+            finished = finish_server_action_execution(
+                execution["id"],
+                status="succeeded",
+                result={"message": "只读服务器检查已完成", "response": {"status": result.get("server", {}).get("status"), "checked_at": result.get("server", {}).get("checked_at"), "artifact_id": (result.get("artifact") or {}).get("id")}},
+                rollback={"previous_snapshot": previous_snapshot, "note": "回退只恢复工作台中的上一份监控快照，不会回退服务器外部状态。"},
+            )
+            _app_call('update_agent_run_record', run["id"], status="succeeded", result={"approval_id": approval_id, "execution_id": execution["id"], "action": action})
+            _app_call('add_agent_run_event', run["id"], "execution_succeeded", "只读服务器检查已完成，可按需回退本地快照。", level="success", metadata={"execution_id": execution["id"]})
+            return {"ok": True, "execution": finished, "run": _app_call('get_agent_run', run["id"]), "message": "只读服务器检查已完成。"}
+        message = "日志读取需要服务器侧人工查看；本次已记录执行边界。" if action == "inspect_logs" else "重启属于高风险动作，仍需服务器侧人工执行；本次仅记录审批和执行边界。"
+        finished = finish_server_action_execution(execution["id"], status="manual_required", result={"message": message, "execution_policy": "不通过 Workbench 自动运行 shell 或重启命令。"})
+        _app_call('update_agent_run_record', run["id"], status="succeeded", result={"approval_id": approval_id, "execution_id": execution["id"], "action": action, "manual_required": True})
+        _app_call('add_agent_run_event', run["id"], "manual_required", message, level="warning", metadata={"execution_id": execution["id"]})
+        return {"ok": False, "execution": finished, "run": _app_call('get_agent_run', run["id"]), "message": message}
+    except Exception as exc:
+        error = clip(str(exc), 800)
+        finish_server_action_execution(execution["id"], status="failed", error=error)
+        _app_call('update_agent_run_record', run["id"], status="failed", error=error)
+        _app_call('add_agent_run_event', run["id"], "execution_failed", error, level="error", metadata={"execution_id": execution["id"]})
+        raise HTTPException(502, f"服务器动作执行失败：{error}") from exc
+
+
+def rollback_server_action_execution(execution_id: str) -> dict[str, Any]:
+    connection = db_connection()
+    try:
+        row = connection.execute("SELECT * FROM server_action_executions WHERE id = ?", (execution_id,)).fetchone()
+    finally:
+        connection.close()
+    execution = _server_action_execution_payload(row)
+    if not execution:
+        raise HTTPException(404, "服务器动作执行记录不存在")
+    if execution.get("action") != "refresh" or execution.get("status") != "succeeded":
+        raise HTTPException(409, "只有成功的只读检查可以回退本地监控快照")
+    previous_snapshot = execution.get("rollback", {}).get("previous_snapshot")
+    if not isinstance(previous_snapshot, dict):
+        raise HTTPException(409, "没有可回退的上一份监控快照")
+    save_server_monitor_snapshot(previous_snapshot)
+    record_server_monitor_snapshot(previous_snapshot)
+    timestamp = now_iso()
+    connection = db_connection()
+    try:
+        connection.execute("UPDATE server_action_executions SET status = 'rolled_back', rolled_back_at = ?, updated_at = ? WHERE id = ?", (timestamp, timestamp, execution_id))
+        connection.commit()
+        row = connection.execute("SELECT * FROM server_action_executions WHERE id = ?", (execution_id,)).fetchone()
+    finally:
+        connection.close()
+    return {"ok": True, "execution": _server_action_execution_payload(row), "message": "已回退工作台中的上一份监控快照；不影响服务器外部状态。"}
+
+
+@app.post("/api/server/actions/request")
+def request_server_action(request: ServerActionRequest) -> dict[str, Any]:
+    action = request.action.strip()
+    definition = SERVER_SAFE_ACTIONS.get(action)
+    if not definition:
+        raise HTTPException(400, "不支持的服务器动作")
+    if not request.confirmed:
+        raise HTTPException(409, "服务器动作需要明确确认")
+    approval = _app_call('create_approval_request', "server", "server_action", f"服务器动作审批：{definition['label']}", {"action": action, "reason": request.reason.strip(), "risk": definition["risk"], "execution_policy": "仅允许白名单只读动作；restart 仍需服务器侧人工执行"})
+    item = create_work_item_record(title=definition["label"], description=request.reason.strip() or "请在审批后按安全边界处理服务器动作。", kind="server_action", status="blocked", priority="high" if definition["risk"] == "high" else "normal", source_project="server", target_project="server", metadata={"approval_id": approval["id"], "action": action, "risk": definition["risk"]})
+    relation = create_relation_record(from_type="approval", from_id=approval["id"], to_type="work_item", to_id=str(item["id"]), relation_type="approval_to_server_action", metadata={"action": action})
+    create_notification_record(title="服务器动作已进入审批", body=f"{definition['label']} · 请先在审批中心处理。", project_id="server", kind="approval", level="warning", href="/approvals", event_key=f"server-action:{approval['id']}", dedupe_seconds=0)
+    return {"ok": True, "approval": approval, "work_item": item, "relation": relation, "message": "已建立审批和执行日志；不会直接改动服务器。"}
+
+
+@app.get("/api/server/actions/executions")
+def get_server_action_executions(limit: int = 80) -> dict[str, Any]:
+    return {"executions": list_server_action_executions(limit), "policy": "只读检查可在批准后执行；日志查看和重启保留服务器侧人工边界。"}
+
+
+@app.post("/api/server/actions/{approval_id}/execute")
+async def execute_server_action(approval_id: str) -> dict[str, Any]:
+    return await execute_approved_server_action(approval_id)
+
+
+@app.post("/api/server/actions/executions/{execution_id}/rollback")
+def rollback_server_action(execution_id: str) -> dict[str, Any]:
+    return rollback_server_action_execution(execution_id)
+
+
+
+
+
+
+
+
 
 def _sub2api_timestamp(*args: Any, **kwargs: Any) -> Any:
     """直接转发 app_pkg.sub2api._sub2api_timestamp（不经过 app 命名空间，避免
@@ -629,3 +784,46 @@ async def refresh_server_monitor(request: ServerMonitorRequest) -> dict[str, Any
     }
 
 
+__all__ = [
+    "DEFAULT_SERVER_THRESHOLDS",
+    "SERVER_MONITOR_PROBE_COMMAND",
+    "SERVER_SAFE_ACTIONS",
+    "ServerActionRequest",
+    "ServerMonitorRequest",
+    "ServerThresholdsRequest",
+    "_server_action_execution_payload",
+    "_sub2api_timestamp",
+    "analyze_server_snapshot",
+    "create_notification_record",
+    "create_relation_record",
+    "create_server_action_execution",
+    "create_work_item_record",
+    "evaluate_server_monitor",
+    "execute_approved_server_action",
+    "execute_server_action",
+    "finish_server_action_execution",
+    "get_server_action_executions",
+    "get_server_monitor",
+    "get_server_thresholds",
+    "latest_server_action_execution",
+    "list_artifacts",
+    "list_server_action_executions",
+    "list_server_monitor_history",
+    "list_work_items",
+    "load_server_monitor_snapshot",
+    "load_server_monitor_thresholds",
+    "read_server_monitor",
+    "record_server_monitor_snapshot",
+    "refresh_server_monitor",
+    "request_server_action",
+    "rollback_server_action",
+    "rollback_server_action_execution",
+    "save_server_monitor_snapshot",
+    "save_server_monitor_thresholds",
+    "server_monitor_config",
+    "server_monitor_snapshot_row",
+    "server_number",
+    "server_target_is_local",
+    "update_server_thresholds",
+    "update_work_item_record",
+]

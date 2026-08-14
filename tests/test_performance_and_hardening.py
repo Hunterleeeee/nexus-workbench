@@ -1819,7 +1819,8 @@ class CrossTabAskTests(unittest.TestCase):
     def test_every_claim_has_to_say_which_tab_it_came_from(self):
         """不这么要求的话，模型会把几个页面糅成一段听起来很权威、
         但没法追溯的通稿。"""
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # post_cross_tab_ask 已随拆分迁到 app_pkg/chat.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "chat.py").read_text(encoding="utf-8")
         body = source[source.find("async def post_cross_tab_ask("):]
         body = body[:body.find("\n# ---")]
         self.assertIn("标出它来自哪几个标签", body)

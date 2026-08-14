@@ -17,6 +17,7 @@ import threading
 from typing import Any
 
 from .core import DATA_DIR, WORKBENCH_VERSION, log, now_iso
+from .instance import app
 
 
 def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
@@ -1337,6 +1338,24 @@ def restore_database_backup(name: str) -> dict[str, Any]:
     return {"ok": True, "restored": safe_name, "safety_backup": pre_restore, "restored_at": now_iso(), "verification": verification}
 
 
+@app.get("/api/backups")
+async def get_backups() -> dict[str, Any]:
+    return {"backups": list_database_backups(), "database": str(DATABASE_FILE), "current": database_metadata()}
+
+
+@app.post("/api/backups")
+async def create_backup() -> dict[str, Any]:
+    return {"backup": create_database_backup("manual")}
+
+
+@app.post("/api/backups/{name}/restore")
+async def restore_backup(name: str) -> dict[str, Any]:
+    try:
+        return restore_database_backup(name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 __all__ = [
     "DB_SCHEMA_VERSION",
     "_DB_SCHEMA_LOCK",
@@ -1348,10 +1367,13 @@ __all__ = [
     "_initialize_extended_schema",
     "_open_db_connection",
     "backup_root",
+    "create_backup",
     "create_database_backup",
     "database_metadata",
     "db_connection",
     "db_scope",
+    "get_backups",
     "list_database_backups",
+    "restore_backup",
     "restore_database_backup",
 ]
