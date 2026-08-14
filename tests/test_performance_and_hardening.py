@@ -2976,7 +2976,8 @@ class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
     def test_the_project_chat_path_actually_asks_for_tools(self):
         """两条路径必须都调 run_agent_react_loop，否则又会各写一份、慢慢分叉。"""
         root = Path(__file__).resolve().parents[1]
-        source = (root / "app.py").read_text(encoding="utf-8")
+        # 项目 Agent 引擎已随拆分迁到 app_pkg/agent_engine.py
+        source = (root / "app_pkg" / "agent_engine.py").read_text(encoding="utf-8")
         body = source[source.find("async def run_project_agent("):]
         body = body[:body.find("\ndef handoff_title(")]
         self.assertIn("subagent_tool_schemas(project_id)", body, "项目页对话没有取工具清单")
@@ -3630,7 +3631,8 @@ class AgentQueueTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 409)
 
     def test_the_react_loop_reads_inserted_messages_between_rounds(self):
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # ReAct 循环已随拆分迁到 app_pkg/agent_engine.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "agent_engine.py").read_text(encoding="utf-8")
         body = source[source.find("async def run_agent_react_loop("):]
         body = body[:body.find("\nasync def run_project_agent(")]
         self.assertIn("consume_agent_queue_messages", body)
@@ -3853,7 +3855,8 @@ class AgentStreamingUxTests(unittest.TestCase):
             self.assertIn(token, source)
 
     def test_tool_start_events_are_emitted_before_execution(self):
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # ReAct 流式循环已随拆分迁到 app_pkg/agent_engine.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "agent_engine.py").read_text(encoding="utf-8")
         self.assertIn('"kind": "tool_start"', source)
         start = source.index('"kind": "tool_start"')
         run = source.index("async def _run_one", start)

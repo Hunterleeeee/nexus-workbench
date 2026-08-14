@@ -1543,3 +1543,25 @@
   - 源码断言测试（dispatch retry attempt）适配到 app_pkg/agent_engine.py；
   - app.py 从 3.27 万行累计降至 **1.78 万行**（17848 行），全量 509 通过，3.11 语法 + chat 路由
     转发 smoke 通过。agent 引擎（ReAct 循环/stream/run_project_agent）下一批。
+
+## v0.3.201 · 2026-08-14
+
+- **拆分第十五批：agent 引擎并入 `app_pkg/agent_engine.py`**（引擎约 1110 行，app.py 降至 1.67 万行）：
+  - 拆出：redact_agent_context/agent_project_context、agent_context_result_metadata、动作推断
+    （child_agent_system/action_intent_is_imperative/infer_agent_actions/execute_agent_action/
+    materialize_agent_actions/agent_action_notice）、ReAct 循环（stream/run_agent_react_loop）、
+    stream/run_project_agent；
+  - 兼容：工具 handler/REACT_TOOLS/SUBAGENT_EXTRA_TOOLS 粘合层仍留 app.py——常量经
+    `_REACT_TOOLS()`/`_SUBAGENT_EXTRA_TOOLS()`/`_AGENT_MAX_*()` 运行时读；工具执行/领域 turn/
+    obsidian/knowledge 等 28 个 app 函数经 `_app_call` 转发；market/server/sub2api/inbox/llm/
+    agent_platform/agent_runs/projects/memories 已拆模块直连；
+  - 教训（血泪）：
+    1. **functools.partial(函数引用) 与 asyncio.to_thread(函数引用) 正则匹配不到**——ReAct 循环
+       里 `to_thread(execute_react_tool, ...)` 三处要改成 `to_thread(_app_call, "fn", ...)`；
+    2. **helper 内部字符串被误伤**：`getattr(_app, "REACT_TOOL_LABELS")` 里的字符串被正则替换成
+       `"_REACT_TOOL_LABELS()"`——正则替换要排除 helper 定义区或字符串字面量；
+    3. 引擎里 call_llm/call_llm_with_tools/stream_llm_*/add_agent_run_event 绑定导入 patch 失效
+       → 全改 `_app_call`；
+  - 源码断言测试 4 处（tool_start/ReAct 循环/chat 路径/queue）适配到 app_pkg/agent_engine.py；
+  - app.py 从 3.27 万行累计降至 **1.67 万行**（16744 行），全量 509 通过，3.11 语法 + ReAct
+    转发 smoke 通过。agent 领域收官（数据层+路由+引擎全拆完）。
