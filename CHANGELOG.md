@@ -1423,3 +1423,22 @@
     MAX_MEMORY_* 常量从 memories 导入（core 无）；
   - 源码断言测试适配新结构（总调度调用点移到 agent_platform.py）；
   - app.py 从 3.27 万行累计降至 **2.46 万行**，全量 509 通过。
+
+## v0.3.194 · 2026-08-14
+
+- **拆分第八批：自动化与执行计划拆到 `app_pkg/automations.py`**（651 行，app.py 降至 2.4 万行）：
+  - 拆出：automation 规则/运行记录数据层（rules/recover_stale/get/list/save/create_run/finish_run）、
+    总调度执行器 execute_automation_rule（market/aihot/server/sub2api/inbox/knowledge/ai-learning/idea/
+    cid/git/evidence/worker/notification 全 kind 分支）、执行计划（create/get/update_status/claim/
+    update_step/run_execution_plan）、AutomationRuleRequest/ExecutionPlanRequest 模型、11 个路由
+    （/api/automations* + /api/plans*）；
+  - 兼容：已拆模块（inbox/server/sub2api/push/git/llm/agent_platform/notifications）直连导入；仍在
+    app.py 的领域函数（market/aihot/knowledge/ai-learning/idea/cid/evidence/projects/worker）全走
+    `_app_call` 运行时转发，测试 patch app.X 生效；_audit_datetime/platform_decode_json 转发；
+    WORKBENCH_AUTOMATION_STALE_SECONDS 运行时读 app 命名空间（兼容测试 patch）；
+  - 边界教训：17387-17782 区间中间夹着 capability_graph_route（agent 平台）与 backup/database_metadata
+    等 backups 领域函数——第一版脚本误删，git 恢复后拆成两段（17414-17526 保留）重跑；
+  - f-string 内 `_app_call("...")` 同引号嵌套是 Python 3.12+ 语法（PEP 701），服务器 3.11 会崩——
+    改为单引号；
+  - app.py 从 3.27 万行累计降至 **2.4 万行**（24024 行），全量 509 通过，3.11 语法校验通过，
+    `_app_call(run_evidence_matrix)` 转发路径 smoke 验证通过。
