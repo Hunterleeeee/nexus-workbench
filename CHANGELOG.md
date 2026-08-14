@@ -1565,3 +1565,21 @@
   - 源码断言测试 4 处（tool_start/ReAct 循环/chat 路径/queue）适配到 app_pkg/agent_engine.py；
   - app.py 从 3.27 万行累计降至 **1.67 万行**（16744 行），全量 509 通过，3.11 语法 + ReAct
     转发 smoke 通过。agent 领域收官（数据层+路由+引擎全拆完）。
+
+## v0.3.202 · 2026-08-14
+
+- **拆分第十六批：knowledge + obsidian 领域拆到 `app_pkg/knowledge.py`**（约 1840 行，app.py 降至 1.49 万行）：
+  - 拆出：知识库核心（knowledge_files/search、语义向量 embedding/vectors/混合检索、缓存字典）、
+    Obsidian 索引/搜索/related/MOC/冲突检测与解决/retrieval-evaluation、笔记 CRUD 与知识库
+    路由 22 个、draft 同步与回放、冲突模型 7 个；
+  - 兼容：**KNOWLEDGE_DIR/OBSIDIAN_VAULT_DIR/OUTPUTS_DIR 绑定导入 patch 失效 → 专写
+    `_KNOWLEDGE_DIR()`/`_OBSIDIAN_VAULT_DIR()`/`_OUTPUTS_DIR()` 运行时读**（测试 patch
+    app.X 生效，48 处替换）；模块内互调 + app 函数（safe_filename/register_artifact_safely/
+    get_artifact_record/list_artifacts 等）全走 `_app_call`（133 处）；to_thread 传函数引用
+    5 处改 `to_thread(_app_call, 'fn', ...)`；`_knowledge_files_cache` 补进 __all__
+    （测试 patch.dict 需要）；create_knowledge_note 用 InboxRequest（app.py 模型）跨模块
+    注解会循环导入 → 留 app.py；
+  - 边界：_knowledge_dir_signature（3044）与 _knowledge_files_cache（3041）都归 knowledge；
+    EMBEDDING_URL 常量随段走；InboxBatchMergeRequest 夹在冲突模型后保留 app.py；
+  - app.py 从 3.27 万行累计降至 **1.49 万行**（14933 行），全量 509 通过，3.11 语法 +
+    转发/缓存/真实读取 smoke 通过。
