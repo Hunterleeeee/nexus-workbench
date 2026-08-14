@@ -1347,3 +1347,13 @@
   - `clip`/`clip_for_llm` 从 app.py 抽到 core（测试与后续模块共用）；
   - 全量 509 通过，app.py 从 3.15 万行降至约 3.13 万行。
   - 注：知识库领域（knowledge/obsidian）与 market/server/doc-factory 等 7 个领域深度耦合（来源体检会跨域分析），暂缓独立，待跨域函数收敛后再拆。
+
+## v0.3.186 · 2026-08-14
+
+- **拆分加速：app 实例 + 两个领域模块**：
+  - `app_pkg/instance.py`：FastAPI 实例独立（路由外迁的基础，领域模块可带路由注册）；
+  - `app_pkg/git.py`（189 行）：Git 仓库清单/远程库存推送，含路由（首个带路由的领域模块）；
+  - `app_pkg/sub2api.py`（约 850 行）：面板快照同步/用量分析/告警；
+  - `load_json_file`/`save_json_atomic` 入 core（通用文件工具）；
+  - 兼容处理：文件路径常量运行时读取（测试 patch 生效）、跨域私有函数（`_sub2api_timestamp` 等）进 `__all__`、app 级函数延迟转发；
+  - app.py 降至约 3.03 万行，全量 509 通过。

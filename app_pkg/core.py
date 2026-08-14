@@ -13,9 +13,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Any
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -99,6 +101,27 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def load_json_file(path: Path, fallback: Any) -> Any:
+    """读取 JSON 文件，失败回退 fallback。"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return fallback
+
+
+def save_json_atomic(path: Path, values: Any, mode: int | None = None) -> None:
+    """原子写 JSON：先写临时文件再替换，避免半截文件。"""
+    DATA_DIR.mkdir(exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if mode is not None:
+        try:
+            temporary.chmod(mode)
+        except OSError:
+            pass
+    os.replace(temporary, path)
+
+
 def clip(value: str | None, limit: int) -> str:
     value = value or ""
     if len(value) <= limit:
@@ -156,4 +179,6 @@ __all__ = [
     "now_iso",
     "clip",
     "clip_for_llm",
+    "load_json_file",
+    "save_json_atomic",
 ]
