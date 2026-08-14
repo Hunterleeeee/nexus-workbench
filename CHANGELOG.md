@@ -1364,3 +1364,13 @@
   - `app_pkg/server.py`（514 行）：服务器监控快照/健康评估/阈值；`app_pkg/integrations.py`（942 行）：外部服务接入（含路由/模型/INTEGRATION_DEFINITIONS 常量）；
   - 方法论升级：改用**函数名锚定**删除（行号漂移导致多次误删后确立）、AST 一次找齐缺失符号、model 定义必须前置（FastAPI 注册时解析注解）、转发器绝不 export（否则覆盖 app 原函数 → 递归）；
   - app.py 降至约 2.92 万行，全量 509 通过。
+
+## v0.3.188 · 2026-08-14
+
+- **拆分第五批：inbox + memories + notifications 三个数据型领域**：
+  - `app_pkg/inbox.py`（约 540 行）：收件箱 CRUD/分类/截止/交接候选/Agent 整理；
+  - `app_pkg/memories.py`（约 700 行）：项目记忆 CRUD/检索/卫生/导入 + 领域常量（MEMORY_*/MAX_MEMORY_*）；
+  - `app_pkg/notifications.py`（约 330 行）：站内通知 CRUD + ntfy/飞书推送调度；
+  - 通用工具进一步入 core：decode_json_column/extract_json_block/decode_json_value/query_terms/_int_env；
+  - 兼容处理：领域常量（MEMORY_STALE_DAYS 等）必须进 `__all__`（测试与 app 引用）、ROOT 路径运行时读取（测试 patch）、转发器（agent_display_name/work_item_row/agent_run_row）绝不 export；
+  - app.py 从 3.27 万行降至 **2.78 万行**，全量 509 通过。

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 from pathlib import Path
@@ -122,6 +123,59 @@ def save_json_atomic(path: Path, values: Any, mode: int | None = None) -> None:
     os.replace(temporary, path)
 
 
+def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Read a tunable integer from the environment without letting a typo break startup."""
+    try:
+        value = int(str(os.getenv(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def query_terms(query: str) -> list[str]:
+    """把检索语句切成可匹配的词项：英文按词、中文按 2 字滑动窗口。"""
+    terms = set(re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]{1,}|[\u4e00-\u9fff]{2,}", query.lower()))
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", query.lower()):
+        terms.update(chunk[index:index + 2] for index in range(len(chunk) - 1))
+    return sorted(terms, key=len, reverse=True)
+
+
+def decode_json_column(value: str | None) -> dict[str, Any]:
+    """把数据库里存成 JSON 字符串的列安全地还原成 dict。"""
+    try:
+        parsed = json.loads(value or "{}")
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def extract_json_block(text: str) -> str:
+    """从 LLM 回答里取出 JSON 主体。
+
+    模型经常把 JSON 包在 ```json 围栏里，或前后带一句解释。这里按
+    「围栏 -> 首尾大括号 -> 原文」的顺序退让，尽量拿到可解析的片段。
+    """
+    candidate = str(text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", candidate, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1)
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start >= 0 and end > start:
+        return candidate[start : end + 1]
+    return candidate
+
+
+def decode_json_value(value: Any, fallback: Any = None) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        parsed = json.loads(value or "")
+        return parsed if parsed is not None else fallback
+    except (TypeError, json.JSONDecodeError):
+        return fallback
+
+
 def clip(value: str | None, limit: int) -> str:
     value = value or ""
     if len(value) <= limit:
@@ -181,4 +235,9 @@ __all__ = [
     "clip_for_llm",
     "load_json_file",
     "save_json_atomic",
+    "_int_env",
+    "decode_json_column",
+    "query_terms",
+    "extract_json_block",
+    "decode_json_value",
 ]
