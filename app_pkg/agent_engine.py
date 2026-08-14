@@ -1900,6 +1900,9 @@ async def run_project_agent(
         _app_call("add_agent_run_event", run["id"], "failed", f"{agent_display_name(project_id)} 执行失败：{error}", level="error")
         raise HTTPException(502, f"{agent_display_name(project_id)} 调用失败：{error}") from exc
 __all__ = [
+    "run_project_agent",
+    "stream_project_agent",
+    "redact_agent_context",
     "run_agent_react_loop",
     "stream_agent_react_loop",
     "agent_action_notice",
