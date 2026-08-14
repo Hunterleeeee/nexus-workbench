@@ -1605,3 +1605,21 @@
   - 源码断言测试 3 处适配到 app_pkg/ai_learning.py；DEFAULT_LEARNING_TRACK 随段走；
   - app.py 从 3.27 万行累计降至 **1.08 万行**（10759 行），全量 509 通过，3.11 语法 +
     转发 smoke 通过。
+
+## v0.3.204 · 2026-08-14
+
+- **拆分第十八批：aihot + cid-dashboard 领域拆到 `app_pkg/aihot.py`**（约 2250 行，app.py 降至 8700 行）：
+  - 拆出：热点快照（抓取/去重/选品/领域标签/解析）、AI 热点 Agent 引擎、CID 看板（快照/
+    机会/偏好/评审）、路由约 23 个（aihot feed/digest/feedback/opportunities/chat +
+    cid snapshot/opportunities/compare/research-task/evidence/preferences/review）、
+    模型 8 个（AIAHot*/CIDSnapshot/CIDOpportunity/CIDCompare/OpportunityReview/CIDPreference）；
+  - 兼容：db_connection/load_json_file 等被测试 patch 的调用改 `_app_call`（模块内互调
+    103 处）；CIDCompareRequest 提前到模块头（3.11 eager 注解）；**app.mount("/static")/
+    runs/run_tasks/AGENT_* 常量是主入口全局状态，误带后移回 app.py 末尾（mount 必须
+    在 sw.js 等路由之后注册，否则 StaticFiles 拦截 /static/sw.js）**；补标准库
+    （socket/secrets/unicodedata/urlparse/FileResponse/STATIC_DIR）；__all__ 合并去重
+    （补拆追加导致双 __all__，Python 只认最后一个 → 用 AST 重新生成唯一 __all__ 88 项）；
+  - 教训：拆分段可能夹带主入口全局代码（mount/内存字典/进程常量）——**提取后要检查
+    "app.mount/runs:/app.on_event" 等主入口锚点是否误入模块**；
+  - app.py 从 3.27 万行累计降至 **8700 行**（8675），全量 509 通过，3.11 语法 +
+    模型顺序检查 + 转发 smoke 通过。

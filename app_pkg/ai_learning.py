@@ -3,6 +3,8 @@
 拆自 app.py（2026-08-14 第十七批）。包含: 学习画像/今日一课/课程与练习/探索推荐/
 练习批改等。仍在 app.py 的领域函数经 _app_call 运行时转发。
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import os

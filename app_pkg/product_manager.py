@@ -3,6 +3,8 @@
 拆自 app.py（2026-08-14 第十七批）。包含: 项目/需求/反馈/决策/原型(prototype)/
 PRD 生成/Cowart 画布。仍在 app.py 的领域函数（run_document_factory 等）经 _app_call 转发。
 """
+from __future__ import annotations
+
 import asyncio
 import base64
 import html as html_lib

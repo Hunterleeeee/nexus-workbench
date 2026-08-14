@@ -6,6 +6,8 @@
 - 笔记 CRUD 与知识库路由、draft 同步与回放
 仍在 app.py 的领域函数（artifacts/work-items/notifications/inbox 路由等）经 _app_call 运行时转发。
 """
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json

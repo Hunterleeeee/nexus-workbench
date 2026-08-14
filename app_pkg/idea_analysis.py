@@ -3,6 +3,8 @@
 拆自 app.py（2026-08-14 第十七批）。包含: 想法会话/假设与验证/访谈/决策对比/
 证据包/自动跟进提醒。仍在 app.py 的领域函数经 _app_call 运行时转发。
 """
+from __future__ import annotations
+
 import asyncio
 import httpx
 import json
