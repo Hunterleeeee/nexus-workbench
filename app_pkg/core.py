@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -92,6 +93,11 @@ MAX_AGENT_TOTAL_PAGES = 6
 MEMORY_OWNER_ID = "default"
 MAX_MEMORY_CONTEXT_ITEMS = 5
 
+
+def now_iso() -> str:
+    """当前 UTC 时间戳（ISO 8601）。数据库所有 created_at/updated_at 的规范格式。"""
+    return datetime.now(timezone.utc).isoformat()
+
 __all__ = [
     "ROOT",
     "STATIC_DIR",
@@ -131,4 +137,5 @@ __all__ = [
     "MAX_AGENT_TOTAL_PAGES",
     "MEMORY_OWNER_ID",
     "MAX_MEMORY_CONTEXT_ITEMS",
+    "now_iso",
 ]

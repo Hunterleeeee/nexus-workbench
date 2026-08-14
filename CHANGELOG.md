@@ -1332,3 +1332,10 @@
   - 新建 `app_pkg/` 包 + `app_pkg/core.py`（无业务依赖的内核：路径常量、日志、版本、限额）；
   - `app.py` 改为 `from app_pkg.core import *`（符号引用不变），功能零变化、全量 509 测试通过；
   - 后续计划：db 层 → 领域模块（aihot/knowledge/market/learning/product...）逐批搬迁，每批全量测试；再补 LICENSE/README/清理内部信息。
+
+## v0.3.184 · 2026-08-14
+
+- **拆分第二步：DB 层拆到 `app_pkg/db.py`**（连接管理 + 全部 schema 初始化/迁移，约 1200 行）：
+  - `db_connection`/`db_scope` 及 schema（59 张表）迁入 db.py，`app.py` 从 3.27 万行降至 3.15 万行；
+  - 兼容层保证**测试零改动**（全量 509 通过）：`_DB_SCHEMA_READY` 标志留在 app 模块（延迟读写）、数据库路径运行时读 `app.DATABASE_FILE`（patch 生效）、`DB_SCHEMA_VERSION`/`_SharedConnection` 在 app 模块 re-export；
+  - 4 个 worker 与 uvicorn 启动验证通过。
