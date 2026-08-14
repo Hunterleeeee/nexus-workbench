@@ -1623,3 +1623,20 @@
     "app.mount/runs:/app.on_event" 等主入口锚点是否误入模块**；
   - app.py 从 3.27 万行累计降至 **8700 行**（8675），全量 509 通过，3.11 语法 +
     模型顺序检查 + 转发 smoke 通过。
+
+## v0.3.205 · 2026-08-14
+
+- **拆分收官批：doc-factory / web-research / browser / crawl 四领域一次拆出**（app.py 跌破 7000 行）：
+  - `app_pkg/doc_factory.py`（约 830 行）：文档生成/校验/评审/再生成/交付（数据层
+    1233-1414 + 路由 4663-5051 + deliver + 模型 4 + crawl 辅助 449-885 迁移）；
+  - `app_pkg/browser.py`（约 1900 行）：长驻浏览器会话/网页研究（mention/tab-group/
+    browser-plan/agent）+ 抓取（run_crawl/run_crawl_chat_turn/run_research_plan/
+    crawl 数据层 472-886 + 模型 4）+ 路由约 20 个；
+  - 兼容：llm_settings/call_llm/db_connection 转发；**DOC_FACTORY_TEMPLATES 常量绑定导入
+    patch 失效 → `_DOC_FACTORY_TEMPLATES()` helper**（.get 与下标访问两种形式都要处理）；
+    _browser_sessions/_browser_blocked_reason 私有符号补进 __all__（测试 patch 需要）；
+    platform_decode_json 转发；crawl 辅助函数（add_log/persist_crawl_run/change_detection
+    等 17 个）随段迁移；
+  - 新模块统一带 `from __future__ import annotations`（注解惰性化，eager 全检通过）；
+  - **app.py 从 3.27 万行累计降至 6246 行（-26454，只剩主入口/通用模型/少量领域）**，
+    全量 509 通过。
