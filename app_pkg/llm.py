@@ -20,10 +20,12 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from .core import DATA_DIR, KNOWLEDGE_DIR, OUTPUTS_DIR, SETTINGS_FILE, clip, log, now_iso, save_json_atomic
+from .core import DATA_DIR, KNOWLEDGE_DIR, OUTPUTS_DIR, SETTINGS_FILE, _int_env, clip, log, now_iso, save_json_atomic
 from .db import db_connection
+from .instance import app
 
 def _app_call(name: str, *args: Any, **kwargs: Any) -> Any:
     """通过 app 命名空间调用本模块函数——测试 patch app.X 时能生效。"""
@@ -480,7 +482,7 @@ def normalize_llm_providers(saved: dict[str, Any] | None = None) -> list[dict[st
                     entry["api_key"] = env_key
                     entry["key_source"] = "environment"
             # Keep incomplete entries so the UI can explain why they are
-            # disabled.  llm_provider_state() separately filters real call
+            # disabled.  _app_call("llm_provider_state", ) separately filters real call
             # candidates to entries with URL, model and Key.
             normalized.append(entry)
         if normalized:
@@ -605,7 +607,7 @@ def llm_effective_candidate(state: dict[str, Any] | None = None) -> tuple[dict[s
     fallback.  Keep this selection rule in one place so the UI and the call
     path describe the same routing decision.
     """
-    state = state or llm_provider_state()
+    state = state or _app_call("llm_provider_state")
     candidates = state.get("candidates") or []
     for index, provider in enumerate(candidates):
         if _app_call("_llm_health", provider).get("status") != "cooling":
@@ -968,4 +970,806 @@ _PRIMARY_MODEL_KEYS = (
     "model", "model_name", "model-name", "modelName", "model_id", "model-id", "modelId",
 )
 
-__all__ = ["load_saved_llm_settings", "save_global_llm_settings", "_clean_llm_token", "_llm_provider_id", "_llm_provider_usable", "_llm_provider_disabled_reason", "_unique_llm_provider_id", "_llm_error_kind", "_llm_error_retryable", "_llm_health", "_persist_llm_health", "_record_llm_success", "_record_llm_failure", "record_llm_usage_event", "schedule_llm_usage_event", "llm_usage_metrics_payload", "_llm_key_from_environment", "normalize_llm_providers", "llm_fallback_credentials", "llm_provider_state", "llm_credentials", "llm_effective_candidate", "chat_completions_url", "llm_settings", "valid_http_url", "valid_research_url", "normalize_llm_base_url", "model_output_token_limit", "LLMSettingsRequest", "LLMTestRequest", "LLM_PROVIDER_HEALTH", "LLM_PROVIDER_COOLDOWN_SECONDS", "MODEL_OUTPUT_TOKEN_LIMITS"]
+
+
+
+def runtime_tool_policy(name: str) -> dict[str, Any]:
+    """延迟转发 app.runtime_tool_policy（agent 平台仍在 app.py）。"""
+    import app as _app
+
+    return _app.runtime_tool_policy(name)
+
+
+def add_agent_run_event(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.add_agent_run_event（agent 运行基础设施仍在 app.py）。"""
+    import app as _app
+
+    return _app.add_agent_run_event(*args, **kwargs)
+
+
+def update_agent_run_record(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.update_agent_run_record（仍在 app.py）。"""
+    import app as _app
+
+    return _app.update_agent_run_record(*args, **kwargs)
+
+
+def get_agent_run(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.get_agent_run（仍在 app.py）。"""
+    import app as _app
+
+    return _app.get_agent_run(*args, **kwargs)
+
+
+def create_agent_run_record(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.create_agent_run_record（仍在 app.py）。"""
+    import app as _app
+
+    return _app.create_agent_run_record(*args, **kwargs)
+
+
+def project_href(project_id: str) -> str:
+    """延迟转发 app.project_href（projects 领域仍在 app.py）。"""
+    import app as _app
+
+    return _app.project_href(project_id)
+
+
+def create_notification_record(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.create_notification_record（notifications 领域仍在 app.py）。"""
+    import app as _app
+
+    return _app.create_notification_record(*args, **kwargs)
+
+
+def agent_display_name(project_id: str) -> str:
+    """延迟转发 app.agent_display_name（仍在 app.py）。"""
+    import app as _app
+
+    return _app.agent_display_name(project_id)
+
+
+def write_knowledge_note(*args: Any, **kwargs: Any) -> Any:
+    """延迟转发 app.write_knowledge_note（knowledge 领域仍在 app.py）。"""
+    import app as _app
+
+    return _app.write_knowledge_note(*args, **kwargs)
+
+
+
+# 一次回答最多续写几段。设上限是因为「一直续下去」在模型跑偏时会烧掉大量额度，
+# 而 4 段（默认 4000 tokens 一段）已经够写完任何一份正常的分析。
+LLM_MAX_CONTINUATIONS = _int_env("WORKBENCH_LLM_MAX_CONTINUATIONS", 4, minimum=0, maximum=10)
+
+def _llm_timeout() -> httpx.Timeout:
+    try:
+        read = float(os.getenv("WORKBENCH_LLM_READ_TIMEOUT_SECONDS", "120") or 120)
+    except (TypeError, ValueError):
+        read = 120.0
+    try:
+        connect = float(os.getenv("WORKBENCH_LLM_CONNECT_TIMEOUT_SECONDS", "10") or 10)
+    except (TypeError, ValueError):
+        connect = 10.0
+    return httpx.Timeout(read, connect=connect, write=30.0, pool=10.0)
+
+
+_LLM_HTTP_CLIENTS: dict[str, httpx.AsyncClient] = {}
+_LLM_HTTP_CLIENT_LOCK = asyncio.Lock()
+
+
+
+async def llm_http_client() -> httpx.AsyncClient:
+    """Return the pooled client for the current proxy setting."""
+    proxy = os.getenv("LLM_PROXY", "").strip()
+    async with _LLM_HTTP_CLIENT_LOCK:
+        client = _LLM_HTTP_CLIENTS.get(proxy)
+        if client is not None and not client.is_closed:
+            return client
+        options: dict[str, Any] = {
+            "timeout": _llm_timeout(),
+            "trust_env": False,
+            "limits": httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=90.0),
+        }
+        if proxy:
+            options["proxy"] = proxy
+        client = httpx.AsyncClient(**options)
+        _LLM_HTTP_CLIENTS[proxy] = client
+        return client
+
+
+
+async def stream_llm_text(
+    messages: list[dict[str, str]],
+    *,
+    max_tokens: int = 4000,
+    temperature: float = 0.2,
+    purpose: str = "agent",
+    reasoning: bool = False,
+):
+    """流式调用 LLM，逐块产出 dict；被 max_tokens 截断时自动续写。
+
+    产出格式（每块一个 dict，由调用方决定如何消费）：
+      {"type": "delta", "text": str, "reasoning": str}        内容增量（可能为空串）
+      {"type": "finish", "reason": str, "usage": dict|None, "provider": str}
+      {"type": "reset", "provider": str}                         已输出的半段内容作废，fallback 将从头回答
+      {"type": "error", "message": str, "provider": str,
+       "recoverable": bool}                                        当前 provider 失败或整条流最终失败
+
+    语义与 call_llm 一致：主配置失败后依次尝试 fallback 候选，而不是让整条
+    链路随第一个 Provider 一起失败。工具轮次（ReAct）仍用非流式 call_llm_with_tools，
+    这里只服务"最终文字回答"的流式输出。
+
+    截断续写：finish_reason == "length" 时，把这一段回填成 assistant 消息再要
+    下一段，最多续 LLM_MAX_CONTINUATIONS 次；续写期间的 finish 扣住不外发
+    （否则前端以为答案完了）。续满上限会在正文末尾明说「还有内容没写完」，
+    并把 reason 标成 length_capped。
+    """
+    state = _app_call("llm_provider_state")
+    candidates = state.get("candidates") or []
+    if not candidates:
+        yield {"type": "error", "message": "未配置可调用的 LLM Provider", "provider": "", "recoverable": False}
+        return
+
+    async def _one_stream(provider: dict[str, Any], segment_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """单段流式请求；yield 增量文本，返回段内元信息。失败返回 None。"""
+        started_at = time.monotonic()
+        api_key = str(provider.get("api_key") or "")
+        model = str(provider.get("model") or "")
+        base_url = str(provider.get("base_url") or "")
+        provider_name = str(provider.get("name") or model or "未命名")
+        if not api_key or not model or not base_url:
+            yield {"type": "meta", "meta": {"error": "配置不完整", "provider": provider_name}}
+            return
+        payload = {
+            "model": model,
+            "messages": segment_messages,
+            "temperature": temperature,
+            "max_tokens": model_output_token_limit(model, max_tokens),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        finish_reason = ""
+        usage: dict[str, Any] | None = None
+        try:
+            client = await _app_call("llm_http_client")
+            async with client.stream(
+                "POST", chat_completions_url(base_url), headers=headers, json=payload
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    choice = ((chunk.get("choices") or [{}])[0]) or {}
+                    delta = choice.get("delta") or {}
+                    piece = delta.get("content") or ""
+                    think = delta.get("reasoning_content") or ""
+                    if piece:
+                        text_parts.append(piece)
+                        yield {"type": "delta", "text": piece, "reasoning": ""}
+                    if think and reasoning:
+                        reasoning_parts.append(think)
+                        yield {"type": "delta", "text": "", "reasoning": think}
+                    if choice.get("finish_reason"):
+                        finish_reason = str(choice.get("finish_reason") or "")
+                    if chunk.get("usage"):
+                        usage = chunk.get("usage") or None
+        except Exception as exc:
+            _app_call("schedule_llm_usage_event", 
+                provider,
+                status="failed",
+                error_kind=_llm_error_kind(exc),
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                input_tokens=sum(len(str(m.get("content") or "")) for m in segment_messages) // 4,
+                purpose=purpose,
+            )
+            await asyncio.to_thread(_app_call, "_record_llm_failure", provider, exc)
+            yield {"type": "meta", "meta": {"error": f"Provider「{provider_name}」失败：{clip(str(exc), 120)}", "provider": provider_name}}
+            return
+        result = "".join(text_parts).strip() or "".join(reasoning_parts).strip()
+        input_tokens = int((usage or {}).get("prompt_tokens") or (sum(len(str(m.get("content") or "")) for m in segment_messages) // 4))
+        output_tokens = int((usage or {}).get("completion_tokens") or (len(result) // 4))
+        _app_call("schedule_llm_usage_event", 
+            provider,
+            status="succeeded",
+            latency_ms=int((time.monotonic() - started_at) * 1000),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            purpose=purpose,
+        )
+        await asyncio.to_thread(_app_call, "_record_llm_success", provider)
+        if not result and finish_reason != "length":
+            yield {"type": "meta", "meta": {"error": f"Provider「{provider_name}」流式返回为空，尝试下一个…", "provider": provider_name}}
+            return
+        yield {
+            "type": "meta",
+            "meta": {
+                "text": result,
+                "finish_reason": finish_reason or "stop",
+                "usage": usage,
+                "provider": provider_name,
+                "reasoning": "".join(reasoning_parts).strip(),
+            },
+        }
+
+    errors: list[str] = []
+    emitted_any = False
+    for provider in candidates:
+        if _app_call("_llm_health", provider).get("status") == "cooling":
+            errors.append(f"{provider.get('name', '未命名')}:rate_limit_cooling")
+            continue
+        segment_messages = list(messages)
+        final_text = ""
+        final_usage = None
+        final_reason = "stop"
+        segment_index = 0
+        truncated = False
+        segment_error = None
+        while segment_index <= LLM_MAX_CONTINUATIONS:
+            meta: dict[str, Any] | None = None
+            async for chunk in _one_stream(provider, segment_messages):
+                if chunk["type"] == "delta":
+                    final_text += chunk["text"]
+                    emitted_any = True
+                    yield chunk
+                elif chunk["type"] == "meta":
+                    meta = chunk["meta"]
+            if meta is None:
+                # 段内异常：未产出任何内容则交给 failover；已产出半段要 reset。
+                segment_error = "段内中断"
+                if final_text:
+                    yield {"type": "reset", "provider": str(provider.get("name") or "")}
+                break
+            if "error" in meta:
+                segment_error = meta["error"]
+                if final_text:
+                    yield {"type": "reset", "provider": str(provider.get("name") or "")}
+                errors.append(segment_error)
+                break
+            final_usage = meta["usage"]
+            final_reason = str(meta["finish_reason"] or "stop")
+            if final_reason != "length":
+                truncated = False
+                break
+            # 截断了：回填这一段的 assistant 文本，继续要下一段。
+            truncated = True
+            segment_text = str(meta.get("text") or "")
+            if not segment_text:
+                truncated = False
+                break
+            segment_messages = [*segment_messages, {"role": "assistant", "content": segment_text}]
+            segment_index += 1
+        if segment_error and not emitted_any:
+            # 第一个 provider 就失败且什么都没吐：继续尝试下一个。
+            continue
+        if truncated:
+            # 续满上限仍被截断：明说没写完，并标记 reason。
+            tail = f"\n\n（回答已达到 {LLM_MAX_CONTINUATIONS + 1} 段续写上限，后面还有内容没写完，可要求继续。）"
+            final_text += tail
+            emitted_any = True
+            yield {"type": "delta", "text": tail, "reasoning": ""}
+            final_reason = "length_capped"
+        yield {"type": "finish", "reason": final_reason, "usage": final_usage, "provider": str(meta.get("provider") or "") if meta else ""}
+        return
+    yield {"type": "error", "message": f"全部 LLM Provider 均失败（{'; '.join(errors)[:300]}）", "provider": "", "recoverable": False}
+
+
+
+async def stream_llm_with_tools(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    *,
+    purpose: str = "agent_tools",
+):
+    """流式版带工具调用（OpenAI function calling）。
+
+    流式过程中无法提前知道模型这轮是调工具还是直接回答，所以逐块判断：
+      - delta.content 出现 → 文本增量（回答），yield {"type":"delta_text","text":...}
+      - delta.tool_calls 出现 → 按 index 累积拼装 arguments，最后 yield 完整 tool_calls
+    结束统一 yield {"type":"round_done","mode":"answer"|"tools","content":str,"tool_calls":[...],"usage":...,"provider":...}
+    failover 语义与 call_llm_with_tools 一致。产出均为 dict，由 ReAct 循环消费。
+    """
+    state = _app_call("llm_provider_state")
+    candidates = state.get("candidates") or []
+    if not candidates:
+        yield {"type": "error", "message": "未配置可调用的 LLM Provider", "provider": "", "recoverable": False}
+        return
+
+    errors: list[str] = []
+    for provider in candidates:
+        if _app_call("_llm_health", provider).get("status") == "cooling":
+            errors.append(f"{provider.get('name', '未命名')}:rate_limit_cooling")
+            continue
+        started_at = time.monotonic()
+        api_key = str(provider.get("api_key") or "")
+        model = str(provider.get("model") or "")
+        base_url = str(provider.get("base_url") or "")
+        provider_name = str(provider.get("name") or model or "未命名")
+        if not api_key or not model or not base_url:
+            errors.append(f"{provider_name}:配置不完整")
+            continue
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_tokens": model_output_token_limit(model, 3000),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            client = await _app_call("llm_http_client")
+            content_parts: list[str] = []
+            tool_slots: dict[int, dict[str, Any]] = {}
+            finish_reason = ""
+            usage: dict[str, Any] | None = None
+            async with client.stream(
+                "POST", chat_completions_url(base_url), headers=headers, json=payload
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    choice = ((chunk.get("choices") or [{}])[0]) or {}
+                    delta = choice.get("delta") or {}
+                    piece = delta.get("content") or ""
+                    if piece:
+                        content_parts.append(piece)
+                        yield {"type": "delta_text", "text": piece}
+                    # 推理型模型会把思考写在 reasoning_content 里。这里以前直接扔掉，
+                    # 于是「Agent 想了 20 秒才开口」这段时间页面上什么都没有。
+                    # 只转发、不计入 content：它不是回答的一部分。
+                    think = delta.get("reasoning_content") or ""
+                    if think:
+                        yield {"type": "delta", "text": "", "reasoning": think}
+                    for tc in delta.get("tool_calls") or []:
+                        index = int(tc.get("index") or 0)
+                        slot = tool_slots.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                        fn = tc.get("function") or {}
+                        if tc.get("id"):
+                            slot["id"] = str(tc["id"])
+                        if fn.get("name"):
+                            slot["function"]["name"] = str(fn["name"])
+                        if fn.get("arguments"):
+                            slot["function"]["arguments"] = (slot["function"]["arguments"] or "") + str(fn["arguments"])
+                    if choice.get("finish_reason"):
+                        finish_reason = str(choice.get("finish_reason") or "")
+                    if chunk.get("usage"):
+                        usage = chunk.get("usage") or None
+            content = "".join(content_parts).strip()
+            tool_calls = [tool_slots[index] for index in sorted(tool_slots)]
+            input_tokens = int((usage or {}).get("prompt_tokens") or (sum(len(str(m.get("content") or "")) for m in messages) // 4))
+            output_tokens = int((usage or {}).get("completion_tokens") or ((len(content) + sum(len(str(t.get("function", {}).get("arguments") or "")) for t in tool_calls)) // 4))
+            _app_call("schedule_llm_usage_event", 
+                provider,
+                status="succeeded",
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                purpose=purpose,
+            )
+            await asyncio.to_thread(_record_llm_success, provider)
+            mode = "tools" if tool_calls else "answer"
+            yield {"type": "round_done", "mode": mode, "content": content, "tool_calls": tool_calls, "finish_reason": finish_reason, "usage": usage, "provider": provider_name}
+            return
+        except Exception as exc:
+            _app_call("schedule_llm_usage_event", 
+                provider,
+                status="failed",
+                error_kind=_llm_error_kind(exc),
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                input_tokens=sum(len(str(m.get("content") or "")) for m in messages) // 4,
+                purpose=purpose,
+            )
+            await asyncio.to_thread(_record_llm_failure, provider, exc)
+            errors.append(f"{provider_name}:{clip(str(exc), 120)}")
+            if content_parts:
+                yield {"type": "reset", "provider": provider_name}
+            yield {
+                "type": "error",
+                "message": f"Provider「{provider_name}」失败：{clip(str(exc), 120)}",
+                "provider": provider_name,
+                "recoverable": True,
+            }
+            continue
+    yield {"type": "error", "message": f"全部 LLM Provider 均失败（{'; '.join(errors)[:300]}）", "provider": "", "recoverable": False}
+
+
+
+async def call_llm(
+    messages: list[dict[str, str]],
+    credentials: dict[str, str] | None = None,
+    *,
+    max_tokens: int = 4000,
+    temperature: float = 0.2,
+    purpose: str = "agent",
+    track_health: bool = True,
+    continue_on_truncation: bool = True,
+) -> str:
+    """调用 LLM；被 max_tokens 截断时自动续写，直到写完或达到续写上限。
+
+    在这之前，finish_reason == "length" 只是被记了一条 usage 事件，然后把半截
+    答案原样返回——用户看到的就是一段写到一半、经常停在句子中间的回答，而且
+    没有任何提示说它被截断了。调大 max_tokens 不解决问题：各家 Provider 对
+    单次输出都有上限，长任务照样会撞上。所以改成检测到截断就接着写。
+    """
+    if not continue_on_truncation or LLM_MAX_CONTINUATIONS <= 0:
+        return await _app_call("_call_llm_once", messages, credentials, max_tokens=max_tokens, temperature=temperature,
+                                    purpose=purpose, track_health=track_health)
+    parts: list[str] = []
+    working = list(messages)
+    for round_index in range(LLM_MAX_CONTINUATIONS + 1):
+        text, truncated = await _app_call("_call_llm_once", 
+            working, credentials, max_tokens=max_tokens, temperature=temperature,
+            purpose=purpose if round_index == 0 else f"{purpose}_continue",
+            track_health=track_health, want_truncated=True,
+        )
+        parts.append(text)
+        if not truncated:
+            break
+        if round_index == LLM_MAX_CONTINUATIONS:
+            # 续到上限还没写完：明确告诉用户，而不是让他以为这就是全文。
+            parts.append(f"\n\n（回答已达到 {LLM_MAX_CONTINUATIONS + 1} 段续写上限，后面还有内容没写完。"
+                         f"可以让我针对其中某一部分单独展开。）")
+            break
+        working = [
+            *working,
+            {"role": "assistant", "content": text},
+            {"role": "user", "content": "你上一段在这里被长度限制截断了。请紧接着最后一个字继续往下写，"
+                                        "不要重复已经写过的内容，也不要重新开头或加过渡语，直接接着写。"},
+        ]
+    # 续写是接着上一段最后一个字写的，所以直接拼接，中间不加分隔符。
+    return "".join(parts).strip()
+
+
+
+async def _call_llm_once(
+    messages: list[dict[str, str]],
+    credentials: dict[str, str] | None = None,
+    *,
+    max_tokens: int = 4000,
+    temperature: float = 0.2,
+    purpose: str = "agent",
+    track_health: bool = True,
+    want_truncated: bool = False,
+) -> Any:
+    truncated_flag = {"hit": False}
+
+    async def call_once(settings: dict[str, str]) -> str:
+        started_at = time.monotonic()
+        truncated_flag["hit"] = False
+        if not _llm_provider_usable(settings):
+            raise RuntimeError(_llm_provider_disabled_reason(settings) or "LLM Provider 配置不完整")
+        api_key = settings["api_key"]
+
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        # max_tokens 跟随模型能力：请求值先按模型输出上限 clamp，避免超过模型
+        # 实际上限（API 拒绝）或低于需求（长任务被截断）。
+        effective_max_tokens = model_output_token_limit(settings.get("model", ""), max_tokens)
+        payload = {
+            "model": settings["model"],
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": effective_max_tokens,
+        }
+        try:
+            client = await _app_call("llm_http_client")
+            response = await client.post(
+                chat_completions_url(settings["base_url"]),
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except Exception as exc:
+            _app_call("schedule_llm_usage_event", 
+                settings,
+                status="failed",
+                error_kind=_llm_error_kind(exc),
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                input_tokens=sum(len(str(message.get("content") or "")) for message in messages) // 4,
+                purpose=purpose,
+            )
+            raise
+        try:
+            message = body["choices"][0]["message"]
+            content = message.get("content", "") or ""
+            reasoning = message.get("reasoning_content", "") or ""
+            finish_reason = str((body.get("choices") or [{}])[0].get("finish_reason") or "")
+        except (KeyError, IndexError, TypeError) as exc:
+            error = RuntimeError("LLM 返回格式不符合 OpenAI Chat Completions 规范")
+            _app_call("schedule_llm_usage_event", 
+                settings,
+                status="failed",
+                error_kind="invalid_response",
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                input_tokens=sum(len(str(item.get("content") or "")) for item in messages) // 4,
+                purpose=purpose,
+            )
+            raise error from exc
+        # 输出被 max_tokens 截断：finish_reason=length 说明 LLM 还有内容没写完。
+        # 记录告警事件，便于排查"回答不完整"。
+        if finish_reason == "length":
+            truncated_flag["hit"] = True
+            try:
+                _app_call("schedule_llm_usage_event", 
+                    settings,
+                    status="truncated",
+                    error_kind="max_tokens_exceeded",
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                    input_tokens=sum(len(str(message.get("content") or "")) for message in messages) // 4,
+                    output_tokens=len(str(content or reasoning)) // 4,
+                    purpose=purpose,
+                )
+            except Exception:
+                log.debug("忽略异常（call_once）", exc_info=True)
+        if isinstance(content, list):
+            content = "\n".join(str(item.get("text", item)) for item in content)
+        result = str(content).strip() or str(reasoning).strip()
+        if not result:
+            error = RuntimeError("LLM 返回为空")
+            _app_call("schedule_llm_usage_event", 
+                settings,
+                status="failed",
+                error_kind=_llm_error_kind(error),
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                input_tokens=sum(len(str(message.get("content") or "")) for message in messages) // 4,
+                purpose=purpose,
+            )
+            raise error
+        usage = body.get("usage") if isinstance(body, dict) and isinstance(body.get("usage"), dict) else {}
+        input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or (sum(len(str(message.get("content") or "")) for message in messages) // 4))
+        output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or (len(result) // 4))
+        _app_call("schedule_llm_usage_event", 
+            settings,
+            status="succeeded",
+            latency_ms=int((time.monotonic() - started_at) * 1000),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            purpose=purpose,
+        )
+        return result
+
+    if credentials is not None:
+        try:
+            result = await call_once(credentials)
+            if track_health:
+                _app_call("_record_llm_success", credentials)
+            return (result, truncated_flag["hit"]) if want_truncated else result
+        except Exception as exc:
+            if track_health:
+                _app_call("_record_llm_failure", credentials, exc)
+            raise
+
+    state = _app_call("llm_provider_state")
+    candidates = state["candidates"]
+    if not candidates:
+        raise RuntimeError("未配置可调用的 LLM Provider")
+
+    first_error: Exception | None = None
+    errors: list[str] = []
+    for index, candidate in enumerate(candidates):
+        health = _app_call("_llm_health", candidate)
+        if health.get("status") == "cooling":
+            errors.append(f"{candidate.get('name', '未命名')}:rate_limit_cooling")
+            continue
+        try:
+            result = await call_once(candidate)
+            if track_health:
+                _app_call("_record_llm_success", candidate)
+            return (result, truncated_flag["hit"]) if want_truncated else result
+        except Exception as exc:
+            if track_health:
+                _app_call("_record_llm_failure", candidate, exc)
+            error_kind = _llm_error_kind(exc)
+            errors.append(f"{candidate.get('name', '未命名')}:{error_kind}")
+            if first_error is None:
+                first_error = exc
+            if not _llm_error_retryable(error_kind):
+                # Do not hide deterministic configuration/contract failures
+                # behind a later fallback. The category contains no upstream
+                # response body or credential-bearing request details.
+                raise RuntimeError(f"LLM 调用失败：{candidate.get('name', '未命名')}:{error_kind}") from exc
+            continue
+    if first_error:
+        raise RuntimeError(f"LLM 调用失败：{'；'.join(errors) or _llm_error_kind(first_error)}") from first_error
+    if candidates and all(_app_call("_llm_health", candidate).get("status") == "cooling" for candidate in candidates):
+        raise RuntimeError("所有 LLM Provider 当前处于冷却中，请稍后重试")
+    raise RuntimeError("LLM 调用失败")
+
+
+
+
+
+
+def _is_markdown_table_divider(line: str) -> bool:
+    """|---|:--:|---| 这种表格分隔行。
+
+    前端 static/markdown.js 里有同名判断，两边必须保持一致：一边认成表格、
+    另一边认成普通行的话，正文渲染出一张表，「结构化结果」里却是一堆碎条目。
+    """
+    text = str(line or "").strip()
+    return bool(text) and "-" in text and re.fullmatch(r"\|?[\s:|-]*-[\s:|-]*\|?", text) is not None
+
+
+
+
+
+def _contract_id_list(values: Any) -> list[str]:
+    """Normalize trace IDs without assuming every store uses the same type."""
+    if values is None:
+        return []
+    if not isinstance(values, (list, tuple, set)):
+        values = [values]
+    result: list[str] = []
+    for value in values:
+        if isinstance(value, dict):
+            value = value.get("id") or value.get("artifact_id") or value.get("work_item_id") or value.get("relation_id")
+        if value in (None, ""):
+            continue
+        normalized = str(value)
+        if normalized not in result:
+            result.append(normalized)
+    return result[:100]
+
+
+
+@app.get("/api/settings/llm")
+def get_llm_settings() -> dict[str, Any]:
+    state = _app_call("llm_provider_state")
+    return {
+        "llm": llm_settings(),
+        "has_global_key": bool(state["candidates"]),
+        "has_primary_config": state["primary_present"],
+    }
+
+
+@app.post("/api/settings/llm")
+
+@app.post("/api/settings/llm")
+def save_llm_settings(request: LLMSettingsRequest) -> dict[str, Any]:
+    providers = request.providers
+
+    saved = load_saved_llm_settings()
+    existing = normalize_llm_providers(saved)
+    existing_by_id = {str(item.get("id")): item for item in existing}
+    existing_by_name = {str(item.get("name")): item for item in existing}
+    normalized: list[dict[str, str]] = []
+    used_provider_ids: set[str] = set()
+    primary_count = 0
+    for index, raw in enumerate(providers[:20]):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or f"Provider {index + 1}").strip()[:120]
+        provider_id = _unique_llm_provider_id(raw.get("id") or name, index, used_provider_ids)
+        role = str(raw.get("role") or "fallback").strip().lower()
+        raw_base_url = str(raw.get("base_url") or "").strip()
+        base_url = normalize_llm_base_url(raw_base_url)
+        api_key = str(raw.get("api_key") or "").strip()
+        model = str(raw.get("model") or "").strip()
+        previous = existing_by_id.get(provider_id) or existing_by_name.get(name)
+        if not api_key and raw.get("preserve_api_key", True) and previous:
+            api_key = str(previous.get("api_key") or "")
+        # An empty key preserves the existing credential by default.  The UI
+        # sends clear_api_key=true only after the user explicitly asks to
+        # remove it; the provider entry itself remains visible and reusable.
+        if raw.get("clear_api_key"):
+            api_key = ""
+        if role not in {"primary", "fallback"}:
+            role = "fallback"
+        # An entry may be saved before it is complete.  This lets the UI keep
+        # a named provider in the fallback order while clearly marking it as
+        # disabled until its address, model and key are available.  Supplied
+        # values are still validated so a typo cannot become a callable route.
+        if raw_base_url and not base_url:
+            raise HTTPException(400, f"{name}：API 地址必须是 http/https，且不能包含用户名、密码、查询参数或 URL 片段")
+        if role == "primary":
+            primary_count += 1
+        normalized.append({
+            "id": provider_id,
+            "name": name,
+            "role": role,
+            "base_url": base_url,
+            "api_key": _clean_llm_token(api_key),
+            "model": model,
+        })
+    if primary_count > 1:
+        raise HTTPException(400, "主配置只能有一个，其余条目请设为 fallback")
+
+    save_global_llm_settings({"providers": normalized})
+
+    return {
+        "ok": True,
+        "llm": llm_settings(),
+        "has_global_key": bool(_app_call("llm_provider_state", )["candidates"]),
+        "has_primary_config": primary_count > 0,
+    }
+
+
+@app.post("/api/settings/llm/test")
+
+@app.post("/api/settings/llm/test")
+async def test_llm_settings(request: LLMTestRequest) -> dict[str, Any]:
+    raw_base_url = request.base_url.strip()
+    # A supplied address is an explicit user choice. Never silently replace an
+    # invalid new value with the address from a saved Provider.
+    if raw_base_url and not valid_http_url(raw_base_url):
+        raise HTTPException(400, "API 地址必须是 http/https，且不能包含用户名、密码、查询参数或 URL 片段")
+    base_url = normalize_llm_base_url(raw_base_url)
+    model = request.model.strip()
+    api_key = request.api_key.strip()
+    name = request.name.strip() or "测试条目"
+    # 空参数时优先按稳定 provider_id 找回已保存条目，再回退到名称、主配置或当前生效条目。
+    state = _app_call("llm_provider_state")
+    saved_provider = next((item for item in state["providers"] if request.provider_id and item.get("id") == request.provider_id), None)
+    # Name lookup is retained only for old clients that do not know provider_id.
+    saved_provider = saved_provider or next((item for item in state["providers"] if not request.provider_id and name and item.get("name") == name), None)
+    if not (base_url and model and api_key):
+        # A stable id identifies the exact row the user clicked.  Never fall
+        # back to the primary provider for a new/unsaved row, otherwise
+        # testing an incomplete entry could silently test a different model.
+        selected = saved_provider or (
+            {}
+            if request.provider_id
+            else state.get("primary") or (state.get("candidates") or [None])[0] or {}
+        )
+        base_url = base_url or str(selected.get("base_url") or "")
+        model = model or str(selected.get("model") or "")
+        api_key = api_key or str(selected.get("api_key") or "")
+        name = name or str(selected.get("name") or "已保存配置")
+    if not base_url:
+        raise HTTPException(400, "API 地址不能为空")
+    if not model:
+        raise HTTPException(400, "模型名不能为空")
+    if not api_key:
+        raise HTTPException(400, "API Key 不能为空（未保存可用凭证）")
+
+    started_at = time.monotonic()
+    try:
+        await call_llm(
+            [
+                {"role": "system", "content": "你正在进行接口连通性测试。只回复：连接成功。"},
+                {"role": "user", "content": "请回复连接成功。"},
+            ],
+            {**{"id": request.provider_id or _llm_provider_id(name), "name": name, "api_key": _clean_llm_token(api_key), "base_url": base_url, "model": model}, "source": "test", "provider": "test"},
+            max_tokens=24,
+            temperature=0,
+            purpose="test",
+            track_health=False,
+        )
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in {401, 403}:
+            reason = "认证失败：API Key 无效或没有该模型权限"
+        elif status == 404:
+            reason = "接口路径或模型名不存在"
+        elif status == 429:
+            reason = "限流：请求过多或模型冷却中"
+        else:
+            reason = f"接口返回 {status}"
+        raise HTTPException(502, reason) from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(502, "连接超时：请检查地址可达性或网络") from exc
+    except Exception as exc:
+        raise HTTPException(502, f"连接失败：{_llm_error_kind(exc)}") from exc
+    elapsed_ms = int((time.monotonic() - started_at) * 1000)
+    return {"ok": True, "message": "连接成功", "provider": name, "model": model, "endpoint": chat_completions_url(base_url), "latency_ms": elapsed_ms, "endpoint_policy": LLM_ENDPOINT_POLICY}
+
+__all__ = ["_app_call", "load_saved_llm_settings", "save_global_llm_settings", "_clean_llm_token", "_llm_provider_id", "_llm_provider_usable", "_llm_provider_disabled_reason", "_unique_llm_provider_id", "_llm_error_kind", "_llm_error_retryable", "_llm_health", "_persist_llm_health", "_record_llm_success", "_record_llm_failure", "record_llm_usage_event", "schedule_llm_usage_event", "llm_usage_metrics_payload", "_llm_key_from_environment", "normalize_llm_providers", "llm_fallback_credentials", "llm_provider_state", "llm_credentials", "llm_effective_candidate", "chat_completions_url", "llm_settings", "valid_http_url", "valid_research_url", "normalize_llm_base_url", "model_output_token_limit", "_llm_timeout", "llm_http_client", "stream_llm_text", "stream_llm_with_tools", "call_llm", "_call_llm_once", "_is_markdown_table_divider", "_contract_id_list", "get_llm_settings", "save_llm_settings", "test_llm_settings", "LLMSettingsRequest", "LLMTestRequest", "LLM_PROVIDER_HEALTH", "LLM_PROVIDER_COOLDOWN_SECONDS", "MODEL_OUTPUT_TOKEN_LIMITS", "LLM_MAX_CONTINUATIONS"]

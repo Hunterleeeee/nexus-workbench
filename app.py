@@ -903,6 +903,111 @@ RUNTIME_TOOL_POLICIES: dict[str, dict[str, Any]] = {
 }
 
 
+AGENT_ROUTE_HINTS: dict[str, tuple[str, ...]] = {
+    "inbox": ("待办", "收件箱", "记录", "提醒", "任务", "想法"),
+    "knowledge": ("知识库", "笔记", "沉淀", "总结", "方法", "obsidian"),
+    "doc-factory": ("文档", "报告", "方案", "交付", "pdf", "word"),
+    "sub2api": ("sub2api", "余额", "额度", "订阅", "key", "到期"),
+    "market": ("股票", "行情", "量化", "选股", "涨跌", "因子"),
+    "server": ("服务器", "主机", "磁盘", "内存", "nginx", "部署", "异常"),
+    "crawl4ai": ("爬虫", "抓取", "网页", "研究", "资料", "来源"),
+    "web-research": ("网页研究浏览器", "研究浏览器", "标签页", "网页", "来源", "引用"),
+    "aihot": ("ai热点", "AI 热点", "资讯", "新闻", "热点", "最新消息"),
+    "idea-analysis": ("想法", "商机", "创业", "做点事", "靠谱不靠谱", "项目分析", "可行性"),
+    "product-manager": ("产品经理", "产品需求", "用户反馈", "需求池", "prd", "优先级", "rice", "产品决策"),
+    "cid-dashboard": ("独立开发", "项目看板", "github", "赛道", "产品机会"),
+    "ai-learning": ("ai学习", "AI 学习", "ai转型", "AI 转型", "学习计划", "课程", "案例", "练习"),
+}
+
+AGENT_PLAYBOOKS: dict[str, dict[str, Any]] = {
+    "workbench": {
+        "mission": "把复杂请求拆成项目任务，调用真正有数据和工具的子 Agent，再汇总为可执行决策",
+        "workflow": "识别目标 → 选择子 Agent → 检查上下文新鲜度 → 调用工具/分析 → 写入工作项 → 汇总与追踪",
+        "output": ["任务拆解", "子 Agent 证据", "已执行动作", "待确认事项", "下一步与负责人"],
+        "autonomy": "低风险本地动作自动执行；外部、不可逆和有歧义动作必须确认",
+    },
+    "inbox": {
+        "mission": "把输入变成不丢失、可分类、可继续处理的收件箱条目",
+        "workflow": "识别内容类型 → 提取任务/截止时间/标签 → 判断是否重复 → 生成目标 Agent 候选 → 用户确认后创建工作项",
+        "output": ["类型判断", "原文事实", "建议标签", "可直接执行动作", "后续路由"],
+        "autonomy": "记录和本地整理自动执行；跨项目交接先展示候选，确认后才创建 WorkItem/Relation",
+    },
+    "knowledge": {
+        "mission": "把零散信息变成可检索、可引用、可复用的知识资产",
+        "workflow": "检索工作台与 Obsidian → 查看今日更新/双链关系 → 对比已有内容 → 提炼原子结论 → 保留来源/双链 → 用户确认后写入 Obsidian Inbox",
+        "output": ["相关笔记", "新增事实", "冲突与缺口", "笔记草稿", "链接/标签建议"],
+        "autonomy": "Obsidian 只读扫描、今日更新、关联和 MOC 提示可自动执行；写入 00 Inbox 必须用户明确确认，不覆盖 Vault 原文件",
+    },
+    "doc-factory": {
+        "mission": "把材料加工成版本化、可交付、可校验的文档产物",
+        "workflow": "识别交付对象 → 检查材料完整性 → 选择模板 → 生成新版本 → 记录来源与版本链 → 列出校验项",
+        "output": ["交付目标", "材料缺口", "文档结构", "初稿/改稿建议", "校验清单"],
+        "autonomy": "只创建新版本产物；不覆盖既有文件",
+    },
+    "sub2api": {
+        "mission": "解释账户、每周额度、订阅到期和 Key 用量，主动发现风险",
+        "workflow": "确认快照时间 → 区分余额/周额度/月额度 → 判断趋势与阈值 → 生成提醒",
+        "output": ["数据时间", "核心指标", "变化与风险", "提醒级别", "建议动作"],
+        "autonomy": "只读脱敏快照；登录、充值、删除 Key 和外部操作必须确认",
+    },
+    "market": {
+        "mission": "从自选和行情快照中解释涨跌、风险和可验证的选股线索，不做交易",
+        "workflow": "读取自选与历史快照 → 检查数据时间/异常 → 解释日涨跌、开盘和成交量 → 给出观察假设 → 写入自选或观察任务",
+        "output": ["行情状态", "变化解释", "因子/假设", "风险边界", "观察动作"],
+        "autonomy": "添加本地自选可自动执行；买卖、下单和外部发送永远禁止自动执行",
+    },
+    "server": {
+        "mission": "对服务器做只读体检，定位异常并给出可回滚的处理建议",
+        "workflow": "检查主机与快照时间 → 对比负载/磁盘/内存/服务 → 判断影响范围 → 创建告警工作项",
+        "output": ["体检结果", "异常证据", "影响范围", "排查顺序", "需确认的变更"],
+        "autonomy": "只读探测和告警可自动执行；重启、部署、配置修改必须人工确认",
+    },
+    "crawl4ai": {
+        "mission": "围绕研究问题抓取证据、标注来源、比较信息并形成可追溯结论",
+        "workflow": "拆研究问题 → 抓取来源 → 提取证据 → 区分事实/推断 → 交接笔记或文档",
+        "output": ["研究问题", "来源与证据", "事实/推断", "缺口", "交接产物"],
+        "autonomy": "抓取和本地证据整理可执行；对外发布和发送必须确认",
+    },
+    "web-research": {
+        "mission": "把多个网页和研究问题组织成可追问、可引用、可交接的研究上下文",
+        "workflow": "建立标签页上下文 → 抓取公开来源 → 区分事实/推断 → 保存 Artifact 或交接",
+        "output": ["研究问题", "来源与证据", "事实/推断", "缺口", "交接产物"],
+        "autonomy": "只抓取公开网页并保存本地研究记录；登录、表单提交和外部发布必须人工确认",
+    },
+    "aihot": {
+        "mission": "从 AI 热点中筛出最新、有用且可转化的信号，避免重复和噪音",
+        "workflow": "去重 → 按价值/时效筛选 → 提取事实 → 判断影响 → 形成机会线索与追问",
+        "output": ["精选信号", "来源链接", "为什么重要", "可验证机会", "下一步研究"],
+        "autonomy": "读取、筛选和生成研究任务可执行；对外转载或发送必须确认",
+    },
+    "idea-analysis": {
+        "mission": "把模糊想法变成可证伪的需求假设、商业判断和 7 天验证计划",
+        "workflow": "澄清用户/场景 → 找替代方案 → 判断痛点与付费 → 估算最小方案 → 安排验证",
+        "output": ["一句话判断", "关键假设", "证据与未知", "反证条件", "7 天验证计划"],
+        "autonomy": "只保存会话和本地验证任务；对外访谈、投放和收费动作必须确认",
+    },
+    "product-manager": {
+        "mission": "把零散反馈和研究证据转成可排序、可评审、可复盘的产品决策",
+        "workflow": "核对反馈来源 → 聚类用户问题 → 检查需求证据 → 评估 RICE 与风险 → 形成 PRD/决策建议 → 跟踪下一步",
+        "output": ["今日产品结论", "反馈与来源", "需求优先级", "证据缺口", "评审问题", "下一步动作"],
+        "autonomy": "读取、分析和本地草稿可自动执行；调整优先级、确认决策和对外交付必须由产品经理确认",
+    },
+    "cid-dashboard": {
+        "mission": "把看板中的项目和趋势转成可研究、可比较、可验证的机会卡",
+        "workflow": "筛选项目 → 识别用户/分发/收入线索 → 对比竞品 → 判断可复制性 → 生成研究任务",
+        "output": ["项目摘要", "机会信号", "竞品/替代", "风险", "研究任务"],
+        "autonomy": "只读分析和本地任务记录；联系作者或复制外部内容必须确认",
+    },
+    "ai-learning": {
+        "mission": "围绕个人转型目标，用每天一节可完成的小课把 AI 知识转成工作能力和作品证据",
+        "workflow": "读取目标与进度 → 选择不重复主题 → 讲清知识 → 拆解工作案例 → 布置练习与自测 → 记录复盘",
+        "output": ["今日知识", "案例拆解", "动手练习", "自测解释", "下一步与沉淀建议"],
+        "autonomy": "课程生成、进度记录和本地提醒可自动执行；对外发布作品或发送内容必须确认",
+    },
+}
+
+AGENT_RESULT_CONTRACT_VERSION = "1.1"
+
 def runtime_tool_policy(name: str) -> dict[str, Any]:
     """查不到策略的工具按「需要确认」处理。
 
@@ -7814,41 +7919,6 @@ assert_subagent_tools_exist()
 # provider after ``connect`` seconds instead of holding the run for two minutes,
 # while long generations still get the full read budget.
 # ---------------------------------------------------------------------------
-def _llm_timeout() -> httpx.Timeout:
-    try:
-        read = float(os.getenv("WORKBENCH_LLM_READ_TIMEOUT_SECONDS", "120") or 120)
-    except (TypeError, ValueError):
-        read = 120.0
-    try:
-        connect = float(os.getenv("WORKBENCH_LLM_CONNECT_TIMEOUT_SECONDS", "10") or 10)
-    except (TypeError, ValueError):
-        connect = 10.0
-    return httpx.Timeout(read, connect=connect, write=30.0, pool=10.0)
-
-
-_LLM_HTTP_CLIENTS: dict[str, httpx.AsyncClient] = {}
-_LLM_HTTP_CLIENT_LOCK = asyncio.Lock()
-
-
-async def llm_http_client() -> httpx.AsyncClient:
-    """Return the pooled client for the current proxy setting."""
-    proxy = os.getenv("LLM_PROXY", "").strip()
-    async with _LLM_HTTP_CLIENT_LOCK:
-        client = _LLM_HTTP_CLIENTS.get(proxy)
-        if client is not None and not client.is_closed:
-            return client
-        options: dict[str, Any] = {
-            "timeout": _llm_timeout(),
-            "trust_env": False,
-            "limits": httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=90.0),
-        }
-        if proxy:
-            options["proxy"] = proxy
-        client = httpx.AsyncClient(**options)
-        _LLM_HTTP_CLIENTS[proxy] = client
-        return client
-
-
 async def close_llm_http_clients() -> None:
     async with _LLM_HTTP_CLIENT_LOCK:
         for client in list(_LLM_HTTP_CLIENTS.values()):
@@ -7859,672 +7929,10 @@ async def close_llm_http_clients() -> None:
         _LLM_HTTP_CLIENTS.clear()
 
 
-# 一次回答最多续写几段。设上限是因为「一直续下去」在模型跑偏时会烧掉大量额度，
-# 而 4 段（默认 4000 tokens 一段）已经够写完任何一份正常的分析。
-LLM_MAX_CONTINUATIONS = _int_env("WORKBENCH_LLM_MAX_CONTINUATIONS", 4, minimum=0, maximum=10)
 
 
 class LLMStreamError(RuntimeError):
     """流式 LLM 调用失败的统一错误（带 provider 名，便于 failover 提示）。"""
-
-
-async def stream_llm_text(
-    messages: list[dict[str, str]],
-    *,
-    max_tokens: int = 4000,
-    temperature: float = 0.2,
-    purpose: str = "agent",
-    reasoning: bool = False,
-):
-    """流式调用 LLM，逐块产出 dict；被 max_tokens 截断时自动续写。
-
-    产出格式（每块一个 dict，由调用方决定如何消费）：
-      {"type": "delta", "text": str, "reasoning": str}        内容增量（可能为空串）
-      {"type": "finish", "reason": str, "usage": dict|None, "provider": str}
-      {"type": "reset", "provider": str}                         已输出的半段内容作废，fallback 将从头回答
-      {"type": "error", "message": str, "provider": str,
-       "recoverable": bool}                                        当前 provider 失败或整条流最终失败
-
-    语义与 call_llm 一致：主配置失败后依次尝试 fallback 候选，而不是让整条
-    链路随第一个 Provider 一起失败。工具轮次（ReAct）仍用非流式 call_llm_with_tools，
-    这里只服务"最终文字回答"的流式输出。
-
-    截断续写：finish_reason == "length" 时，把这一段回填成 assistant 消息再要
-    下一段，最多续 LLM_MAX_CONTINUATIONS 次；续写期间的 finish 扣住不外发
-    （否则前端以为答案完了）。续满上限会在正文末尾明说「还有内容没写完」，
-    并把 reason 标成 length_capped。
-    """
-    state = llm_provider_state()
-    candidates = state.get("candidates") or []
-    if not candidates:
-        yield {"type": "error", "message": "未配置可调用的 LLM Provider", "provider": "", "recoverable": False}
-        return
-
-    async def _one_stream(provider: dict[str, Any], segment_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """单段流式请求；yield 增量文本，返回段内元信息。失败返回 None。"""
-        started_at = time.monotonic()
-        api_key = str(provider.get("api_key") or "")
-        model = str(provider.get("model") or "")
-        base_url = str(provider.get("base_url") or "")
-        provider_name = str(provider.get("name") or model or "未命名")
-        if not api_key or not model or not base_url:
-            yield {"type": "meta", "meta": {"error": "配置不完整", "provider": provider_name}}
-            return
-        payload = {
-            "model": model,
-            "messages": segment_messages,
-            "temperature": temperature,
-            "max_tokens": model_output_token_limit(model, max_tokens),
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        text_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        finish_reason = ""
-        usage: dict[str, Any] | None = None
-        try:
-            client = await llm_http_client()
-            async with client.stream(
-                "POST", chat_completions_url(base_url), headers=headers, json=payload
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    choice = ((chunk.get("choices") or [{}])[0]) or {}
-                    delta = choice.get("delta") or {}
-                    piece = delta.get("content") or ""
-                    think = delta.get("reasoning_content") or ""
-                    if piece:
-                        text_parts.append(piece)
-                        yield {"type": "delta", "text": piece, "reasoning": ""}
-                    if think and reasoning:
-                        reasoning_parts.append(think)
-                        yield {"type": "delta", "text": "", "reasoning": think}
-                    if choice.get("finish_reason"):
-                        finish_reason = str(choice.get("finish_reason") or "")
-                    if chunk.get("usage"):
-                        usage = chunk.get("usage") or None
-        except Exception as exc:
-            schedule_llm_usage_event(
-                provider,
-                status="failed",
-                error_kind=_llm_error_kind(exc),
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=sum(len(str(m.get("content") or "")) for m in segment_messages) // 4,
-                purpose=purpose,
-            )
-            await asyncio.to_thread(_record_llm_failure, provider, exc)
-            yield {"type": "meta", "meta": {"error": f"Provider「{provider_name}」失败：{clip(str(exc), 120)}", "provider": provider_name}}
-            return
-        result = "".join(text_parts).strip() or "".join(reasoning_parts).strip()
-        input_tokens = int((usage or {}).get("prompt_tokens") or (sum(len(str(m.get("content") or "")) for m in segment_messages) // 4))
-        output_tokens = int((usage or {}).get("completion_tokens") or (len(result) // 4))
-        schedule_llm_usage_event(
-            provider,
-            status="succeeded",
-            latency_ms=int((time.monotonic() - started_at) * 1000),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            purpose=purpose,
-        )
-        await asyncio.to_thread(_record_llm_success, provider)
-        if not result and finish_reason != "length":
-            yield {"type": "meta", "meta": {"error": f"Provider「{provider_name}」流式返回为空，尝试下一个…", "provider": provider_name}}
-            return
-        yield {
-            "type": "meta",
-            "meta": {
-                "text": result,
-                "finish_reason": finish_reason or "stop",
-                "usage": usage,
-                "provider": provider_name,
-                "reasoning": "".join(reasoning_parts).strip(),
-            },
-        }
-
-    errors: list[str] = []
-    emitted_any = False
-    for provider in candidates:
-        if _llm_health(provider).get("status") == "cooling":
-            errors.append(f"{provider.get('name', '未命名')}:rate_limit_cooling")
-            continue
-        segment_messages = list(messages)
-        final_text = ""
-        final_usage = None
-        final_reason = "stop"
-        segment_index = 0
-        truncated = False
-        segment_error = None
-        while segment_index <= LLM_MAX_CONTINUATIONS:
-            meta: dict[str, Any] | None = None
-            async for chunk in _one_stream(provider, segment_messages):
-                if chunk["type"] == "delta":
-                    final_text += chunk["text"]
-                    emitted_any = True
-                    yield chunk
-                elif chunk["type"] == "meta":
-                    meta = chunk["meta"]
-            if meta is None:
-                # 段内异常：未产出任何内容则交给 failover；已产出半段要 reset。
-                segment_error = "段内中断"
-                if final_text:
-                    yield {"type": "reset", "provider": str(provider.get("name") or "")}
-                break
-            if "error" in meta:
-                segment_error = meta["error"]
-                if final_text:
-                    yield {"type": "reset", "provider": str(provider.get("name") or "")}
-                errors.append(segment_error)
-                break
-            final_usage = meta["usage"]
-            final_reason = str(meta["finish_reason"] or "stop")
-            if final_reason != "length":
-                truncated = False
-                break
-            # 截断了：回填这一段的 assistant 文本，继续要下一段。
-            truncated = True
-            segment_text = str(meta.get("text") or "")
-            if not segment_text:
-                truncated = False
-                break
-            segment_messages = [*segment_messages, {"role": "assistant", "content": segment_text}]
-            segment_index += 1
-        if segment_error and not emitted_any:
-            # 第一个 provider 就失败且什么都没吐：继续尝试下一个。
-            continue
-        if truncated:
-            # 续满上限仍被截断：明说没写完，并标记 reason。
-            tail = f"\n\n（回答已达到 {LLM_MAX_CONTINUATIONS + 1} 段续写上限，后面还有内容没写完，可要求继续。）"
-            final_text += tail
-            emitted_any = True
-            yield {"type": "delta", "text": tail, "reasoning": ""}
-            final_reason = "length_capped"
-        yield {"type": "finish", "reason": final_reason, "usage": final_usage, "provider": str(meta.get("provider") or "") if meta else ""}
-        return
-    yield {"type": "error", "message": f"全部 LLM Provider 均失败（{'; '.join(errors)[:300]}）", "provider": "", "recoverable": False}
-
-
-async def stream_llm_with_tools(
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
-    *,
-    purpose: str = "agent_tools",
-):
-    """流式版带工具调用（OpenAI function calling）。
-
-    流式过程中无法提前知道模型这轮是调工具还是直接回答，所以逐块判断：
-      - delta.content 出现 → 文本增量（回答），yield {"type":"delta_text","text":...}
-      - delta.tool_calls 出现 → 按 index 累积拼装 arguments，最后 yield 完整 tool_calls
-    结束统一 yield {"type":"round_done","mode":"answer"|"tools","content":str,"tool_calls":[...],"usage":...,"provider":...}
-    failover 语义与 call_llm_with_tools 一致。产出均为 dict，由 ReAct 循环消费。
-    """
-    state = llm_provider_state()
-    candidates = state.get("candidates") or []
-    if not candidates:
-        yield {"type": "error", "message": "未配置可调用的 LLM Provider", "provider": "", "recoverable": False}
-        return
-
-    errors: list[str] = []
-    for provider in candidates:
-        if _llm_health(provider).get("status") == "cooling":
-            errors.append(f"{provider.get('name', '未命名')}:rate_limit_cooling")
-            continue
-        started_at = time.monotonic()
-        api_key = str(provider.get("api_key") or "")
-        model = str(provider.get("model") or "")
-        base_url = str(provider.get("base_url") or "")
-        provider_name = str(provider.get("name") or model or "未命名")
-        if not api_key or not model or not base_url:
-            errors.append(f"{provider_name}:配置不完整")
-            continue
-        payload = {
-            "model": model,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
-            "max_tokens": model_output_token_limit(model, 3000),
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        try:
-            client = await llm_http_client()
-            content_parts: list[str] = []
-            tool_slots: dict[int, dict[str, Any]] = {}
-            finish_reason = ""
-            usage: dict[str, Any] | None = None
-            async with client.stream(
-                "POST", chat_completions_url(base_url), headers=headers, json=payload
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    choice = ((chunk.get("choices") or [{}])[0]) or {}
-                    delta = choice.get("delta") or {}
-                    piece = delta.get("content") or ""
-                    if piece:
-                        content_parts.append(piece)
-                        yield {"type": "delta_text", "text": piece}
-                    # 推理型模型会把思考写在 reasoning_content 里。这里以前直接扔掉，
-                    # 于是「Agent 想了 20 秒才开口」这段时间页面上什么都没有。
-                    # 只转发、不计入 content：它不是回答的一部分。
-                    think = delta.get("reasoning_content") or ""
-                    if think:
-                        yield {"type": "delta", "text": "", "reasoning": think}
-                    for tc in delta.get("tool_calls") or []:
-                        index = int(tc.get("index") or 0)
-                        slot = tool_slots.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                        fn = tc.get("function") or {}
-                        if tc.get("id"):
-                            slot["id"] = str(tc["id"])
-                        if fn.get("name"):
-                            slot["function"]["name"] = str(fn["name"])
-                        if fn.get("arguments"):
-                            slot["function"]["arguments"] = (slot["function"]["arguments"] or "") + str(fn["arguments"])
-                    if choice.get("finish_reason"):
-                        finish_reason = str(choice.get("finish_reason") or "")
-                    if chunk.get("usage"):
-                        usage = chunk.get("usage") or None
-            content = "".join(content_parts).strip()
-            tool_calls = [tool_slots[index] for index in sorted(tool_slots)]
-            input_tokens = int((usage or {}).get("prompt_tokens") or (sum(len(str(m.get("content") or "")) for m in messages) // 4))
-            output_tokens = int((usage or {}).get("completion_tokens") or ((len(content) + sum(len(str(t.get("function", {}).get("arguments") or "")) for t in tool_calls)) // 4))
-            schedule_llm_usage_event(
-                provider,
-                status="succeeded",
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                purpose=purpose,
-            )
-            await asyncio.to_thread(_record_llm_success, provider)
-            mode = "tools" if tool_calls else "answer"
-            yield {"type": "round_done", "mode": mode, "content": content, "tool_calls": tool_calls, "finish_reason": finish_reason, "usage": usage, "provider": provider_name}
-            return
-        except Exception as exc:
-            schedule_llm_usage_event(
-                provider,
-                status="failed",
-                error_kind=_llm_error_kind(exc),
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=sum(len(str(m.get("content") or "")) for m in messages) // 4,
-                purpose=purpose,
-            )
-            await asyncio.to_thread(_record_llm_failure, provider, exc)
-            errors.append(f"{provider_name}:{clip(str(exc), 120)}")
-            if content_parts:
-                yield {"type": "reset", "provider": provider_name}
-            yield {
-                "type": "error",
-                "message": f"Provider「{provider_name}」失败：{clip(str(exc), 120)}",
-                "provider": provider_name,
-                "recoverable": True,
-            }
-            continue
-    yield {"type": "error", "message": f"全部 LLM Provider 均失败（{'; '.join(errors)[:300]}）", "provider": "", "recoverable": False}
-
-
-async def call_llm(
-    messages: list[dict[str, str]],
-    credentials: dict[str, str] | None = None,
-    *,
-    max_tokens: int = 4000,
-    temperature: float = 0.2,
-    purpose: str = "agent",
-    track_health: bool = True,
-    continue_on_truncation: bool = True,
-) -> str:
-    """调用 LLM；被 max_tokens 截断时自动续写，直到写完或达到续写上限。
-
-    在这之前，finish_reason == "length" 只是被记了一条 usage 事件，然后把半截
-    答案原样返回——用户看到的就是一段写到一半、经常停在句子中间的回答，而且
-    没有任何提示说它被截断了。调大 max_tokens 不解决问题：各家 Provider 对
-    单次输出都有上限，长任务照样会撞上。所以改成检测到截断就接着写。
-    """
-    if not continue_on_truncation or LLM_MAX_CONTINUATIONS <= 0:
-        return await _call_llm_once(messages, credentials, max_tokens=max_tokens, temperature=temperature,
-                                    purpose=purpose, track_health=track_health)
-    parts: list[str] = []
-    working = list(messages)
-    for round_index in range(LLM_MAX_CONTINUATIONS + 1):
-        text, truncated = await _call_llm_once(
-            working, credentials, max_tokens=max_tokens, temperature=temperature,
-            purpose=purpose if round_index == 0 else f"{purpose}_continue",
-            track_health=track_health, want_truncated=True,
-        )
-        parts.append(text)
-        if not truncated:
-            break
-        if round_index == LLM_MAX_CONTINUATIONS:
-            # 续到上限还没写完：明确告诉用户，而不是让他以为这就是全文。
-            parts.append(f"\n\n（回答已达到 {LLM_MAX_CONTINUATIONS + 1} 段续写上限，后面还有内容没写完。"
-                         f"可以让我针对其中某一部分单独展开。）")
-            break
-        working = [
-            *working,
-            {"role": "assistant", "content": text},
-            {"role": "user", "content": "你上一段在这里被长度限制截断了。请紧接着最后一个字继续往下写，"
-                                        "不要重复已经写过的内容，也不要重新开头或加过渡语，直接接着写。"},
-        ]
-    # 续写是接着上一段最后一个字写的，所以直接拼接，中间不加分隔符。
-    return "".join(parts).strip()
-
-
-async def _call_llm_once(
-    messages: list[dict[str, str]],
-    credentials: dict[str, str] | None = None,
-    *,
-    max_tokens: int = 4000,
-    temperature: float = 0.2,
-    purpose: str = "agent",
-    track_health: bool = True,
-    want_truncated: bool = False,
-) -> Any:
-    truncated_flag = {"hit": False}
-
-    async def call_once(settings: dict[str, str]) -> str:
-        started_at = time.monotonic()
-        truncated_flag["hit"] = False
-        if not _llm_provider_usable(settings):
-            raise RuntimeError(_llm_provider_disabled_reason(settings) or "LLM Provider 配置不完整")
-        api_key = settings["api_key"]
-
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        # max_tokens 跟随模型能力：请求值先按模型输出上限 clamp，避免超过模型
-        # 实际上限（API 拒绝）或低于需求（长任务被截断）。
-        effective_max_tokens = model_output_token_limit(settings.get("model", ""), max_tokens)
-        payload = {
-            "model": settings["model"],
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": effective_max_tokens,
-        }
-        try:
-            client = await llm_http_client()
-            response = await client.post(
-                chat_completions_url(settings["base_url"]),
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            body = response.json()
-        except Exception as exc:
-            schedule_llm_usage_event(
-                settings,
-                status="failed",
-                error_kind=_llm_error_kind(exc),
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=sum(len(str(message.get("content") or "")) for message in messages) // 4,
-                purpose=purpose,
-            )
-            raise
-        try:
-            message = body["choices"][0]["message"]
-            content = message.get("content", "") or ""
-            reasoning = message.get("reasoning_content", "") or ""
-            finish_reason = str((body.get("choices") or [{}])[0].get("finish_reason") or "")
-        except (KeyError, IndexError, TypeError) as exc:
-            error = RuntimeError("LLM 返回格式不符合 OpenAI Chat Completions 规范")
-            schedule_llm_usage_event(
-                settings,
-                status="failed",
-                error_kind="invalid_response",
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=sum(len(str(item.get("content") or "")) for item in messages) // 4,
-                purpose=purpose,
-            )
-            raise error from exc
-        # 输出被 max_tokens 截断：finish_reason=length 说明 LLM 还有内容没写完。
-        # 记录告警事件，便于排查"回答不完整"。
-        if finish_reason == "length":
-            truncated_flag["hit"] = True
-            try:
-                schedule_llm_usage_event(
-                    settings,
-                    status="truncated",
-                    error_kind="max_tokens_exceeded",
-                    latency_ms=int((time.monotonic() - started_at) * 1000),
-                    input_tokens=sum(len(str(message.get("content") or "")) for message in messages) // 4,
-                    output_tokens=len(str(content or reasoning)) // 4,
-                    purpose=purpose,
-                )
-            except Exception:
-                log.debug("忽略异常（call_once）", exc_info=True)
-        if isinstance(content, list):
-            content = "\n".join(str(item.get("text", item)) for item in content)
-        result = str(content).strip() or str(reasoning).strip()
-        if not result:
-            error = RuntimeError("LLM 返回为空")
-            schedule_llm_usage_event(
-                settings,
-                status="failed",
-                error_kind=_llm_error_kind(error),
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                input_tokens=sum(len(str(message.get("content") or "")) for message in messages) // 4,
-                purpose=purpose,
-            )
-            raise error
-        usage = body.get("usage") if isinstance(body, dict) and isinstance(body.get("usage"), dict) else {}
-        input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or (sum(len(str(message.get("content") or "")) for message in messages) // 4))
-        output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or (len(result) // 4))
-        schedule_llm_usage_event(
-            settings,
-            status="succeeded",
-            latency_ms=int((time.monotonic() - started_at) * 1000),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            purpose=purpose,
-        )
-        return result
-
-    if credentials is not None:
-        try:
-            result = await call_once(credentials)
-            if track_health:
-                _record_llm_success(credentials)
-            return (result, truncated_flag["hit"]) if want_truncated else result
-        except Exception as exc:
-            if track_health:
-                _record_llm_failure(credentials, exc)
-            raise
-
-    state = llm_provider_state()
-    candidates = state["candidates"]
-    if not candidates:
-        raise RuntimeError("未配置可调用的 LLM Provider")
-
-    first_error: Exception | None = None
-    errors: list[str] = []
-    for index, candidate in enumerate(candidates):
-        health = _llm_health(candidate)
-        if health.get("status") == "cooling":
-            errors.append(f"{candidate.get('name', '未命名')}:rate_limit_cooling")
-            continue
-        try:
-            result = await call_once(candidate)
-            if track_health:
-                _record_llm_success(candidate)
-            return (result, truncated_flag["hit"]) if want_truncated else result
-        except Exception as exc:
-            if track_health:
-                _record_llm_failure(candidate, exc)
-            error_kind = _llm_error_kind(exc)
-            errors.append(f"{candidate.get('name', '未命名')}:{error_kind}")
-            if first_error is None:
-                first_error = exc
-            if not _llm_error_retryable(error_kind):
-                # Do not hide deterministic configuration/contract failures
-                # behind a later fallback. The category contains no upstream
-                # response body or credential-bearing request details.
-                raise RuntimeError(f"LLM 调用失败：{candidate.get('name', '未命名')}:{error_kind}") from exc
-            continue
-    if first_error:
-        raise RuntimeError(f"LLM 调用失败：{'；'.join(errors) or _llm_error_kind(first_error)}") from first_error
-    if candidates and all(_llm_health(candidate).get("status") == "cooling" for candidate in candidates):
-        raise RuntimeError("所有 LLM Provider 当前处于冷却中，请稍后重试")
-    raise RuntimeError("LLM 调用失败")
-
-AGENT_ROUTE_HINTS: dict[str, tuple[str, ...]] = {
-    "inbox": ("待办", "收件箱", "记录", "提醒", "任务", "想法"),
-    "knowledge": ("知识库", "笔记", "沉淀", "总结", "方法", "obsidian"),
-    "doc-factory": ("文档", "报告", "方案", "交付", "pdf", "word"),
-    "sub2api": ("sub2api", "余额", "额度", "订阅", "key", "到期"),
-    "market": ("股票", "行情", "量化", "选股", "涨跌", "因子"),
-    "server": ("服务器", "主机", "磁盘", "内存", "nginx", "部署", "异常"),
-    "crawl4ai": ("爬虫", "抓取", "网页", "研究", "资料", "来源"),
-    "web-research": ("网页研究浏览器", "研究浏览器", "标签页", "网页", "来源", "引用"),
-    "aihot": ("ai热点", "AI 热点", "资讯", "新闻", "热点", "最新消息"),
-    "idea-analysis": ("想法", "商机", "创业", "做点事", "靠谱不靠谱", "项目分析", "可行性"),
-    "product-manager": ("产品经理", "产品需求", "用户反馈", "需求池", "prd", "优先级", "rice", "产品决策"),
-    "cid-dashboard": ("独立开发", "项目看板", "github", "赛道", "产品机会"),
-    "ai-learning": ("ai学习", "AI 学习", "ai转型", "AI 转型", "学习计划", "课程", "案例", "练习"),
-}
-
-
-AGENT_PLAYBOOKS: dict[str, dict[str, Any]] = {
-    "workbench": {
-        "mission": "把复杂请求拆成项目任务，调用真正有数据和工具的子 Agent，再汇总为可执行决策",
-        "workflow": "识别目标 → 选择子 Agent → 检查上下文新鲜度 → 调用工具/分析 → 写入工作项 → 汇总与追踪",
-        "output": ["任务拆解", "子 Agent 证据", "已执行动作", "待确认事项", "下一步与负责人"],
-        "autonomy": "低风险本地动作自动执行；外部、不可逆和有歧义动作必须确认",
-    },
-    "inbox": {
-        "mission": "把输入变成不丢失、可分类、可继续处理的收件箱条目",
-        "workflow": "识别内容类型 → 提取任务/截止时间/标签 → 判断是否重复 → 生成目标 Agent 候选 → 用户确认后创建工作项",
-        "output": ["类型判断", "原文事实", "建议标签", "可直接执行动作", "后续路由"],
-        "autonomy": "记录和本地整理自动执行；跨项目交接先展示候选，确认后才创建 WorkItem/Relation",
-    },
-    "knowledge": {
-        "mission": "把零散信息变成可检索、可引用、可复用的知识资产",
-        "workflow": "检索工作台与 Obsidian → 查看今日更新/双链关系 → 对比已有内容 → 提炼原子结论 → 保留来源/双链 → 用户确认后写入 Obsidian Inbox",
-        "output": ["相关笔记", "新增事实", "冲突与缺口", "笔记草稿", "链接/标签建议"],
-        "autonomy": "Obsidian 只读扫描、今日更新、关联和 MOC 提示可自动执行；写入 00 Inbox 必须用户明确确认，不覆盖 Vault 原文件",
-    },
-    "doc-factory": {
-        "mission": "把材料加工成版本化、可交付、可校验的文档产物",
-        "workflow": "识别交付对象 → 检查材料完整性 → 选择模板 → 生成新版本 → 记录来源与版本链 → 列出校验项",
-        "output": ["交付目标", "材料缺口", "文档结构", "初稿/改稿建议", "校验清单"],
-        "autonomy": "只创建新版本产物；不覆盖既有文件",
-    },
-    "sub2api": {
-        "mission": "解释账户、每周额度、订阅到期和 Key 用量，主动发现风险",
-        "workflow": "确认快照时间 → 区分余额/周额度/月额度 → 判断趋势与阈值 → 生成提醒",
-        "output": ["数据时间", "核心指标", "变化与风险", "提醒级别", "建议动作"],
-        "autonomy": "只读脱敏快照；登录、充值、删除 Key 和外部操作必须确认",
-    },
-    "market": {
-        "mission": "从自选和行情快照中解释涨跌、风险和可验证的选股线索，不做交易",
-        "workflow": "读取自选与历史快照 → 检查数据时间/异常 → 解释日涨跌、开盘和成交量 → 给出观察假设 → 写入自选或观察任务",
-        "output": ["行情状态", "变化解释", "因子/假设", "风险边界", "观察动作"],
-        "autonomy": "添加本地自选可自动执行；买卖、下单和外部发送永远禁止自动执行",
-    },
-    "server": {
-        "mission": "对服务器做只读体检，定位异常并给出可回滚的处理建议",
-        "workflow": "检查主机与快照时间 → 对比负载/磁盘/内存/服务 → 判断影响范围 → 创建告警工作项",
-        "output": ["体检结果", "异常证据", "影响范围", "排查顺序", "需确认的变更"],
-        "autonomy": "只读探测和告警可自动执行；重启、部署、配置修改必须人工确认",
-    },
-    "crawl4ai": {
-        "mission": "围绕研究问题抓取证据、标注来源、比较信息并形成可追溯结论",
-        "workflow": "拆研究问题 → 抓取来源 → 提取证据 → 区分事实/推断 → 交接笔记或文档",
-        "output": ["研究问题", "来源与证据", "事实/推断", "缺口", "交接产物"],
-        "autonomy": "抓取和本地证据整理可执行；对外发布和发送必须确认",
-    },
-    "web-research": {
-        "mission": "把多个网页和研究问题组织成可追问、可引用、可交接的研究上下文",
-        "workflow": "建立标签页上下文 → 抓取公开来源 → 区分事实/推断 → 保存 Artifact 或交接",
-        "output": ["研究问题", "来源与证据", "事实/推断", "缺口", "交接产物"],
-        "autonomy": "只抓取公开网页并保存本地研究记录；登录、表单提交和外部发布必须人工确认",
-    },
-    "aihot": {
-        "mission": "从 AI 热点中筛出最新、有用且可转化的信号，避免重复和噪音",
-        "workflow": "去重 → 按价值/时效筛选 → 提取事实 → 判断影响 → 形成机会线索与追问",
-        "output": ["精选信号", "来源链接", "为什么重要", "可验证机会", "下一步研究"],
-        "autonomy": "读取、筛选和生成研究任务可执行；对外转载或发送必须确认",
-    },
-    "idea-analysis": {
-        "mission": "把模糊想法变成可证伪的需求假设、商业判断和 7 天验证计划",
-        "workflow": "澄清用户/场景 → 找替代方案 → 判断痛点与付费 → 估算最小方案 → 安排验证",
-        "output": ["一句话判断", "关键假设", "证据与未知", "反证条件", "7 天验证计划"],
-        "autonomy": "只保存会话和本地验证任务；对外访谈、投放和收费动作必须确认",
-    },
-    "product-manager": {
-        "mission": "把零散反馈和研究证据转成可排序、可评审、可复盘的产品决策",
-        "workflow": "核对反馈来源 → 聚类用户问题 → 检查需求证据 → 评估 RICE 与风险 → 形成 PRD/决策建议 → 跟踪下一步",
-        "output": ["今日产品结论", "反馈与来源", "需求优先级", "证据缺口", "评审问题", "下一步动作"],
-        "autonomy": "读取、分析和本地草稿可自动执行；调整优先级、确认决策和对外交付必须由产品经理确认",
-    },
-    "cid-dashboard": {
-        "mission": "把看板中的项目和趋势转成可研究、可比较、可验证的机会卡",
-        "workflow": "筛选项目 → 识别用户/分发/收入线索 → 对比竞品 → 判断可复制性 → 生成研究任务",
-        "output": ["项目摘要", "机会信号", "竞品/替代", "风险", "研究任务"],
-        "autonomy": "只读分析和本地任务记录；联系作者或复制外部内容必须确认",
-    },
-    "ai-learning": {
-        "mission": "围绕个人转型目标，用每天一节可完成的小课把 AI 知识转成工作能力和作品证据",
-        "workflow": "读取目标与进度 → 选择不重复主题 → 讲清知识 → 拆解工作案例 → 布置练习与自测 → 记录复盘",
-        "output": ["今日知识", "案例拆解", "动手练习", "自测解释", "下一步与沉淀建议"],
-        "autonomy": "课程生成、进度记录和本地提醒可自动执行；对外发布作品或发送内容必须确认",
-    },
-}
-
-AGENT_RESULT_CONTRACT_VERSION = "1.1"
-
-
-def _is_markdown_table_divider(line: str) -> bool:
-    """|---|:--:|---| 这种表格分隔行。
-
-    前端 static/markdown.js 里有同名判断，两边必须保持一致：一边认成表格、
-    另一边认成普通行的话，正文渲染出一张表，「结构化结果」里却是一堆碎条目。
-    """
-    text = str(line or "").strip()
-    return bool(text) and "-" in text and re.fullmatch(r"\|?[\s:|-]*-[\s:|-]*\|?", text) is not None
-
-
-AGENT_RESULT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
-    "summary": ("结论", "一句话结论", "总体判断", "摘要"),
-    "facts": ("事实", "已知事实", "事实与证据", "已知信息"),
-    "judgement": ("判断", "判断与假设", "推断", "分析"),
-    "evidence": ("证据", "来源与证据", "数据依据", "依据"),
-    "risks": ("风险", "不确定性", "缺口", "待验证"),
-    "actions": ("动作", "可直接执行的本地动作", "已执行动作", "需要我确认的动作"),
-    "next_steps": ("下一步", "后续", "验证计划", "行动计划"),
-}
-
-
-def _contract_id_list(values: Any) -> list[str]:
-    """Normalize trace IDs without assuming every store uses the same type."""
-    if values is None:
-        return []
-    if not isinstance(values, (list, tuple, set)):
-        values = [values]
-    result: list[str] = []
-    for value in values:
-        if isinstance(value, dict):
-            value = value.get("id") or value.get("artifact_id") or value.get("work_item_id") or value.get("relation_id")
-        if value in (None, ""):
-            continue
-        normalized = str(value)
-        if normalized not in result:
-            result.append(normalized)
-    return result[:100]
 
 
 def _contract_source_ref(value: Any) -> dict[str, Any] | None:
@@ -8665,6 +8073,20 @@ def agent_context_result_metadata(context: dict[str, Any] | None) -> dict[str, A
         "relation_ids": _contract_id_list(relation_ids),
         "data_as_of": data_as_of,
     }
+
+
+AGENT_RESULT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
+    "summary": ("结论", "一句话结论", "总体判断", "摘要"),
+    "facts": ("事实", "已知事实", "事实与证据", "已知信息"),
+    "judgement": ("判断", "判断与假设", "推断", "分析"),
+    "evidence": ("证据", "来源与证据", "数据依据", "依据"),
+    "risks": ("风险", "不确定性", "缺口", "待验证"),
+    "actions": ("动作", "可直接执行的本地动作", "已执行动作", "需要我确认的动作"),
+    "next_steps": ("下一步", "后续", "验证计划", "行动计划"),
+}
+
+
+AGENT_RESULT_CONTRACT_VERSION = "1.1"
 
 
 def agent_result_contract(
@@ -18443,144 +17865,6 @@ def health() -> dict[str, Any]:
     except (ImportError, ValueError):
         crawl4ai_available = False
     return {"ok": True, "version": WORKBENCH_VERSION, "crawl4ai_available": crawl4ai_available, "llm": llm_settings()}
-
-
-@app.get("/api/settings/llm")
-def get_llm_settings() -> dict[str, Any]:
-    state = llm_provider_state()
-    return {
-        "llm": llm_settings(),
-        "has_global_key": bool(state["candidates"]),
-        "has_primary_config": state["primary_present"],
-    }
-
-
-@app.post("/api/settings/llm")
-def save_llm_settings(request: LLMSettingsRequest) -> dict[str, Any]:
-    providers = request.providers
-
-    saved = load_saved_llm_settings()
-    existing = normalize_llm_providers(saved)
-    existing_by_id = {str(item.get("id")): item for item in existing}
-    existing_by_name = {str(item.get("name")): item for item in existing}
-    normalized: list[dict[str, str]] = []
-    used_provider_ids: set[str] = set()
-    primary_count = 0
-    for index, raw in enumerate(providers[:20]):
-        if not isinstance(raw, dict):
-            continue
-        name = str(raw.get("name") or f"Provider {index + 1}").strip()[:120]
-        provider_id = _unique_llm_provider_id(raw.get("id") or name, index, used_provider_ids)
-        role = str(raw.get("role") or "fallback").strip().lower()
-        raw_base_url = str(raw.get("base_url") or "").strip()
-        base_url = normalize_llm_base_url(raw_base_url)
-        api_key = str(raw.get("api_key") or "").strip()
-        model = str(raw.get("model") or "").strip()
-        previous = existing_by_id.get(provider_id) or existing_by_name.get(name)
-        if not api_key and raw.get("preserve_api_key", True) and previous:
-            api_key = str(previous.get("api_key") or "")
-        # An empty key preserves the existing credential by default.  The UI
-        # sends clear_api_key=true only after the user explicitly asks to
-        # remove it; the provider entry itself remains visible and reusable.
-        if raw.get("clear_api_key"):
-            api_key = ""
-        if role not in {"primary", "fallback"}:
-            role = "fallback"
-        # An entry may be saved before it is complete.  This lets the UI keep
-        # a named provider in the fallback order while clearly marking it as
-        # disabled until its address, model and key are available.  Supplied
-        # values are still validated so a typo cannot become a callable route.
-        if raw_base_url and not base_url:
-            raise HTTPException(400, f"{name}：API 地址必须是 http/https，且不能包含用户名、密码、查询参数或 URL 片段")
-        if role == "primary":
-            primary_count += 1
-        normalized.append({
-            "id": provider_id,
-            "name": name,
-            "role": role,
-            "base_url": base_url,
-            "api_key": _clean_llm_token(api_key),
-            "model": model,
-        })
-    if primary_count > 1:
-        raise HTTPException(400, "主配置只能有一个，其余条目请设为 fallback")
-
-    save_global_llm_settings({"providers": normalized})
-
-    return {
-        "ok": True,
-        "llm": llm_settings(),
-        "has_global_key": bool(llm_provider_state()["candidates"]),
-        "has_primary_config": primary_count > 0,
-    }
-
-
-@app.post("/api/settings/llm/test")
-async def test_llm_settings(request: LLMTestRequest) -> dict[str, Any]:
-    raw_base_url = request.base_url.strip()
-    # A supplied address is an explicit user choice. Never silently replace an
-    # invalid new value with the address from a saved Provider.
-    if raw_base_url and not valid_http_url(raw_base_url):
-        raise HTTPException(400, "API 地址必须是 http/https，且不能包含用户名、密码、查询参数或 URL 片段")
-    base_url = normalize_llm_base_url(raw_base_url)
-    model = request.model.strip()
-    api_key = request.api_key.strip()
-    name = request.name.strip() or "测试条目"
-    # 空参数时优先按稳定 provider_id 找回已保存条目，再回退到名称、主配置或当前生效条目。
-    state = llm_provider_state()
-    saved_provider = next((item for item in state["providers"] if request.provider_id and item.get("id") == request.provider_id), None)
-    # Name lookup is retained only for old clients that do not know provider_id.
-    saved_provider = saved_provider or next((item for item in state["providers"] if not request.provider_id and name and item.get("name") == name), None)
-    if not (base_url and model and api_key):
-        # A stable id identifies the exact row the user clicked.  Never fall
-        # back to the primary provider for a new/unsaved row, otherwise
-        # testing an incomplete entry could silently test a different model.
-        selected = saved_provider or (
-            {}
-            if request.provider_id
-            else state.get("primary") or (state.get("candidates") or [None])[0] or {}
-        )
-        base_url = base_url or str(selected.get("base_url") or "")
-        model = model or str(selected.get("model") or "")
-        api_key = api_key or str(selected.get("api_key") or "")
-        name = name or str(selected.get("name") or "已保存配置")
-    if not base_url:
-        raise HTTPException(400, "API 地址不能为空")
-    if not model:
-        raise HTTPException(400, "模型名不能为空")
-    if not api_key:
-        raise HTTPException(400, "API Key 不能为空（未保存可用凭证）")
-
-    started_at = time.monotonic()
-    try:
-        await call_llm(
-            [
-                {"role": "system", "content": "你正在进行接口连通性测试。只回复：连接成功。"},
-                {"role": "user", "content": "请回复连接成功。"},
-            ],
-            {**{"id": request.provider_id or _llm_provider_id(name), "name": name, "api_key": _clean_llm_token(api_key), "base_url": base_url, "model": model}, "source": "test", "provider": "test"},
-            max_tokens=24,
-            temperature=0,
-            purpose="test",
-            track_health=False,
-        )
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        if status in {401, 403}:
-            reason = "认证失败：API Key 无效或没有该模型权限"
-        elif status == 404:
-            reason = "接口路径或模型名不存在"
-        elif status == 429:
-            reason = "限流：请求过多或模型冷却中"
-        else:
-            reason = f"接口返回 {status}"
-        raise HTTPException(502, reason) from exc
-    except httpx.TimeoutException as exc:
-        raise HTTPException(502, "连接超时：请检查地址可达性或网络") from exc
-    except Exception as exc:
-        raise HTTPException(502, f"连接失败：{_llm_error_kind(exc)}") from exc
-    elapsed_ms = int((time.monotonic() - started_at) * 1000)
-    return {"ok": True, "message": "连接成功", "provider": name, "model": model, "endpoint": chat_completions_url(base_url), "latency_ms": elapsed_ms, "endpoint_policy": LLM_ENDPOINT_POLICY}
 
 
 def enqueue_crawl_request(request: CrawlRequest, *, research_plan_id: str = "", parent_run_id: str = "") -> dict[str, Any]:

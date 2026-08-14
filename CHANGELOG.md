@@ -1395,3 +1395,13 @@
     load_saved_llm_settings 里的死代码（语法合法但不执行）——从 0.3.184 恢复完整函数到 app_pkg/sub2api.py 并清理死代码；
   - 顺手发现 app.py 178 行残留一份 INTEGRATION_DEFINITIONS（0.3.187 行号漂移未删净，重复定义）——待下一轮清理；
   - app.py 降至 **2.66 万行**，全量 509 通过。call_llm/stream 调用层与 /api/settings 路由下一批并入。
+
+## v0.3.191 · 2026-08-14
+
+- **拆分第六批补充：LLM 调用层并入 `app_pkg/llm.py`**（llm.py 达约 1800 行，app.py 降至 2.59 万行）：
+  - llm_http_client/stream_llm_text/stream_llm_with_tools/call_llm/_call_llm_once + 输出解析工具（_is_markdown_table_divider/_contract_id_list）+ LLM_MAX_CONTINUATIONS；
+  - /api/settings/llm 三路由（get/save/test）经 instance 注册（路由数 341→343）；
+  - 兼容深化：调用层内对「测试 patch 敏感」函数的调用全部走 `_app_call` 运行时转发
+    （含 asyncio.to_thread 传函数引用的形式）；夹带的 agent 平台常量（AGENT_ROUTE_HINTS/
+    AGENT_PLAYBOOKS/AGENT_RESULT_*）撤回 app.py（被 agent 平台函数引用，__all__ 不导出会 NameError）；
+  - call_llm_with_tools 与 agent 平台耦合，留待 agent 平台层拆时并入。
