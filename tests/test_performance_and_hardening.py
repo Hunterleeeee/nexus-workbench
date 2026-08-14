@@ -1834,7 +1834,8 @@ class ProjectListFanoutTests(unittest.TestCase):
     """
 
     def test_the_batch_helper_replaces_the_per_project_queries(self):
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # project_activity_batch/_public_projects_uncached 已随拆分迁到 app_pkg/projects.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "projects.py").read_text(encoding="utf-8")
         self.assertIn("def project_activity_batch(", source)
         body = source[source.find("def _public_projects_uncached("):]
         body = body[:body.find("\ndef ")]

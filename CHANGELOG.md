@@ -1457,3 +1457,21 @@
   - 7 个分散区间分拆（数据层 1015 / evidence_for_llm 3880 / matrix 17502 / 模型 17651+21108 /
     路由 17910+21158），跨模块联动（automations evidence_audit → evidence matrix）smoke 验证通过；
   - app.py 从 3.27 万行累计降至 **2.36 万行**（23567 行），全量 509 通过，3.11 语法校验通过。
+
+## v0.3.196 · 2026-08-14
+
+- **拆分第十批：projects 领域拆到 `app_pkg/projects.py`**（947 行，app.py 降至 2.27 万行，**最大一块**）：
+  - 拆出：项目入口（load_project_preferences/save_project_preferences/load_projects）、首页卡片聚合
+    （project_activity_batch/project_activity/public_projects/_public_projects_uncached）、PROJECT_LINKS
+    联动边 + project_link_summary/agent_display_name/agent_status_label/project_href/public_project_link、
+    审计区（AUDIT_STATUS_LABELS/_audit_datetime/audit_freshness/project_data_freshness/project_link_audit/
+    project_audit）、模型 2 个、路由 5 个（/api/projects GET+POST、preferences GET+POST、reset）；
+  - 兼容：仍在 app.py 的领域函数（agent_run_summary/agent_detail/agent_quality_metrics/knowledge_files/
+    obsidian_status/aihot 快照/idea/cid/market/ai-learning/product-manager）全走 `_app_call`；已拆模块
+    （server/sub2api/evidence/llm/agent_platform/notifications/inbox/usage）直连导入；cloud_dev 直连；
+    **public_projects 聚合路径内 7 处调用改运行时转发**（load_projects/list_inbox/快照/project_activity/
+    project_data_freshness）——测试 patch app.X 才能生效；
+  - 边界：search_workspace（/api/search）跨领域留 app.py；agent_detail/agent_run_summary 属 agent 领域留
+    app.py；AST 扫出 9 个漏网转发符号（obsidian_status/AGENT_TOOL_POLICIES/ai_learning_*/list_idea_sessions
+    等）一次补齐；源码断言测试适配到 app_pkg/projects.py；
+  - app.py 从 3.27 万行累计降至 **2.27 万行**（22711 行），全量 509 通过，3.11 语法 + 转发路径 smoke 通过。
