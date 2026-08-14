@@ -1357,3 +1357,10 @@
   - `load_json_file`/`save_json_atomic` 入 core（通用文件工具）；
   - 兼容处理：文件路径常量运行时读取（测试 patch 生效）、跨域私有函数（`_sub2api_timestamp` 等）进 `__all__`、app 级函数延迟转发；
   - app.py 降至约 3.03 万行，全量 509 通过。
+
+## v0.3.187 · 2026-08-14
+
+- **拆分第四批：server + integrations 领域**：
+  - `app_pkg/server.py`（514 行）：服务器监控快照/健康评估/阈值；`app_pkg/integrations.py`（942 行）：外部服务接入（含路由/模型/INTEGRATION_DEFINITIONS 常量）；
+  - 方法论升级：改用**函数名锚定**删除（行号漂移导致多次误删后确立）、AST 一次找齐缺失符号、model 定义必须前置（FastAPI 注册时解析注解）、转发器绝不 export（否则覆盖 app 原函数 → 递归）；
+  - app.py 降至约 2.92 万行，全量 509 通过。
