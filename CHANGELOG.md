@@ -1529,3 +1529,17 @@
     expected 'except' or 'finally'）——区间结束必须含完整 try/finally；
   - app.py 从 3.27 万行累计降至 **1.85 万行**（18479 行），全量 509 通过，3.11 语法 + 跨模块
     转发 smoke 通过。引擎（stream/run_project_agent）与 agent 路由（19 个）下一批。
+
+## v0.3.200 · 2026-08-14
+
+- **拆分第十四批：agent 路由层拆到 `app_pkg/agent_engine.py`**（718 行，app.py 降至 1.78 万行）：
+  - 拆出：require_project_agent + 19 个路由（sessions/chat/work-items/takeover/run/dispatch/runs/
+    retry/actions/cid-proxy/agents/metrics）+ 4 个模型（CrawlRequest/AgentProxyRequest/
+    ProjectAgentChatRequest/WorkItemTakeoverRequest，FastAPI 注册时解析注解必须同模块）；
+  - 兼容：引擎（stream/run_project_agent/ReAct 循环/工具 handler）仍在 app.py 经 `_app_call` 转发；
+    runs 内存字典经 `_RUNS()` 运行时读；llm_settings/call_llm 改 `_app_call`（绑定导入 patch
+    失效）；agent_runs/agent_platform/projects 数据层直连；StreamingResponse 从 fastapi.responses
+    导入（fastapi 顶层无）；
+  - 源码断言测试（dispatch retry attempt）适配到 app_pkg/agent_engine.py；
+  - app.py 从 3.27 万行累计降至 **1.78 万行**（17848 行），全量 509 通过，3.11 语法 + chat 路由
+    转发 smoke 通过。agent 引擎（ReAct 循环/stream/run_project_agent）下一批。

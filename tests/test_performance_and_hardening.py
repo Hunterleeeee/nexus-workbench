@@ -3517,7 +3517,8 @@ class AgentRetryIdempotencyTests(unittest.TestCase):
     def test_the_dispatch_retry_carries_the_attempt_forward(self):
         """其他 kind 都传了 attempt+1，唯独 dispatch 分支漏了，
         于是 retryable 恒为 True——重试链没有上限。"""
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        # retry 路由已随拆分迁到 app_pkg/agent_engine.py
+        source = (Path(__file__).resolve().parents[1] / "app_pkg" / "agent_engine.py").read_text(encoding="utf-8")
         body = source[source.find('if project_id == "workbench" and run.get("kind") == "dispatch":'):]
         body = body[:body.find('if project_id == "aihot"')]
         self.assertIn('attempt=int(run.get("attempt", 1)) + 1', body)
