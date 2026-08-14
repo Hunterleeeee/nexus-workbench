@@ -1325,3 +1325,10 @@
 
 - **修复主进程内存高**：`/api/health` 健康检查接口原来 `import crawl4ai`——crawl4ai 全家桶（numpy/scipy/onnxruntime，约 80MB）在第一次健康检查后常驻主 API 进程。改为 `importlib.util.find_spec` 只探测不导入；真实抓取仍走 run_crawl 的函数级懒加载。
 - 新增回归测试（health 不得 import crawl4ai），全量 509 通过。
+
+## v0.3.183 · 2026-08-13
+
+- **为开源做准备：启动 app.py 拆分（3.2 万行单文件 → 包结构）**：
+  - 新建 `app_pkg/` 包 + `app_pkg/core.py`（无业务依赖的内核：路径常量、日志、版本、限额）；
+  - `app.py` 改为 `from app_pkg.core import *`（符号引用不变），功能零变化、全量 509 测试通过；
+  - 后续计划：db 层 → 领域模块（aihot/knowledge/market/learning/product...）逐批搬迁，每批全量测试；再补 LICENSE/README/清理内部信息。

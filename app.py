@@ -39,28 +39,10 @@ from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Reque
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent
-
-# ---------------------------------------------------------------------------
-# Logging.  Until now every failure path was a bare `except Exception: pass`,
-# which meant production incidents left no trace at all.  systemd captures
-# stdout/stderr into the journal, so a plain StreamHandler is enough:
-#   journalctl -u workbench -f
-# Set WORKBENCH_LOG_LEVEL=DEBUG to raise verbosity without a code change.
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=getattr(logging, os.getenv("WORKBENCH_LOG_LEVEL", "INFO").upper(), logging.INFO),
-    format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-)
-log = logging.getLogger("workbench")
-
-# Release marker: keep the development server's reload watcher aligned with VERSION.
-STATIC_DIR = ROOT / "static"
-PROJECTS_FILE = ROOT / "projects.json"
-VERSION_FILE = ROOT / "VERSION"
-load_dotenv(ROOT / ".env")
+# 拆分里程碑：路径/日志/版本/限额等内核已迁入 app_pkg.core（为开源准备）。
+# `from app_pkg.core import *` 保证下面 3 万行代码里的符号引用全部不变。
+from app_pkg.core import *  # noqa: F401,F403
 
 # Load the environment before importing modules that snapshot their settings at
 # import time (notably the Feishu client). systemd EnvironmentFile remains the
@@ -68,42 +50,6 @@ load_dotenv(ROOT / ".env")
 import feishu as feishu_bot
 import cloud_dev
 import cloud_patch
-
-
-def configured_path(name: str, default: Path) -> Path:
-    value = os.getenv(name, "").strip()
-    return Path(value).expanduser() if value else default
-
-
-DATA_DIR = configured_path("WORKBENCH_DATA_DIR", ROOT / "data")
-OUTPUTS_DIR = configured_path("WORKBENCH_OUTPUTS_DIR", ROOT / "outputs")
-CLOUDGEN_DIR = OUTPUTS_DIR / "cloudgen"
-KNOWLEDGE_DIR = configured_path("WORKBENCH_KNOWLEDGE_DIR", ROOT / "knowledge-base")
-SETTINGS_FILE = DATA_DIR / "llm_settings.json"
-PROJECT_PREFERENCES_FILE = DATA_DIR / "project_preferences.json"
-DATABASE_FILE = DATA_DIR / "workbench.db"
-PRODUCT_PROTOTYPES_DIR = DATA_DIR / "product-prototypes"
-COWART_VENDOR_DIR = STATIC_DIR / "vendor" / "cowart"
-COWART_VERSION = "0.1.25"
-COWART_SCRIPT_NAME = "index-pR7Yavzt.js"
-COWART_STYLE_NAME = "style-D82LwrRu.css"
-SUB2API_SNAPSHOT_FILE = DATA_DIR / "sub2api_snapshot.json"
-MARKET_WATCHLIST_FILE = DATA_DIR / "market_watchlist.json"
-MARKET_SNAPSHOT_FILE = DATA_DIR / "market_snapshot.json"
-SERVER_MONITOR_SNAPSHOT_FILE = DATA_DIR / "server_monitor_snapshot.json"
-SERVER_MONITOR_THRESHOLDS_FILE = DATA_DIR / "server_monitor_thresholds.json"
-AIHOT_SNAPSHOT_FILE = DATA_DIR / "aihot_snapshot.json"
-INTEGRATIONS_FILE = DATA_DIR / "integrations.json"
-VAPID_PRIVATE_KEY_FILE = DATA_DIR / "vapid_private.pem"
-# The Obsidian vault is a per-machine location.  The default points inside the
-# repo so a fresh checkout (or the server) never silently reads a path that
-# only exists on one laptop; set WORKBENCH_OBSIDIAN_VAULT_DIR to the real vault.
-OBSIDIAN_VAULT_DIR = configured_path(
-    "WORKBENCH_OBSIDIAN_VAULT_DIR",
-    KNOWLEDGE_DIR / "obsidian",
-)
-AIHOT_FEED_URL = os.getenv("WORKBENCH_AIHOT_URL", "https://aihot.today/ai-news").strip()
-WORKBENCH_PUBLIC_URL = os.getenv("WORKBENCH_PUBLIC_URL", "https://workbench.example.dev:8765").strip().rstrip("/")
 # Multiple sources can be configured via a comma-separated list. Order is preserved;
 # sources are fetched in parallel and merged with the existing dedupe rule.
 # 默认源 = 国外 AI 聚合 + Hacker News + 国内科技媒体 + 综合财经/商业/时政。
@@ -158,21 +104,6 @@ def _aihot_relevant(entry: dict[str, Any]) -> bool:
     zh = ("人工智能", "大模型", "智能体", "机器学习", "深度学习", "神经网络", "多模态", "具身", "自动驾驶", "算力", "机器人", "芯片", "AIGC")
     en = ("llm", "gpt", "claude", "gemini", "deepseek", "openai", "agentic", "transformer", "neural", " ai ", " ai-", " ai_", "\nai", "machine learning", "model context")
     return any(k in text for k in zh) or any(k in low for k in en)
-WORKBENCH_VERSION = ""
-try:
-    # VERSION is the release source of truth. An old shell-level override must
-    # not make the API report a version different from the files being served.
-    WORKBENCH_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip()
-except OSError:
-    WORKBENCH_VERSION = os.getenv("WORKBENCH_VERSION", "").strip() or "0.3.104"
-MAX_LLM_CONTEXT_CHARS = 36_000
-MAX_DOCUMENT_CONTEXT_CHARS = 12_000
-MAX_CONVERSATION_CHARS = 12_000
-MAX_CONVERSATION_MESSAGES = 8
-MAX_AGENT_NEW_PAGES = 3
-MAX_AGENT_TOTAL_PAGES = 6
-MEMORY_OWNER_ID = "default"
-MAX_MEMORY_CONTEXT_ITEMS = 5
 MAX_MEMORY_MATCHED_ITEMS = 3
 MAX_MEMORY_PINNED_ITEMS = 2
 MAX_MEMORY_ITEM_CONTEXT_CHARS = 280
