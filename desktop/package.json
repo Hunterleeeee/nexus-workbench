@@ -1,6 +1,6 @@
 {
   "name": "workbench-desktop",
-  "version": "0.3.205",
+  "version": "0.3.206",
   "private": true,
   "description": "Workbench desktop shell",
   "main": "main.cjs",

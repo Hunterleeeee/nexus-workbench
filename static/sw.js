@@ -1,4 +1,4 @@
-const CACHE_NAME = "workbench-shell-v0.3.205";
+const CACHE_NAME = "workbench-shell-v0.3.206";
 // Keep the shared request/recovery helper available to offline shell pages.
 // It is appended below the shell list to avoid duplicating the long manifest line.
 const SHELL = ["/", "/crawl4ai", "/projects/inbox", "/projects/knowledge", "/projects/doc-factory", "/projects/sub2api", "/projects/market", "/projects/server", "/projects/aihot", "/projects/ai-learning", "/projects/embodied", "/projects/idea-analysis", "/projects/product-manager", "/projects/cid-dashboard", "/projects/web-research", "/projects/cloud-dev", "/automation", "/git", "/github-tools", "/approvals", "/static/workbench.html", "/static/workbench.css", "/static/workbench.js", "/static/workspace-search.js", "/static/index.html", "/static/styles.css", "/static/app.js", "/static/llm-settings.js", "/static/project.js", "/static/markdown.js", "/static/project.css", "/static/project-agent.css", "/static/platform.css", "/static/platform.js", "/static/automation.html", "/static/git.html", "/static/github-tools.html", "/static/approvals.html", "/static/inbox.html", "/static/knowledge.html", "/static/aihot.html", "/static/aihot.css", "/static/ai-learning.html", "/static/ai-learning.css", "/static/ai-learning.js", "/static/idea-analysis.html", "/static/idea-analysis.css", "/static/product-manager.html", "/static/product-manager.css", "/static/product-manager.js", "/static/vendor/cowart/index-pR7Yavzt.js", "/static/vendor/cowart/style-D82LwrRu.css", "/static/server.html", "/static/doc-factory.html", "/static/sub2api.html", "/static/sub2api.css", "/static/sub2api-agent.css", "/static/sub2api-agent.js", "/static/market.html", "/static/market.css", "/static/web-research.html", "/static/web-research.css", "/static/web-research.js", "/static/cloud-dev.html", "/static/manifest.webmanifest", "/static/icons/workbench-192.svg", "/static/icons/workbench-512.svg", "/static/icons/workbench-192.png", "/static/icons/workbench-512.png", "/usage", "/static/usage.html", "/static/usage.css", "/static/usage.js", "/static/market-today.js", "/static/market-screen.js", "/static/market-style.js", "/static/web-research-plus.js", "/static/web-research-plus.css"];
@@ -36,7 +36,7 @@ self.addEventListener("fetch", (event) => {
 });
 
 // 带版本号的静态资源必须精确匹配。原来统一用 ignoreSearch: true，
-// 于是 /static/ai-learning.js?v=0.3.205 会命中缓存里 v=0.3.153 那份——
+// 于是 /static/ai-learning.js?v=0.3.206 会命中缓存里 v=0.3.153 那份——
 // 整套 ?v= 缓存失效机制在离线回退这条路径上等于没有。
 // 页面文档仍然忽略查询串：/projects/x?tab=1 没必要单独缓存一份。
 function matchCached(request) {

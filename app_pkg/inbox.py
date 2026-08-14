@@ -10,6 +10,7 @@ React 工具（_react_inbox_read）仍留 app.py，待 knowledge/obsidian 领域
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import json
 import re
@@ -18,9 +19,21 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import BaseModel, Field
 
-from .core import clip, decode_json_column, decode_json_value, now_iso
+from .core import clip, decode_json_column, decode_json_value, log, now_iso
+from .notifications import create_notification_record
+from .agent_platform import AGENT_REGISTRY
 from .db import db_connection
+from .instance import app
+
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
+    """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
+    import app as _app
+
+    return getattr(_app, fn_name)(*args, **kwargs)
+
+
 
 
 def create_agent_run_record(*args: Any, **kwargs: Any) -> Any:
@@ -77,15 +90,15 @@ def inbox_row(row: sqlite3.Row) -> dict[str, Any]:
     item["priority_label"] = {"urgent": "紧急", "high": "高", "normal": "普通", "low": "低"}.get(
         item.get("priority", "normal"), item.get("priority", "普通")
     )
-    item["routes"] = list_inbox_route_candidates(int(item["id"])) if item.get("id") else []
+    item["routes"] = _app_call('list_inbox_route_candidates', int(item["id"])) if item.get("id") else []
     return item
 
 
 def inbox_route_candidate_row(row: sqlite3.Row) -> dict[str, Any]:
     candidate = {key: row[key] for key in row.keys()}
     candidate["metadata"] = decode_json_column(candidate.pop("metadata_json", "{}"))
-    candidate["target_name"] = agent_display_name(candidate.get("target_project", ""))
-    candidate["target_href"] = project_href(candidate.get("target_project", ""))
+    candidate["target_name"] = _app_call('agent_display_name', candidate.get("target_project", ""))
+    candidate["target_href"] = _app_call('project_href', candidate.get("target_project", ""))
     candidate["confidence_percent"] = round(float(candidate.get("confidence") or 0) * 100)
     return candidate
 
@@ -103,7 +116,7 @@ def list_inbox_route_candidates(inbox_id: int, status: str = "all") -> list[dict
                 "SELECT * FROM inbox_route_candidates WHERE inbox_id = ? ORDER BY confidence DESC, id ASC",
                 (inbox_id,),
             ).fetchall()
-        return [inbox_route_candidate_row(row) for row in rows]
+        return [_app_call('inbox_route_candidate_row', row) for row in rows]
     finally:
         connection.close()
 
@@ -112,7 +125,7 @@ def get_inbox_record(item_id: int) -> dict[str, Any] | None:
     connection = db_connection()
     try:
         row = connection.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
-        return inbox_row(row) if row else None
+        return _app_call('inbox_row', row) if row else None
     finally:
         connection.close()
 
@@ -127,7 +140,7 @@ def get_inbox_route_candidate(candidate_id: int, inbox_id: int = 0) -> dict[str,
             ).fetchone()
         else:
             row = connection.execute("SELECT * FROM inbox_route_candidates WHERE id = ?", (candidate_id,)).fetchone()
-        return inbox_route_candidate_row(row) if row else None
+        return _app_call('inbox_route_candidate_row', row) if row else None
     finally:
         connection.close()
 
@@ -136,7 +149,7 @@ def update_inbox_route_candidate(candidate_id: int, values: dict[str, Any]) -> d
     allowed = {"status", "work_item_id", "relation_id", "updated_at"}
     updates = [(key, value) for key, value in values.items() if key in allowed]
     if not updates:
-        return get_inbox_route_candidate(candidate_id)
+        return _app_call('get_inbox_route_candidate', candidate_id)
     if not any(key == "updated_at" for key, _ in updates):
         updates.append(("updated_at", now_iso()))
     connection = db_connection()
@@ -150,7 +163,7 @@ def update_inbox_route_candidate(candidate_id: int, values: dict[str, Any]) -> d
         if cursor.rowcount == 0:
             return None
         row = connection.execute("SELECT * FROM inbox_route_candidates WHERE id = ?", (candidate_id,)).fetchone()
-        return inbox_route_candidate_row(row) if row else None
+        return _app_call('inbox_route_candidate_row', row) if row else None
     finally:
         connection.close()
 
@@ -172,7 +185,7 @@ def list_inbox(status: str = "all") -> list[dict[str, Any]]:
             rows = connection.execute(
                 f"SELECT * FROM inbox WHERE status = ? {order}", (status,)
             ).fetchall()
-        return [inbox_row(row) for row in rows]
+        return [_app_call('inbox_row', row) for row in rows]
     finally:
         connection.close()
 
@@ -207,10 +220,10 @@ def create_inbox_record(*, content: str, kind: str = "note", tags: str = "", pri
     finally:
         connection.close()
     try:
-        return triage_inbox_record(item_id)
+        return _app_call('triage_inbox_record', item_id)
     except Exception:
         # Triage is an enhancement to capture, not a reason to lose the user's input.
-        return get_inbox_record(item_id) or {"id": item_id, "content": content, "kind": kind, "tags": tags, "status": "inbox"}
+        return _app_call('get_inbox_record', item_id) or {"id": item_id, "content": content, "kind": kind, "tags": tags, "status": "inbox"}
 
 
 def normalized_inbox_text(value: str) -> str:
@@ -313,7 +326,7 @@ def extract_inbox_next_steps(content: str, classification: str = "note") -> dict
 
 
 def inbox_duplicate_match(item_id: int, content: str) -> dict[str, Any]:
-    normalized = normalized_inbox_text(content)
+    normalized = _app_call('normalized_inbox_text', content)
     if len(normalized) < 8:
         return {"id": 0, "score": 0, "reason": ""}
     connection = db_connection()
@@ -326,7 +339,7 @@ def inbox_duplicate_match(item_id: int, content: str) -> dict[str, Any]:
         connection.close()
     best: tuple[float, int, str] = (0, 0, "")
     for row in rows:
-        other = normalized_inbox_text(row["content"])
+        other = _app_call('normalized_inbox_text', row["content"])
         if not other:
             continue
         score = difflib.SequenceMatcher(None, normalized, other).ratio()
@@ -338,7 +351,7 @@ def inbox_duplicate_match(item_id: int, content: str) -> dict[str, Any]:
 
 def inbox_learned_classification(content: str, item_id: int = 0) -> dict[str, Any] | None:
     """Use confirmed local labels as a soft hint; keyword rules remain the fallback."""
-    tokens = knowledge_tokens(content)
+    tokens = _app_call('knowledge_tokens', content)
     if len(tokens) < 2:
         return None
     connection = db_connection()
@@ -352,7 +365,7 @@ def inbox_learned_classification(content: str, item_id: int = 0) -> dict[str, An
         connection.close()
     best: tuple[float, str] = (0.0, "")
     for row in rows:
-        other_tokens = knowledge_tokens(str(row["content"] or ""))
+        other_tokens = _app_call('knowledge_tokens', str(row["content"] or ""))
         score = len(tokens.intersection(other_tokens)) / max(1, len(tokens.union(other_tokens)))
         if score > best[0]:
             best = (score, str(row["accepted"] or ""))
@@ -384,14 +397,14 @@ def infer_inbox_triage(content: str, kind: str, tags: str, item_id: int) -> dict
                 confidence = min(0.94, 0.62 + 0.06 * len(matched))
                 evidence = matched[:4]
                 break
-        learned = inbox_learned_classification(text, item_id)
+        learned = _app_call('inbox_learned_classification', text, item_id)
         if learned and learned["confidence"] > confidence:
             classification = learned["classification"]
             confidence = learned["confidence"]
             evidence = [f"历史确认相似度 {learned['similarity']}"]
-    due = extract_inbox_due(text)
-    duplicate = inbox_duplicate_match(item_id, text)
-    next_steps = extract_inbox_next_steps(text, classification)
+    due = _app_call('extract_inbox_due', text)
+    duplicate = _app_call('inbox_duplicate_match', item_id, text)
+    next_steps = _app_call('extract_inbox_next_steps', text, classification)
     allowed_targets = {edge["to"] for edge in PROJECT_LINKS if edge["from"] == "inbox"}
     route_specs = {
         "knowledge": ("note_capture", "这条内容更适合沉淀为可检索笔记。", ("知识", "笔记", "沉淀", "方法", "总结")),
@@ -453,10 +466,10 @@ def infer_inbox_triage(content: str, kind: str, tags: str, item_id: int) -> dict
 
 
 def analyze_inbox_record(item_id: int, *, triage_run_id: str = "") -> dict[str, Any]:
-    item = get_inbox_record(item_id)
+    item = _app_call('get_inbox_record', item_id)
     if not item:
         raise HTTPException(404, "收件箱条目不存在")
-    analysis = infer_inbox_triage(item["content"], item.get("kind", "note"), item.get("tags", ""), item_id)
+    analysis = _app_call('infer_inbox_triage', item["content"], item.get("kind", "note"), item.get("tags", ""), item_id)
     now = now_iso()
     connection = db_connection()
     try:
@@ -488,27 +501,27 @@ def analyze_inbox_record(item_id: int, *, triage_run_id: str = "") -> dict[str, 
         connection.commit()
     finally:
         connection.close()
-    return get_inbox_record(item_id) or item
+    return _app_call('get_inbox_record', item_id) or item
 
 
 def triage_inbox_record(item_id: int) -> dict[str, Any]:
-    item = get_inbox_record(item_id)
+    item = _app_call('get_inbox_record', item_id)
     if not item:
         raise HTTPException(404, "收件箱条目不存在")
-    run = create_agent_run_record(
+    run = _app_call('create_agent_run_record', 
         project_id="inbox",
         kind="triage",
         title=f"整理收件箱：{clip(item['content'], 90)}",
         request={"inbox_id": item_id, "content": item["content"], "kind": item.get("kind", "note")},
         max_attempts=2,
     )
-    update_agent_run_record(run["id"], status="running")
-    add_agent_run_event(run["id"], "started", "收件箱 Agent 开始分类、提取截止时间、检查重复和生成交接候选。")
+    _app_call('update_agent_run_record', run["id"], status="running")
+    _app_call('add_agent_run_event', run["id"], "started", "收件箱 Agent 开始分类、提取截止时间、检查重复和生成交接候选。")
     try:
-        result = analyze_inbox_record(item_id, triage_run_id=run["id"])
+        result = _app_call('analyze_inbox_record', item_id, triage_run_id=run["id"])
         run_result = {"inbox_id": item_id, "classification": result.get("classification"), "routes": result.get("routes", []), "duplicate_of": result.get("duplicate_of", 0), "due_at": result.get("due_at", ""), "next_steps": result.get("next_steps", []), "next_steps_source": result.get("next_steps_source", "")}
-        updated = update_agent_run_record(run["id"], status="succeeded", result=run_result, error="") or run
-        add_agent_run_event(run["id"], "succeeded", "收件箱 Agent 已完成整理。", level="success", metadata=run_result)
+        updated = _app_call('update_agent_run_record', run["id"], status="succeeded", result=run_result, error="") or run
+        _app_call('add_agent_run_event', run["id"], "succeeded", "收件箱 Agent 已完成整理。", level="success", metadata=run_result)
         # 低风险自动归档：高置信度、纯记录、无截止时间、无交接路由、无重复的
         # 条目直接完成，避免琐碎记录长期占用待办；其余保留待人工处理。
         confidence = float(result.get("classification_confidence") or 0)
@@ -528,12 +541,395 @@ def triage_inbox_record(item_id: int) -> dict[str, Any]:
                 connection.commit()
             finally:
                 connection.close()
-            add_agent_run_event(run["id"], "auto_archived", "高置信度纯记录，已自动完成归档。", level="info", metadata={"confidence": confidence})
+            _app_call('add_agent_run_event', run["id"], "auto_archived", "高置信度纯记录，已自动完成归档。", level="info", metadata={"confidence": confidence})
             result["auto_archived"] = True
         return result
     except Exception as exc:
-        update_agent_run_record(run["id"], status="failed", error=str(exc))
-        add_agent_run_event(run["id"], "failed", f"收件箱整理失败：{exc}", level="error")
+        _app_call('update_agent_run_record', run["id"], status="failed", error=str(exc))
+        _app_call('add_agent_run_event', run["id"], "failed", f"收件箱整理失败：{exc}", level="error")
         raise
 
-__all__ = ["inbox_row", "inbox_route_candidate_row", "list_inbox_route_candidates", "get_inbox_record", "get_inbox_route_candidate", "update_inbox_route_candidate", "list_inbox", "inbox_summary", "create_inbox_record", "normalized_inbox_text", "extract_inbox_due", "extract_inbox_next_steps", "inbox_duplicate_match", "inbox_learned_classification", "infer_inbox_triage", "analyze_inbox_record", "triage_inbox_record"]
+class InboxRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=20_000)
+    kind: str = Field(default="note", max_length=40)
+    tags: str = Field(default="", max_length=500)
+    priority: str = Field(default="normal", max_length=20)
+    source: str = Field(default="", max_length=500)
+
+
+class InboxUpdateRequest(BaseModel):
+    status: str | None = Field(default=None, max_length=30)
+    priority: str | None = Field(default=None, max_length=20)
+    content: str | None = Field(default=None, max_length=20000)
+
+
+
+
+class InboxClassificationFeedbackRequest(BaseModel):
+    accepted: str = Field(min_length=1, max_length=40)
+
+
+class InboxBatchRequest(BaseModel):
+    ids: list[int] = Field(default_factory=list, max_length=200)
+    action: str = Field(min_length=1, max_length=30)
+    priority: str | None = Field(default=None, max_length=20)
+
+
+class InboxMergeRequest(BaseModel):
+    target_id: int = Field(gt=0)
+    keep_source: bool = False
+
+@app.get("/api/inbox")
+def get_inbox(status: str = "all") -> dict[str, Any]:
+    if status not in {"all", "inbox", "done", "archived"}:
+        raise HTTPException(400, "不支持的收件箱视图")
+    return {"items": _app_call('list_inbox', status), "summary": _app_call('inbox_summary', )}
+
+
+@app.post("/api/inbox")
+def create_inbox_item(request: InboxRequest) -> dict[str, Any]:
+    return {"item": _app_call('create_inbox_record', content=request.content, kind=request.kind, tags=request.tags, priority=request.priority, source=request.source)}
+
+
+@app.post("/api/inbox/batch")
+def batch_update_inbox_items(request: InboxBatchRequest) -> dict[str, Any]:
+    if not request.ids:
+        raise HTTPException(400, "至少选择一条收件箱记录")
+    allowed_actions = {"complete", "archive", "reopen", "priority"}
+    if request.action not in allowed_actions:
+        raise HTTPException(400, "不支持的批量操作")
+    if request.action == "priority" and request.priority not in {"urgent", "high", "normal", "low"}:
+        raise HTTPException(400, "批量设置优先级无效")
+    ids = list(dict.fromkeys(int(item_id) for item_id in request.ids))
+    status_by_action = {"complete": "done", "archive": "archived", "reopen": "inbox"}
+    results: list[dict[str, Any]] = []
+    connection = db_connection()
+    try:
+        for item_id in ids:
+            row = connection.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
+            if not row:
+                results.append({"id": item_id, "ok": False, "error": "条目不存在"})
+                continue
+            if request.action == "priority":
+                cursor = connection.execute(
+                    "UPDATE inbox SET priority = ?, updated_at = ? WHERE id = ?",
+                    (request.priority, now_iso(), item_id),
+                )
+            else:
+                cursor = connection.execute(
+                    "UPDATE inbox SET status = ?, updated_at = ? WHERE id = ?",
+                    (status_by_action[request.action], now_iso(), item_id),
+                )
+            results.append({"id": item_id, "ok": cursor.rowcount > 0})
+        connection.commit()
+    finally:
+        connection.close()
+    succeeded = sum(1 for result in results if result.get("ok"))
+    return {
+        "action": request.action,
+        "results": results,
+        "succeeded": succeeded,
+        "failed": len(results) - succeeded,
+        "items": [_app_call('get_inbox_record', item_id) for item_id in ids if _app_call('get_inbox_record', item_id)],
+        "summary": _app_call('inbox_summary', ),
+    }
+
+
+@app.post("/api/inbox/{item_id}/analyze")
+def analyze_inbox_item(item_id: int) -> dict[str, Any]:
+    return {"item": _app_call('triage_inbox_record', item_id)}
+
+
+@app.post("/api/inbox/{item_id}/classification-feedback")
+def inbox_classification_feedback(item_id: int, request: InboxClassificationFeedbackRequest) -> dict[str, Any]:
+    item = _app_call('get_inbox_record', item_id)
+    if not item:
+        raise HTTPException(404, "收件箱条目不存在")
+    accepted = request.accepted.strip().lower()
+    allowed = {"note", "task", "link", "idea", "alert", "document", "research"}
+    if accepted not in allowed:
+        raise HTTPException(400, f"不支持的分类：{accepted}")
+    predicted = str(item.get("classification") or item.get("kind") or "note")
+    confidence = float(item.get("classification_confidence") or 0)
+    connection = db_connection()
+    try:
+        connection.execute(
+            "INSERT INTO inbox_classification_feedback (inbox_id, predicted, accepted, confidence, created_at) VALUES (?, ?, ?, ?, ?)",
+            (item_id, predicted, accepted, confidence, now_iso()),
+        )
+        connection.execute(
+            "UPDATE inbox SET classification = ?, classification_confidence = 1, updated_at = ? WHERE id = ?",
+            (accepted, now_iso(), item_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return {"ok": True, "item": _app_call('get_inbox_record', item_id), "feedback": {"predicted": predicted, "accepted": accepted, "source": "user_confirmed"}}
+
+
+@app.post("/api/inbox/{item_id}/merge")
+def merge_inbox_item(item_id: int, request: InboxMergeRequest) -> dict[str, Any]:
+    if item_id == request.target_id:
+        raise HTTPException(400, "不能把条目合并到自己")
+    source = _app_call('get_inbox_record', item_id)
+    target = _app_call('get_inbox_record', request.target_id)
+    if not source:
+        raise HTTPException(404, "源条目不存在")
+    if not target:
+        raise HTTPException(404, "目标条目不存在")
+    run = _app_call('create_agent_run_record', 
+        project_id="inbox",
+        kind="merge",
+        title=f"合并收件箱 #{item_id} → #{request.target_id}",
+        request={"source_id": item_id, "target_id": request.target_id, "keep_source": request.keep_source},
+        max_attempts=2,
+    )
+    _app_call('update_agent_run_record', run["id"], status="running")
+    _app_call('add_agent_run_event', run["id"], "started", f"收件箱 Agent 开始合并 #{item_id} 到 #{request.target_id}。")
+    now = now_iso()
+    connection = db_connection()
+    try:
+        if request.keep_source:
+            merged_content = f"{target['content']}\n\n[合并自 #{item_id}] {source['content']}".strip()
+            cursor = connection.execute(
+                "UPDATE inbox SET content = ?, duplicate_of = 0, updated_at = ? WHERE id = ?",
+                (merged_content, now, request.target_id),
+            )
+        else:
+            cursor = connection.execute(
+                "UPDATE inbox SET duplicate_of = ?, updated_at = ? WHERE id = ?",
+                (request.target_id, now, item_id),
+            )
+        if cursor.rowcount == 0:
+            raise HTTPException(409, "目标条目状态已变化，请刷新后重试")
+        if request.keep_source:
+            connection.execute(
+                "UPDATE inbox SET status = 'archived', duplicate_of = ?, updated_at = ? WHERE id = ?",
+                (request.target_id, now, item_id),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    merged_target = _app_call('get_inbox_record', request.target_id)
+    _app_call('update_agent_run_record', run["id"], status="succeeded", result={"source_id": item_id, "target_id": request.target_id, "keep_source": request.keep_source}, error="") or run
+    _app_call('add_agent_run_event', run["id"], "succeeded", f"收件箱 #{item_id} 已合并到 #{request.target_id}。", level="success")
+    return {
+        "ok": True,
+        "message": f"#{item_id} 已合并到 #{request.target_id}",
+        "merged": merged_target,
+        "summary": _app_call('inbox_summary', ),
+        "run_id": run["id"],
+    }
+
+
+@app.post("/api/inbox/{item_id}/routes/{candidate_id}/accept")
+def accept_inbox_route(item_id: int, candidate_id: int) -> dict[str, Any]:
+    item = _app_call('get_inbox_record', item_id)
+    candidate = _app_call('get_inbox_route_candidate', candidate_id, item_id)
+    if not item or not candidate:
+        raise HTTPException(404, "收件箱交接候选不存在")
+    if candidate["status"] == "accepted":
+        return {"item": item, "candidate": candidate, "message": "这条交接已经确认过。"}
+    if candidate["status"] != "suggested":
+        raise HTTPException(409, "这条交接候选已经被拒绝，请重新整理收件箱后再判断")
+    target_project = candidate["target_project"]
+    if target_project not in AGENT_REGISTRY or target_project == "workbench":
+        raise HTTPException(400, "目标项目 Agent 不存在")
+    analysis = item.get("analysis") or {}
+    next_steps = [clip(str(step).strip(), 300) for step in analysis.get("next_steps", []) if str(step).strip()][:3]
+    description = (
+        f"来源收件箱 #{item_id}\n\n{item['content']}\n\n"
+        f"收件箱 Agent 判断：{analysis.get('classification_label') or item.get('classification') or '待整理'}"
+        + (f"；截止：{item.get('due_at')}" if item.get("due_at") else "")
+        + ("\n\n建议下一步：\n" + "\n".join(f"- {step}" for step in next_steps) if next_steps else "")
+    )
+    work_item = _app_call('create_work_item_record', 
+        title=f"收件箱 #{item_id} → {candidate['target_name']}：{clip(item['content'], 100)}",
+        description=description,
+        kind=candidate.get("route_kind") or "handoff",
+        priority=item.get("priority") if item.get("priority") in {"urgent", "high"} else "high" if item.get("due_at") and item.get("due_at") <= datetime.now(timezone.utc).date().isoformat() else "normal",
+        source_project="inbox",
+        target_project=target_project,
+        metadata={
+            "inbox_id": item_id,
+            "route_candidate_id": candidate_id,
+            "triage_run_id": item.get("triage_run_id", ""),
+            "classification": item.get("classification", ""),
+            "due_at": item.get("due_at", ""),
+            "duplicate_of": item.get("duplicate_of", 0),
+            "next_steps": next_steps,
+            "next_steps_source": analysis.get("next_steps_source", ""),
+        },
+    )
+    relation = _app_call('create_relation_record', 
+        from_type="inbox",
+        from_id=str(item_id),
+        to_type="work_item",
+        to_id=str(work_item["id"]),
+        relation_type="routed_to",
+        metadata={"target_project": target_project, "candidate_id": candidate_id},
+    )
+    _app_call('create_relation_record', 
+        from_type="work_item",
+        from_id=str(work_item["id"]),
+        to_type="project",
+        to_id=target_project,
+        relation_type="assigned_to",
+        metadata={"inbox_id": item_id},
+    )
+    _app_call('update_inbox_route_candidate', candidate_id, {"status": "accepted", "work_item_id": work_item["id"], "relation_id": relation["id"]})
+    connection = db_connection()
+    try:
+        connection.execute("UPDATE inbox SET route_status = 'accepted', updated_at = ? WHERE id = ?", (now_iso(), item_id))
+        connection.commit()
+    finally:
+        connection.close()
+    try:
+        create_notification_record(
+            title=f"收件箱已交给 {candidate['target_name']}",
+            body=f"#{item_id}：{clip(item['content'], 260)}",
+            project_id=target_project,
+            kind="handoff",
+            level="info",
+            href=_app_call('project_href', target_project),
+            event_key=f"inbox-route:{candidate_id}",
+            dedupe_seconds=0,
+        )
+    except Exception:
+        log.debug("忽略异常（accept_inbox_route）", exc_info=True)
+    return {"item": _app_call('get_inbox_record', item_id), "candidate": _app_call('get_inbox_route_candidate', candidate_id, item_id), "work_item": work_item, "relation": relation, "message": f"已交给 {candidate['target_name']}，目标 Agent 可在待办中接收。"}
+
+
+@app.post("/api/inbox/{item_id}/routes/{candidate_id}/reject")
+def reject_inbox_route(item_id: int, candidate_id: int) -> dict[str, Any]:
+    item = _app_call('get_inbox_record', item_id)
+    candidate = _app_call('get_inbox_route_candidate', candidate_id, item_id)
+    if not item or not candidate:
+        raise HTTPException(404, "收件箱交接候选不存在")
+    if candidate["status"] == "accepted":
+        raise HTTPException(409, "已确认的交接不能撤销，请在目标项目处理工作项")
+    updated = _app_call('update_inbox_route_candidate', candidate_id, {"status": "rejected"})
+    remaining = _app_call('list_inbox_route_candidates', item_id, "suggested")
+    if not remaining:
+        connection = db_connection()
+        try:
+            connection.execute("UPDATE inbox SET route_status = 'rejected', updated_at = ? WHERE id = ?", (now_iso(), item_id))
+            connection.commit()
+        finally:
+            connection.close()
+    return {"item": _app_call('get_inbox_record', item_id), "candidate": updated, "message": "已忽略这条交接建议。"}
+
+
+@app.post("/api/inbox/{item_id}/routes/{candidate_id}/accept-and-run")
+async def accept_and_run_inbox_route(item_id: int, candidate_id: int) -> dict[str, Any]:
+    """Confirm once, then immediately run the target Agent and return its evidence."""
+    accepted = await asyncio.to_thread(accept_inbox_route, item_id, candidate_id)
+    candidate = await asyncio.to_thread(get_inbox_route_candidate, candidate_id, item_id)
+    work_item_id = int((candidate or {}).get("work_item_id") or (accepted.get("work_item") or {}).get("id") or 0)
+    target_project = str((candidate or {}).get("target_project") or "")
+    if not work_item_id or not target_project:
+        raise HTTPException(409, "交接已确认，但没有找到可执行的目标工作项")
+    try:
+        result = await _app_call('run_project_work_item', target_project, work_item_id)
+        return {"accepted": accepted, "execution": result, "message": f"已确认并由{_app_call('agent_display_name', target_project)}执行，结果已回写。"}
+    except HTTPException as exc:
+        return {
+            "accepted": accepted,
+            "execution": {"ok": False, "status": "failed", "error": str(exc.detail)},
+            "work_item": _app_call('get_work_item_record', work_item_id),
+            "message": f"交接已创建，但{_app_call('agent_display_name', target_project)}执行失败：{exc.detail}",
+        }
+
+
+@app.patch("/api/inbox/{item_id}")
+def update_inbox_item(item_id: int, request: InboxUpdateRequest) -> dict[str, Any]:
+    if request.status is None and request.priority is None and request.content is None:
+        raise HTTPException(400, "没有可更新的收件箱字段")
+    if request.status is not None and request.status not in {"inbox", "done", "archived"}:
+        raise HTTPException(400, "不支持的收件箱状态")
+    if request.priority is not None and request.priority not in {"urgent", "high", "normal", "low"}:
+        raise HTTPException(400, "不支持的收件箱优先级")
+    connection = db_connection()
+    try:
+        updates: list[str] = []
+        values: list[Any] = []
+        if request.status is not None:
+            updates.append("status = ?")
+            values.append(request.status)
+        if request.priority is not None:
+            updates.append("priority = ?")
+            values.append(request.priority)
+        if request.content is not None:
+            updates.append("content = ?")
+            values.append(request.content.strip() or None)
+        updates.append("updated_at = ?")
+        values.append(now_iso())
+        values.append(item_id)
+        cursor = connection.execute(
+            f"UPDATE inbox SET {', '.join(updates)} WHERE id = ?",
+            values,
+        )
+        connection.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "收件箱条目不存在")
+        row = connection.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
+        return {"item": _app_call('inbox_row', row)}
+    finally:
+        connection.close()
+
+
+@app.delete("/api/inbox/{item_id}")
+def delete_inbox_item(item_id: int) -> dict[str, bool]:
+    connection = db_connection()
+    try:
+        connection.execute("DELETE FROM inbox_route_candidates WHERE inbox_id = ?", (item_id,))
+        cursor = connection.execute("DELETE FROM inbox WHERE id = ?", (item_id,))
+        connection.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "收件箱条目不存在")
+        return {"ok": True}
+    finally:
+        connection.close()
+
+
+__all__ = [
+    "create_agent_run_record",
+    "update_agent_run_record",
+    "add_agent_run_event",
+    "knowledge_tokens",
+    "agent_display_name",
+    "project_href",
+    "inbox_row",
+    "inbox_route_candidate_row",
+    "list_inbox_route_candidates",
+    "get_inbox_record",
+    "get_inbox_route_candidate",
+    "update_inbox_route_candidate",
+    "list_inbox",
+    "inbox_summary",
+    "create_inbox_record",
+    "normalized_inbox_text",
+    "extract_inbox_due",
+    "extract_inbox_next_steps",
+    "inbox_duplicate_match",
+    "inbox_learned_classification",
+    "infer_inbox_triage",
+    "analyze_inbox_record",
+    "triage_inbox_record",
+    "InboxRequest",
+    "InboxUpdateRequest",
+    "InboxClassificationFeedbackRequest",
+    "InboxBatchRequest",
+    "InboxMergeRequest",
+    "get_inbox",
+    "create_inbox_item",
+    "batch_update_inbox_items",
+    "analyze_inbox_item",
+    "inbox_classification_feedback",
+    "merge_inbox_item",
+    "accept_inbox_route",
+    "reject_inbox_route",
+    "accept_and_run_inbox_route",
+    "update_inbox_item",
+    "delete_inbox_item",
+]

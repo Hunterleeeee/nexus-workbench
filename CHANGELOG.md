@@ -1640,3 +1640,19 @@
   - 新模块统一带 `from __future__ import annotations`（注解惰性化，eager 全检通过）；
   - **app.py 从 3.27 万行累计降至 6246 行（-26454，只剩主入口/通用模型/少量领域）**，
     全量 509 通过。
+
+## v0.3.206 · 2026-08-14
+
+- **第 20 批：work-items/artifacts/relations 通用数据层 + inbox 路由补拆 + doc-factory 残留补拆**：
+  - 新建 `app_pkg/artifacts.py`（约 700 行）：work_items/artifacts/relations 数据层与路由
+    （模型 WorkItem/Handoff/Artifact 213-249 + 数据层 451-951 + 路由 2934-2991）、文档内容
+    提取（mineru/markitdown）、safe_filename；
+  - `app_pkg/inbox.py` 补拆：Inbox 模型 5 个（265-293）+ 路由 12 个（2595-2905）；
+  - `app_pkg/doc_factory.py` 补拆：DOC_FACTORY_TEMPLATES 常量 + templates/validate 函数
+    （354-444）；
+  - 兼容：inbox/artifacts 模块内互调 85 处改 `_app_call`；inbox 老模块补 `_app_call`
+    helper 与 AGENT_REGISTRY/pydantic/app 导入（路由进来后）；DOC_FACTORY_TEMPLATES
+    带注解的 AnnAssign 常量补进 __all__（__all__ 生成逻辑只认 ast.Assign 的坑）；
+    run_project_work_item 改转发（inbox→agent_engine→projects 循环导入）；
+  - **app.py 从 3.27 万行累计降至 5219 行（-27481，84% 已拆出）**，全量 509 通过，
+    3.11 + eager 注解全检 + 真实执行 smoke（artifact/work_item/relation/inbox 建单）通过。
