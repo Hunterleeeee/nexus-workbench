@@ -1413,3 +1413,13 @@
   - 平台函数：runtime_tool_policy/assert_runtime_tool_policies/subagent_tool_schemas/结果契约解析（_contract_source_*/agent_result_contract）/available_child_agents/capability_route_explanation/agent_declared_tools/validate_agent_tool_requests/build_agent_execution_plan/capability_graph_payload；
   - 兼容：REACT_TOOLS/SUBAGENT_EXTRA_TOOLS 是粘合层（引用各领域 handler）留 app.py，平台模块运行时经 `_react_tools()` 读取；projects 域函数（agent_display_name/load_projects 等）延迟转发；
   - app.py 从 3.27 万行累计降至 **2.5 万行**，全量 509 通过。dispatch_agent_task/call_llm_with_tools 执行器下一批。
+
+## v0.3.193 · 2026-08-14
+
+- **拆分第七批补充：Agent 执行器并入 `app_pkg/agent_platform.py`**（agent_platform 达约 1600 行，app.py 降至 2.46 万行）：
+  - dispatch_agent_task（总调度核心，346 行）+ call_llm_with_tools + AgentDispatchRequest model；
+  - 兼容：执行器内 LLM 敏感调用（llm_provider_state/llm_http_client/_llm_health/schedule_llm_usage_event/_record_llm_*/_call_llm_once）全走 `_app_call`；
+    agent run/session/work-item/ReAct 主循环等 12 个 app 级函数延迟转发；memories/notifications 直连；
+    MAX_MEMORY_* 常量从 memories 导入（core 无）；
+  - 源码断言测试适配新结构（总调度调用点移到 agent_platform.py）；
+  - app.py 从 3.27 万行累计降至 **2.46 万行**，全量 509 通过。

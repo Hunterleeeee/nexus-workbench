@@ -2973,12 +2973,17 @@ class ProjectAgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
 
     def test_the_project_chat_path_actually_asks_for_tools(self):
         """两条路径必须都调 run_agent_react_loop，否则又会各写一份、慢慢分叉。"""
-        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "app.py").read_text(encoding="utf-8")
         body = source[source.find("async def run_project_agent("):]
         body = body[:body.find("\ndef handoff_title(")]
         self.assertIn("subagent_tool_schemas(project_id)", body, "项目页对话没有取工具清单")
         self.assertIn("run_agent_react_loop(", body)
-        self.assertEqual(source.count("await run_agent_react_loop("), 2, "总调度和项目页都应走这一份实现")
+        # 总调度（dispatch_agent_task）已随 0.3.193 拆到 agent_platform.py，
+        # 两处调用分别在 app.py（项目页）与 agent_platform.py（总调度）。
+        platform = (root / "app_pkg" / "agent_platform.py").read_text(encoding="utf-8")
+        total = source.count("await run_agent_react_loop(") + platform.count("await run_agent_react_loop(")
+        self.assertEqual(total, 2, "总调度和项目页都应走这一份实现")
 
     def test_the_project_chat_cannot_reach_beyond_its_declared_tools(self):
         """能力放开的同时边界不能放开：可执行集合仍是这个项目自己声明的那一份。"""
