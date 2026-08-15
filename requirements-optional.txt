@@ -4,8 +4,6 @@
 # 安装失败只打日志、不阻断发布（对应功能自动降级）。
 #   crawl4ai      -> /crawl4ai 网页抓取与研究（开源版默认禁用入口，按需启用）
 #   pywebpush     -> 浏览器 Web Push 推送
-# 注：cryptography（VAPID 签名）已提升为核心依赖（requirements.txt / requirements.lock），
-#     这里保留只是为了兼容老安装方式。
+# 注：cryptography（VAPID 签名）在核心 requirements.txt / requirements.lock 中，无需在此安装。
 crawl4ai>=0.9.2
 pywebpush>=2.0.0
-cryptography>=42.0.0
