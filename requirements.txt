@@ -1,11 +1,13 @@
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-httpx>=0.27.0
-python-dotenv>=1.0.0
-python-multipart>=0.0.9
-pypdf>=5.0.0
-python-docx>=1.1.0
-openpyxl>=3.1.0
-pywebpush>=2.0.0
-cryptography>=42.0.0
-pytest>=8.0.0
+# 开发依赖（宽松范围）。生产/可复现安装用 requirements.lock。
+# 已加 <major 上限，避免自动安装拉到不兼容的大版本。
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1
+python-dotenv>=1.0,<2
+python-multipart>=0.0.9,<1
+pypdf>=5.0,<7
+python-docx>=1.1,<2
+openpyxl>=3.1,<4
+pywebpush>=2.0,<3
+cryptography>=42.0,<46
+pytest>=8.0,<10

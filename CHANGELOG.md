@@ -1,5 +1,16 @@
 # 迭代记录
 
+## v0.3.212 · 2026-08-15
+
+- **开源发布准备**：
+  - 新增 MIT LICENSE、通用 README（快速开始/初始化命令/插拔/安全边界）、CONTRIBUTING.md、SECURITY.md。
+  - `projects.json` 缺失时自动回退 `projects.open-source.json`（开源首次启动开箱即有项目入口），新增对应测试。
+  - `knowledge-base/` 个人内容停止跟踪（gitignore `knowledge-base/*`，仅保留 README.md），并从 git 历史清除。
+  - 服务器监控探测服务名可配置（`WORKBENCH_APP_SERVICE_NAME`），移除内部服务命名。
+  - 内部部署脚本/文档移出仓库；`generate-vapid-keys.py` 迁至 `scripts/`。
+  - `requirements.txt` 增加 `<major` 上限约束；`desktop/` 版本同步。
+  - 全仓库 git 历史敏感信息清洗（域名/IP/内部路径 → 占位符）。
+
 ## v0.3.181 · 2026-08-13
 
 - **全站质量排查（渲染 + 口径两类隐患一次性修复）**：

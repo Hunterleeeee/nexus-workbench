@@ -415,5 +415,22 @@ class KnowledgeNoteCrudTests(unittest.TestCase):
             app.delete_knowledge_note("/etc/passwd")
 
 
+
+    def test_projects_json_missing_falls_back_to_open_source_template(self):
+        """projects.json 缺失（开源首次启动）时自动回退到 open-source 模板。"""
+        import app_pkg.projects as projects_module
+        from unittest.mock import patch as _patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects_file = root / "projects.json"
+            template = root / "projects.open-source.json"
+            template.write_text(json.dumps([{"id": "demo", "title": "演示项目"}]), encoding="utf-8")
+
+            with _patch.object(projects_module, "PROJECTS_FILE", projects_file):
+                loaded = projects_module._load_configured_projects()
+
+        self.assertEqual([item["id"] for item in loaded], ["demo"])
+
 if __name__ == "__main__":
     unittest.main()

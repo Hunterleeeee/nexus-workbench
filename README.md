@@ -30,9 +30,18 @@
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+# 可复现安装（固定版本）：pip install -r requirements.lock
 ```
 
 可选增强（文档解析、浏览器渲染等）见 `requirements-optional.txt`。
+
+### 1.5 初始化项目配置
+
+```bash
+cp projects.open-source.json projects.json
+```
+
+`projects.json` 控制工作台展示哪些项目；缺失时会自动回退到 `projects.open-source.json`（开源默认模板，crawl4ai 关闭），所以这一步可跳过，但复制后可按需编辑 `enabled` 字段。
 
 ### 2. 配置
 
@@ -81,7 +90,7 @@ LLM_MODEL=gpt-4o-mini
 - `static/`：工作台与各项目页面资源。
 - `projects/`：项目页面模板（`projects.json` 的 `source_path` 相对此目录）。
 - `data/`：SQLite、LLM 本地配置、快照；不提交版本库。
-- `knowledge-base/`：知识库 Markdown 资产。
+- `knowledge-base/`：运行时 Markdown 知识库；默认只提交 `README.md`，个人内容不进入版本库。
 - `outputs/`：交付产物（草稿、DOCX/PDF）。
 - `deploy/`：Nginx / systemd / 健康检查 / 备份 / 一键部署脚本（模板）。
 - `desktop/`：Electron 桌面壳。

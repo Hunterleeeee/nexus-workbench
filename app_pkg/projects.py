@@ -62,14 +62,19 @@ def save_project_preferences(values: dict[str, Any]) -> None:
 
 
 def _load_configured_projects() -> list[dict[str, Any]]:
-    """读取 projects.json 原始项目列表，不应用任何用户显示偏好。"""
-    try:
-        values = json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(values, list):
-        return []
-    return [item for item in values if isinstance(item, dict) and item.get("id")]
+    """读取 projects.json 原始项目列表，不应用任何用户显示偏好。
+
+    首次启动时 projects.json 不存在（开源包默认只带 projects.open-source.json
+    模板）：自动回退到开源模板，保证开箱即有项目入口。
+    """
+    for path in (PROJECTS_FILE, PROJECTS_FILE.parent / "projects.open-source.json"):
+        try:
+            values = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(values, list):
+            return [item for item in values if isinstance(item, dict) and item.get("id")]
+    return []
 
 
 def load_projects() -> list[dict[str, Any]]:

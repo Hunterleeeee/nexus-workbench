@@ -626,7 +626,7 @@ def server_target_is_local(target: str) -> bool:
     return bool(target_ip) and (target_ip in local_addresses or target_ip in interface_ips)
 
 
-SERVER_MONITOR_PROBE_COMMAND = r'''set -e
+SERVER_MONITOR_PROBE_COMMAND_TEMPLATE = r'''set -e
 printf 'HOST|%s\n' "$(hostname)"
 printf 'OS|%s\n' "$(uname -srm)"
 printf 'UPTIME|%s\n' "$(uptime -p 2>/dev/null || uptime)"
@@ -635,7 +635,13 @@ printf 'DISK|%s\n' "$(df -P / | awk 'NR==2 {print $2 "|" $3 "|" $5}')"
 printf 'MEMORY|%s\n' "$(free -m 2>/dev/null | awk 'NR==2 {print $2 "|" $3 "|" $7}' || printf '—')"
 printf 'NGINX|%s\n' "$(systemctl is-active nginx 2>/dev/null || printf 'unknown')"
 printf 'WORKBENCH|%s\n' "$(systemctl is-active workbench 2>/dev/null || printf 'not-installed')"
-printf 'HOTEL|%s\n' "$(systemctl is-active pm2-app 2>/dev/null || printf 'unknown')"'''
+printf 'APP|%s\n' "$(systemctl is-active {app_service} 2>/dev/null || printf 'unknown')"'''
+
+
+def server_probe_command() -> str:
+    """探测命令；可额外监控的服务名通过环境变量配置（默认空=不探测）。"""
+    app_service = os.getenv("WORKBENCH_APP_SERVICE_NAME", "").strip()
+    return SERVER_MONITOR_PROBE_COMMAND_TEMPLATE.format(app_service=app_service or "nonexistent-service")
 
 
 DEFAULT_SERVER_THRESHOLDS: dict[str, float] = {
@@ -674,7 +680,7 @@ def save_server_monitor_thresholds(values: dict[str, float]) -> dict[str, float]
 
 def read_server_monitor() -> dict[str, Any]:
     config = _app_call('server_monitor_config', )
-    command = SERVER_MONITOR_PROBE_COMMAND
+    command = _app_call('server_probe_command', )
     target = config["server"]
     is_local = _app_call('server_target_is_local', target)
     if is_local:
@@ -711,8 +717,8 @@ def read_server_monitor() -> dict[str, Any]:
         elif key == "MEMORY":
             memory = value.split("|")
             parsed["memory"] = {"total_mb": memory[0], "used_mb": memory[1], "available_mb": memory[2]} if len(memory) == 3 else {"raw": value}
-        elif key in {"NGINX", "WORKBENCH", "HOTEL"}:
-            parsed["app" if key == "HOTEL" else key.lower()] = value
+        elif key in {"NGINX", "WORKBENCH", "APP"}:
+            parsed[key.lower()] = value
     return parsed
 
 @app.get("/api/server")
@@ -786,7 +792,7 @@ async def refresh_server_monitor(request: ServerMonitorRequest) -> dict[str, Any
 
 __all__ = [
     "DEFAULT_SERVER_THRESHOLDS",
-    "SERVER_MONITOR_PROBE_COMMAND",
+    "server_probe_command",
     "SERVER_SAFE_ACTIONS",
     "ServerActionRequest",
     "ServerMonitorRequest",
