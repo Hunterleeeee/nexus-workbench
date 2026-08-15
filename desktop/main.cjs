@@ -5,7 +5,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { randomUUID } = require("node:crypto");
 
-const DEFAULT_WORKBENCH_URL = "https://workbench.example.dev:8765/";
+const DEFAULT_WORKBENCH_URL = "https://workbench.example.dev/";
 const WORKBENCH_URL = (process.env.WORKBENCH_URL || DEFAULT_WORKBENCH_URL).trim();
 const TAB_BAR_HEIGHT = 42;
 const BROWSER_DOCK_PARTITION = "persist:workbench-ai-browser";

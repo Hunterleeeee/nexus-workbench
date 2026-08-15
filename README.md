@@ -1,92 +1,105 @@
 # Workbench
 
-个人线上工作台的代码与数据工作区。日常入口只使用线上地址，本目录仅用于代码、配置和产物维护：
+个人 AI 工作台：FastAPI 后端 + 多项目入口 + Agent 调度 + Electron 桌面壳。把「收件箱、知识库、文档工厂、研究、云开发、产品管理」等日常任务聚合成一个可部署的工作台，项目可插拔（`projects.json` 控制启用/禁用）。
 
-`/srv/workbench/`
+> 开源版默认关闭爬虫入口（`projects.open-source.json` 里 crawl4ai 为 `enabled: false`）。部署时把该文件复制为 `projects.json` 即可获得开源默认配置，也可按需编辑 `enabled` 字段。
 
-线上访问：`https://workbench.example.dev:8765/`（当前发布版本以线上页面/API 为准，受保护 API 需认证，日常只使用线上入口；本机不启动 Workbench 端口）
+## 功能一览
 
-## 入口
-
-- `/`：紧凑型项目入口首页（「现在要处理」待办：一键处理 / 忽略 / 恢复；`⌘K` 命令面板；侧栏推送订阅 + 版本号）
-- `/projects/inbox`：快速收件箱（7 类分类、合并建议、批量整理），数据保存到 `data/workbench.db`
-- `/projects/knowledge`：本地 Markdown 知识库（**关键词 + 语义向量混合检索**、Obsidian 只读索引、从产物生成草稿），文件保存到 `knowledge-base/`
-- `/projects/doc-factory`：把 PDF、Word、Excel、PPTX、HTML、Markdown 或粘贴材料生成 Markdown 产物（可选 MarkItDown 增强转换；DOCX/PDF 交付+审批+按意见重新生成）
-- `/projects/sub2api`：查看 Sub2API 余额、订阅、额度趋势与用量快照（服务器自动同步 + 风险评估）
-- `/crawl4ai`：Crawl4AI 网页研究入口（队列、取消、证据问答、**支持微信公众号文章抓取**）
-- `/projects/web-research`：轻量网页研究浏览器（多页面上下文、来源证据、追问、Artifact/WorkItem 交接；附无需安装扩展的“研究当前网页”书签入口）
-- `/projects/cloud-dev`：受控云开发入口（状态、固定测试配方、审批构建；不接受任意 shell）
-- `/projects/cid-dashboard`：中国独立开发者看板（机会卡、竞品比较）
-- `/projects/market`：量化选股（4 段式研究流程、SVG 走势图、因子、观察任务、显式历史样本采集、日报/周报、回测）
-- `/projects/server`：服务器只读监控（可配置阈值、历史展开）
-- `/projects/aihot`：AI 热点研究（多数据源、洞察、机会交接、摘要推送 Web Push）
-- `/projects/ai-learning`：AI 转型学习教练（每日知识、工作案例、练习自测、进度复盘与定时 Push）
+- `/`：项目入口首页（「现在要处理」待办、`⌘K` 命令面板、推送订阅）
+- `/projects/inbox`：快速收件箱（7 类分类、合并建议、批量整理）
+- `/projects/knowledge`：本地 Markdown 知识库（关键词 + 语义向量混合检索、Obsidian 只读索引）
+- `/projects/doc-factory`：PDF/Word/Excel/PPTX/HTML/Markdown → 结构化产物（可选 MarkItDown 增强、DOCX/PDF 交付审批）
+- `/projects/web-research`：轻量 AI 网页研究工作区（多上下文、来源证据、追问、Artifact/WorkItem 交接）
+- `/projects/cloud-dev`：受控云开发入口（白名单工作区、固定状态/测试配方、构建审批；不接受任意 shell）
+- `/projects/market`：量化选股（可解释因子、观察任务、日报/周报、回测；不自动下单）
+- `/projects/server`：服务器只读监控（SSH/本机只读探测、阈值、历史快照、健康评分）
+- `/projects/aihot`：AI 热点研究（多数据源、洞察、Web Push 摘要推送）
+- `/projects/ai-learning`：AI 转型学习教练（每日知识、练习自测、定时 Push）
 - `/projects/idea-analysis`：想法分析（结构化验证、证据/指标回填、继续/暂停/转向）
-- `/projects/product-manager`：产品作战室（反馈证据、需求池、RICE 优先级、Cowart 无限画布与原型版本、决策记录、PRD 生成）
-- `/automation`：自动化中心（规则类型目录、多步骤计划、重试与人工接管；线上实际规则数量以页面和 API 为准）
+- `/projects/product-manager`：产品作战室（反馈证据、需求池、RICE 优先级、决策记录、PRD 生成）
+- `/automation`：自动化中心（规则目录、多步骤计划、重试与人工接管）
 
-首页“总调度 Agent”是父 Agent；各项目入口声明为子 Agent。调度结果会写入 `data/workbench.db` 的 `work_items`，跨项目交接通过 `/api/handoffs` 记录。总调度对子 Agent 并发调用并建立独立 child Run（失败隔离、partial 标记）。
+首页「总调度 Agent」是父 Agent，各项目入口声明为子 Agent；调度结果写入 `data/workbench.db` 的 `work_items`，跨项目交接通过 `/api/handoffs` 记录。
 
-项目联动与 Agent 的现状、未完成项和后续三轮路线见 [`PROJECT-ARCHITECTURE.md`](PROJECT-ARCHITECTURE.md)；待做与优化清单（含文案/交互/功能分级）见 [`PROJECT-TODO-OPTIMIZE.md`](PROJECT-TODO-OPTIMIZE.md)。LLM Provider 规则、环境变量兜底和 Secret 迁移边界见 [`LLM-CONFIGURATION.md`](LLM-CONFIGURATION.md)。
+## 快速开始
+
+### 1. 安装依赖
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+```
+
+可选增强（文档解析、浏览器渲染等）见 `requirements-optional.txt`。
+
+### 2. 配置
+
+复制 `.env.example` 为 `.env` 并填写：
+
+```env
+# 必填：LLM（OpenAI 兼容接口）
+LLM_API_KEY=your_api_key_here
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o-mini
+
+# 可选：飞书机器人（不配则飞书相关功能禁用）
+# WORKBENCH_FEISHU_APP_ID=cli_xxx
+# WORKBENCH_FEISHU_APP_SECRET=your_app_secret
+# WORKBENCH_FEISHU_VERIFY_TOKEN=your_verify_token
+
+# 可选：服务器监控目标（不配则服务器监控页为空）
+# WORKBENCH_SERVER=root@your-server.example.com
+# WORKBENCH_SERVER_SSH_KEY=~/.ssh/your_key
+```
+
+所有配置项见 `.env.example`（含注释说明）。
+
+### 3. 启动
+
+```bash
+.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8765
+```
+
+浏览器打开 `http://127.0.0.1:8765` 即可。完整生产部署（Nginx + systemd + 备份）可参考 `deploy/` 目录中的脚本与配置模板。
+
+## 项目插拔
+
+`projects.json` 控制工作台展示哪些项目。每个条目支持 `enabled` 字段（缺省启用）：
+
+```json
+{ "id": "crawl4ai", "enabled": false, "note": "不引导爬虫入口" }
+```
+
+禁用后：首页入口、子 Agent 工具、显式/自动调度路由都会统一过滤（页面与业务 API 返回 404）。`projects.open-source.json` 是开源默认模板。
 
 ## 目录职责
 
-- `app.py`：FastAPI、Agent、联动与本地数据接口。
-- `static/`：工作台和各项目页面资源。
-- `static/vendor/cowart/`：固定为 Cowart 0.1.25 的 Workbench 画布前端；默认统计标识已移除，生产使用 tldraw 前仍需确认适用授权。
-- `data/`：SQLite、脱敏快照、LLM 本地配置与可恢复备份；不提交版本库。
-- `knowledge-base/`：工作台生成的 Markdown 知识资产。
-- `outputs/`：版本化草稿和正式 DOCX/PDF 交付包。
-- `deploy/`：Nginx、systemd、健康检查、备份与一键部署脚本。
+- `app.py`：FastAPI 主应用（已按领域拆分为 `app_pkg/` 模块）。
+- `app_pkg/`：35 个领域模块（projects / inbox / knowledge / agent_engine / market / server / feishu …）。
+- `static/`：工作台与各项目页面资源。
+- `projects/`：项目页面模板（`projects.json` 的 `source_path` 相对此目录）。
+- `data/`：SQLite、LLM 本地配置、快照；不提交版本库。
+- `knowledge-base/`：知识库 Markdown 资产。
+- `outputs/`：交付产物（草稿、DOCX/PDF）。
+- `deploy/`：Nginx / systemd / 健康检查 / 备份 / 一键部署脚本（模板）。
 - `desktop/`：Electron 桌面壳。
-- `companion/`：仅监听本机回环地址的 Gemini Companion；按需调用来财固定 bridge，不要求来财主程序常驻。
-- `backup.py`：数据库备份/恢复 CLI（backup / list / restore）。
-- `PROJECT-*.md`、`UNFINISHED-CHECKLIST.md`、`ITERATIONS.md`、`PROJECT-TODO-OPTIMIZE.md`：架构、审计、联动、迭代和待做/优化记录。
-- `PROJECT-FUTURE-INTEGRATIONS.md`：集成筛选、首版接入边界和后续候选；ntfy / Miniflux / Zotero / GitHub Issues & PR / ActivityWatch / Linkding / Paperless-ngx / Vikunja 已有首版只读接口，MarkItDown 已作为可选文档转换器接入，其余仍是候选。
+- `backup.py`：数据库备份/恢复 CLI。
 
-验收 WorkItem 完成取证后统一转为 `archived`，保留数据库中的 Run、Relation、Notification 和证据矩阵，不继续占据首页待处理列表。正式交付与真实联动产物不作为临时文件清理。
+## 测试
 
-## 运行入口
-
-日常访问和验收统一使用线上地址：<https://workbench.example.dev:8765/>。本机不再作为工作台运行入口；发布、备份、回滚和健康检查见 [`deploy/README.md`](deploy/README.md)，统一由 `deploy/deploy-workbench.sh` 管理。
-
-## 全局 LLM
-
-点击首页左侧“全局 LLM”，配置一次 API Key、API 地址和模型名（支持多条目主/fallback 角色）。API 地址可填 OpenAI 兼容 API 基地址（例如 `/v1`）或完整 `/chat/completions` 地址；禁止把用户名、密码、Key 或 URL 片段写进地址。只有三项都有效的条目才会调用；缺项条目会保留并说明原因，调用顺序为主配置 → 保存顺序中的 fallback → 环境变量最后兜底。所有项目子 Agent（包括独立开发者看板）都通过工作台后端共用同一份配置，浏览器项目不会再单独发送 API Key。首页和 Crawl4AI 的配置弹窗都会显示当前生效 Provider 与近 24 小时运行指标。
-
-配置保存在 `data/llm_settings.json`，后端会尝试设置为仅当前用户可读；该文件已加入 `.gitignore`。也可以使用 `.env` 作为备用配置：
-
-```env
-LLM_API_KEY=你的密钥
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL=gpt-4o-mini
+```bash
+.venv/bin/python -m pytest tests/ -q
 ```
 
-## 飞书云开发与本机 Gemini
+## 安全边界
 
-飞书消息使用明确前缀进入受控云开发链路：
+- `.env`、`data/*.db`、`data/llm_settings.json` 均不提交版本库（见 `.gitignore`）。
+- 云开发只接受白名单工作区 + 固定配方命令，使用 `shell=False`，不支持任意 shell。
+- 浏览器项目只能访问公开 URL；工作台自身（`WORKBENCH_PUBLIC_URL` 配置的源）永远不能成为目标。
+- 服务器监控为只读探测；日志读取和重启必须服务器侧人工确认。
 
-```text
-云开发 workbench 查看状态
-云开发 workbench 运行测试
-云开发 workbench 构建
-```
+## License
 
-服务器 `.env` 推荐使用带 `WORKBENCH_` 前缀的飞书配置（代码也兼容无前缀的旧名称）：
-
-```env
-WORKBENCH_FEISHU_APP_ID=飞书自建应用 App ID
-WORKBENCH_FEISHU_APP_SECRET=飞书自建应用 App Secret
-WORKBENCH_FEISHU_VERIFY_TOKEN=事件订阅校验 token
-# 或使用 WORKBENCH_FEISHU_ENCRYPT_KEY 替代 VERIFY_TOKEN
-```
-
-服务器服务模板默认把发布目录作为显式云开发工作区（部署脚本会按目标目录替换路径）；也可以在 `.env` 中改为 alias/path 配置。状态/测试只有在该白名单存在时执行，构建始终先进入 Workbench 审批中心。命令由固定配方生成，使用 `shell=False`，不支持任意 shell、远程 SSH 或自动部署。飞书公开回调还必须配置 `WORKBENCH_FEISHU_ENCRYPT_KEY` 或 `WORKBENCH_FEISHU_VERIFY_TOKEN` 至少一项，否则回调会拒绝处理；回调按事件 ID 做 7 天幂等，防止飞书重试重复执行云开发动作。
-
-网页研究页里的 Gemini 开关调用本机 `companion/workbench_companion.py`。Companion 只监听 `127.0.0.1:8766`，启动/停止来财 bridge 前会要求用户确认，并可能弹出 macOS 管理员授权；未运行 Companion 时，服务器不会代替本机执行。
-
-## 迁移说明
-
-原先的 Crawl4AI Studio 已迁入本目录根部，之前的看板页面已复制到 `projects/cid-dashboard-v2.html`。旧目录保留为回退副本，后续以本目录为准。
-
-Sub2API 页面使用 `data/sub2api_snapshot.json` 保存最近一次浏览器同步的脱敏快照；不会读取或保存完整 API Key、密码或浏览器 Cookie。
+[MIT](LICENSE)

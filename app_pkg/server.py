@@ -588,8 +588,8 @@ def evaluate_server_monitor(snapshot: dict[str, Any] | None = None, create_recor
 
 
 def server_monitor_config() -> dict[str, str]:
-    server = os.getenv("WORKBENCH_SERVER", "root@workbench.example.dev").strip()
-    key = os.path.expanduser(os.getenv("WORKBENCH_SERVER_SSH_KEY", "~/.ssh/deploy_key").strip())
+    server = os.getenv("WORKBENCH_SERVER", "").strip() or "root@your-server.example.com"
+    key = os.path.expanduser(os.getenv("WORKBENCH_SERVER_SSH_KEY", "~/.ssh/workbench_deploy").strip())
     known_hosts = os.path.expanduser(os.getenv("WORKBENCH_SERVER_KNOWN_HOSTS", "~/.ssh/known_hosts").strip())
     return {"server": server, "ssh_key": key, "known_hosts": known_hosts}
 

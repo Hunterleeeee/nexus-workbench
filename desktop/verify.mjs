@@ -17,7 +17,7 @@ if (packageJson.version !== version) fail(`桌面壳版本 ${packageJson.version
 
 const main = readDesktop("main.cjs");
 for (const required of [
-  "https://workbench.example.dev:8765/",
+  "https://workbench.example.dev/",
   "contextIsolation: true",
   "nodeIntegration: false",
   "sandbox: true",

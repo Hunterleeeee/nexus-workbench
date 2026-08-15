@@ -392,7 +392,7 @@ def _public_projects_uncached() -> list[dict[str, Any]]:
             public["summary"] = {
                 "value": disk.get("used_pct", "—"),
                 "label": f"磁盘已用 · {server_analysis.get('freshness', {}).get('label', '无数据')}",
-                "detail": f"{server.get('host', 'workbench.example.dev')} · 内存 {server.get('memory', {}).get('used_mb', '—')}/{server.get('memory', {}).get('total_mb', '—')} MB · Nginx {server.get('nginx', '—')}",
+                "detail": f"{server.get('host', 'your-server.example.com')} · 内存 {server.get('memory', {}).get('used_mb', '—')}/{server.get('memory', {}).get('total_mb', '—')} MB · Nginx {server.get('nginx', '—')}",
             }
             public["primary_action"] = {"label": "查看监控", "href": "/projects/server"}
             if server_failed:

@@ -258,13 +258,13 @@ class IntegrationTests(unittest.TestCase):
         url = "https://notify.test/workbench"
         FakeClient.responses[("POST", url)] = FakeResponse({"id": "message-1"})
         with patch.object(app.httpx, "AsyncClient", FakeClient):
-            result = asyncio.run(app.send_ntfy_message(title="提醒", body="请处理", href="https://workbench.example.dev:8765/", priority="high"))
+            result = asyncio.run(app.send_ntfy_message(title="提醒", body="请处理", href="https://workbench.example.dev/", priority="high"))
         self.assertTrue(result["ok"])
         call = FakeClient.calls[0]
         self.assertEqual(call[0], "POST")
         self.assertEqual(call[2]["Authorization"], "Bearer token")
         self.assertEqual(call[2]["Priority"], "high")
-        self.assertEqual(call[2]["Click"], "https://workbench.example.dev:8765/")
+        self.assertEqual(call[2]["Click"], "https://workbench.example.dev/")
 
     def test_integration_routes_redact_secrets_and_import_work_item(self):
         """Exercise the public API contract, not only the underlying helpers."""

@@ -7,7 +7,7 @@
 ## 开发
 
 ```bash
-cd /srv/workbench/desktop
+cd desktop
 npm install
 npm start
 ```
@@ -40,10 +40,10 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npm run package
 
 `npm run verify` 不启动应用，也不需要读取线上凭据；它会检查桌面壳版本是否与根目录 `VERSION` 一致、远程地址和 Electron 隔离配置、PWA Manifest 以及 Service Worker 缓存版本。它是发布前静态门禁，不等于已经生成安装包或完成线上发布。
 
-默认打开线上 Workbench：`https://workbench.example.dev:8765/`。如需切换到其他部署地址，必须使用 HTTPS：
+默认打开部署的 Workbench 地址（默认 `https://workbench.example.dev/`，可用 `WORKBENCH_URL` 覆盖）。如需切换到其他部署地址，必须使用 HTTPS：
 
 ```bash
-WORKBENCH_URL=https://workbench.example.com npm start
+WORKBENCH_URL=https://workbench.example.dev npm start
 ```
 
 壳不会忽略证书错误，也不设置 `ignore-certificate-errors`。远程页面只能在原始 Workbench 同源地址内导航；安全的 HTTPS 外链交给系统浏览器，任意 `file://`、`javascript:`、`data:` 等其他协议会被拒绝（错误页使用的内部 `data:` 页面除外）。窗口启用单实例、隔离上下文、Node 禁用、沙箱和 Web 安全策略；preload 保持空实现。

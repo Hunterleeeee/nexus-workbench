@@ -784,12 +784,18 @@ class StaticAssetCompressionTests(unittest.TestCase):
     """Cowart 画布 bundle 有 5.9MB，线上没有压缩——慢网络下表现就是「画布打不开」。"""
 
     def test_deploy_precompresses_large_static_assets(self):
-        script = (Path(__file__).resolve().parents[1] / "deploy" / "deploy-workbench.sh").read_text(encoding="utf-8")
+        script_path = Path(__file__).resolve().parents[1] / "deploy" / "deploy-workbench.sh"
+        if not script_path.is_file():
+            self.skipTest("deploy 脚本不在这个检出里（开源包不包含内部部署脚本）")
+        script = script_path.read_text(encoding="utf-8")
         self.assertIn("precompress_static_assets", script)
         self.assertIn("gzip -9 -c", script)
 
     def test_nginx_prefers_the_precompressed_file(self):
-        conf = (Path(__file__).resolve().parents[1] / "deploy" / "workbench-nginx.conf").read_text(encoding="utf-8")
+        conf_path = Path(__file__).resolve().parents[1] / "deploy" / "workbench-nginx.conf"
+        if not conf_path.is_file():
+            self.skipTest("deploy 配置不在这个检出里（开源包不包含内部部署配置）")
+        conf = conf_path.read_text(encoding="utf-8")
         self.assertIn("gzip_static on;", conf)
         self.assertIn("gzip on;", conf)
 
@@ -2574,13 +2580,14 @@ class InlineScriptScopeTests(unittest.TestCase):
 
 
 class ProjectSourceFallbackTests(unittest.TestCase):
-    """projects.json 里配的是开发机上的绝对路径。"""
+    """projects.json 里的 source_path 是相对路径（开源版），运行时按仓库根解析。"""
 
-    def test_the_configured_path_is_machine_specific(self):
+    def test_the_configured_path_is_relative(self):
         config = json.loads((Path(__file__).resolve().parents[1] / "projects.json").read_text(encoding="utf-8"))
         items = config if isinstance(config, list) else config.get("projects", [])
         entry = next(item for item in items if item.get("id") == "cid-dashboard")
-        self.assertTrue(entry["source_path"].startswith("/Users/"), "如果哪天改成相对路径，这个兜底就可以拆了")
+        self.assertFalse(entry["source_path"].startswith("/"), "开源版 source_path 必须是相对路径")
+        self.assertTrue(entry["source_path"].endswith(".html"))
 
     def test_the_route_falls_back_to_the_copy_inside_this_repo(self):
         """换一台机器那个绝对路径就不存在，iframe 404、整页空白，
