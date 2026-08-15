@@ -389,7 +389,7 @@ def analyze_server_snapshot(
 
     services = [
         {"key": "nginx", "label": "Nginx", "value": str(snapshot.get("nginx") or "unknown"), "required": True},
-        {"key": "hotel", "label": "App / PM2", "value": str(snapshot.get("hotel") or "unknown"), "required": True},
+        {"key": "app", "label": "App / PM2", "value": str(snapshot.get("app") or "unknown"), "required": True},
         {"key": "workbench", "label": "Workbench", "value": str(snapshot.get("workbench") or "unknown"), "required": False},
     ]
     alerts: list[dict[str, Any]] = []
@@ -635,7 +635,7 @@ printf 'DISK|%s\n' "$(df -P / | awk 'NR==2 {print $2 "|" $3 "|" $5}')"
 printf 'MEMORY|%s\n' "$(free -m 2>/dev/null | awk 'NR==2 {print $2 "|" $3 "|" $7}' || printf '—')"
 printf 'NGINX|%s\n' "$(systemctl is-active nginx 2>/dev/null || printf 'unknown')"
 printf 'WORKBENCH|%s\n' "$(systemctl is-active workbench 2>/dev/null || printf 'not-installed')"
-printf 'HOTEL|%s\n' "$(systemctl is-active pm2-example-user 2>/dev/null || printf 'unknown')"'''
+printf 'HOTEL|%s\n' "$(systemctl is-active pm2-app 2>/dev/null || printf 'unknown')"'''
 
 
 DEFAULT_SERVER_THRESHOLDS: dict[str, float] = {
@@ -712,7 +712,7 @@ def read_server_monitor() -> dict[str, Any]:
             memory = value.split("|")
             parsed["memory"] = {"total_mb": memory[0], "used_mb": memory[1], "available_mb": memory[2]} if len(memory) == 3 else {"raw": value}
         elif key in {"NGINX", "WORKBENCH", "HOTEL"}:
-            parsed[key.lower()] = value
+            parsed["app" if key == "HOTEL" else key.lower()] = value
     return parsed
 
 @app.get("/api/server")

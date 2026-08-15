@@ -129,7 +129,7 @@
       const predText = [diskPred, memPred].map((item, index) => { const label = index === 0 ? "磁盘" : "内存"; if (item.status === "unknown") return `${label} 样本不足`; if (item.status === "stable") return `${label} 平稳`; if (item.status === "growing") return `${label} ${item.days_to_warn == null ? "—" : `约 ${Math.round(item.days_to_warn)} 天到提醒`}`; return `${label} 待预测`; }).join(" · ");
       $("#server-capacity").textContent = predText.includes("样本不足") && predText.includes("待预测") ? "积累中" : predText;
       $("#server-capacity-detail").textContent = [diskPred, memPred].map((item, index) => { const label = index === 0 ? "磁盘" : "内存"; return item.status === "growing" ? `${label}：${item.note || ""}` : ""; }).filter(Boolean).join("；") || "积累历史快照后预测容量剩余天数";
-      const serviceItems = analysis.services || [{ label: "Nginx", value: server.nginx, required: true }, { label: "Workbench", value: server.workbench, required: false }, { label: "App / PM2", value: server.hotel, required: true }];
+      const serviceItems = analysis.services || [{ label: "Nginx", value: server.nginx, required: true }, { label: "Workbench", value: server.workbench, required: false }, { label: "App / PM2", value: server.app, required: true }];
       $("#service-list").innerHTML = serviceItems.map((item) => service(`${item.label}${item.required ? " · 必需" : " · 非必需"}`, item.value)).join("");
       const alerts = analysis.alerts || [];
       const recovered = analysis.recovered || [];
