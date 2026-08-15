@@ -27,3 +27,4 @@ archive/
 knowledge-base/*
 !knowledge-base/README.md
 static/cloud-patch-probe.txt
+deploy/
