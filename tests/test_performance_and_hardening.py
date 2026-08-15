@@ -888,7 +888,11 @@ class AiLearningReviewTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 503)
 
     def test_non_json_model_output_degrades_without_losing_content(self):
-        """模型不听话时不能白跑一次调用，学员至少要看到它说了什么。"""
+        """模型不听话时不能白跑一次调用，学员至少要看到它说了什么。
+
+        修复后策略：原始回复放 raw_output（前端用 Markdown 渲染），rewrite 留空，
+        另加 parse_warning 提示字段。
+        """
         temp_dir, database_file = temp_database()
 
         async def chatty_llm(*args, **kwargs):
@@ -899,7 +903,9 @@ class AiLearningReviewTests(unittest.TestCase):
             with patch.object(app, "llm_settings", lambda: {"configured": True}), patch.object(app, "call_llm", chatty_llm):
                 feedback = asyncio.run(app.review_ai_learning_practice(lesson_id))["feedback"]
         self.assertTrue(feedback["raw_only"])
-        self.assertIn("频率说明", feedback["rewrite"])
+        self.assertEqual(feedback["rewrite"], "")
+        self.assertIn("频率说明", feedback["raw_output"])
+        self.assertIn("verdict", feedback["parse_warning"])
 
     def test_json_extraction_handles_fenced_and_prefixed_output(self):
         self.assertEqual(app.extract_json_block('```json\n{"a":1}\n```'), '{"a":1}')

@@ -994,8 +994,12 @@ def _parse_ai_learning_feedback(raw: str) -> dict[str, Any]:
     """把模型返回解析成固定结构；解析失败时降级为纯文本，不丢内容。"""
     parsed = decode_json_value(extract_json_block(raw), {}) or {}
     if not isinstance(parsed, dict) or not parsed.get("verdict"):
-        return {"verdict": "已生成", "score": 0, "met": [], "gaps": [], "rewrite": clip(raw.strip(), 4000),
-                "misconception": "", "next_question": "", "raw_only": True}
+        # 解析失败：把整段放进 raw_output（不塞 rewrite 字段，rewrite 应是达标的改写）。
+        # 前端会用 Markdown 渲染 raw_output，避免出现"乱码字符串"。
+        return {"verdict": "已生成", "score": 0, "met": [], "gaps": [], "rewrite": "",
+                "misconception": "", "next_question": "", "raw_only": True,
+                "raw_output": (raw or "").strip(),
+                "parse_warning": "模型输出不符合预期 JSON 结构，已显示原始回复（缺少 'verdict' 字段）。"}
     def as_list(value: Any) -> list[str]:
         if isinstance(value, list):
             return [clip(str(item), 400) for item in value if str(item).strip()][:6]

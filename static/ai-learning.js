@@ -49,14 +49,20 @@ function aiReviewMarkup(lesson) {
   }
   const list = (items, cls) => (items || []).length ? `<ul class="ai-review-list ${cls}">${items.map((x) => `<li>${_exploreItemToText(x)}</li>`).join("")}</ul>` : "";
   const verdictClass = fb.verdict === "达标" ? "pass" : fb.verdict === "未达标" ? "fail" : "partial";
+  const md = window.WorkbenchMarkdown || { render: (s) => learnEscape(s), renderInline: (s) => learnEscape(s), escapeHtml: learnEscape };
+  const rewriteHtml = fb.rewrite ? md.render(fb.rewrite) : "";
+  // raw_only 模式：渲染 raw_output（原始模型回复）+ 渲染 parse_warning（解析失败提示）
+  const rawOnlyHtml = fb.raw_only
+    ? `${fb.raw_output ? md.render(fb.raw_output) : ""}<p class="ai-review-warn">${learnEscape(fb.parse_warning || "模型输出不符合预期 JSON 结构，已显示原始回复。")}</p>`
+    : "";
   return `<div id="ai-review" class="ai-review ${verdictClass}">
     <div class="ai-review-head"><strong>AI 批改：${learnEscape(fb.verdict)}</strong>${fb.score ? `<span class="ai-review-score">${learnEscape(fb.score)}/100</span>` : ""}<small>${learnEscape(formatReviewTime(fb.reviewed_at))}</small></div>
-    ${fb.raw_only ? `<p>${learnEscape(fb.rewrite)}</p>` : `
+    ${fb.raw_only ? rawOnlyHtml : `
       ${list(fb.met, "met")}
       ${fb.gaps && fb.gaps.length ? `<div class="ai-review-block"><h4>差在哪</h4>${list(fb.gaps, "gaps")}</div>` : ""}
-      ${fb.misconception ? `<div class="ai-review-block"><h4>自测这题的误解</h4><p>${learnEscape(fb.misconception)}</p></div>` : ""}
-      ${fb.rewrite ? `<details class="ai-review-block"><summary>达标版本改写（保留你的业务场景）</summary><pre class="ai-review-rewrite">${learnEscape(fb.rewrite)}</pre></details>` : ""}
-      ${fb.next_question ? `<div class="ai-review-block next"><h4>下一步想一想</h4><p>${learnEscape(fb.next_question)}</p></div>` : ""}`}
+      ${fb.misconception ? `<div class="ai-review-block"><h4>自测这题的误解</h4><div>${md.render(fb.misconception)}</div></div>` : ""}
+      ${rewriteHtml ? `<details class="ai-review-block" open><summary>达标版本改写（保留你的业务场景）</summary><div class="ai-review-rewrite">${rewriteHtml}</div></details>` : ""}
+      ${fb.next_question ? `<div class="ai-review-block next"><h4>下一步想一想</h4><div>${md.render(fb.next_question)}</div></div>` : ""}`}
     <p class="ai-review-policy">${learnEscape(fb.policy || "")}</p>
     <button id="request-ai-review" class="secondary-button" type="button">重新批改</button>
   </div>`;
@@ -609,7 +615,7 @@ function urlBase64ToBytes(value) {
 
 async function ensureLearningServiceWorker() {
   if (!("serviceWorker" in navigator)) throw new Error("当前浏览器不支持 Service Worker");
-  await navigator.serviceWorker.register("/static/sw.js?v=0.3.214", { scope: "/" });
+  await navigator.serviceWorker.register("/static/sw.js?v=0.3.215", { scope: "/" });
   return navigator.serviceWorker.ready;
 }
 
