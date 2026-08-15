@@ -57,7 +57,7 @@ let savedAuthRejected = false; // 保存的凭据被服务器 401 拒绝过（�
 function promptForCredentials(window, authInfo) {
   return new Promise((resolve) => {
     pendingAuthResolve = resolve;
-    const host = authInfo && authInfo.host ? authInfo.host : "Workbench";
+    const host = authInfo && authInfo.host ? authInfo.host : "NEXUS";
     const html = `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -82,7 +82,7 @@ function promptForCredentials(window, authInfo) {
   </head>
   <body>
     <main>
-      <h1>登录 Workbench</h1>
+      <h1>登录 NEXUS</h1>
       <p class="host">${escapeHtml(host)}</p>
       <form id="form">
         <label for="username">账号</label>
@@ -616,7 +616,7 @@ function createTabView(url, options = {}) {
   view.webContents.on("will-attach-webview", (event) => event.preventDefault());
   view.webContents.on("did-fail-load", (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3 || state.showingErrorPage) return;
-    showErrorPage(view, state, "无法连接 Workbench", errorDescription || "页面加载失败，请检查服务器和网络后重试。");
+    showErrorPage(view, state, "无法连接 NEXUS", errorDescription || "页面加载失败，请检查服务器和网络后重试。");
   });
 
   // 桌面壳里禁用 Service Worker：避免 SW 缓存导致页面永远显示旧版本。
@@ -1222,7 +1222,7 @@ function createWindow() {
     height: 900,
     minWidth: 1120,
     minHeight: 720,
-    title: "Workbench",
+    title: "NEXUS",
     backgroundColor: "#f4f6f8",
     show: false,
     autoHideMenuBar: true,
