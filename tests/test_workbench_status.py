@@ -432,5 +432,34 @@ class KnowledgeNoteCrudTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in loaded], ["demo"])
 
+
+    def test_server_probe_skips_app_when_not_configured(self):
+        """未配置 WORKBENCH_APP_SERVICE_NAME 时探测命令不含 APP 探测（避免报 inactive 误报）。"""
+        import os
+        import app_pkg.server as server_module
+        old = os.environ.pop("WORKBENCH_APP_SERVICE_NAME", None)
+        try:
+            cmd = server_module.server_probe_command()
+        finally:
+            if old is not None:
+                os.environ["WORKBENCH_APP_SERVICE_NAME"] = old
+        self.assertIn("# APP 服务未配置", cmd)
+        self.assertNotIn("printf 'APP|", cmd)
+
+    def test_server_probe_app_when_configured_uses_active_guard(self):
+        """配置 WORKBENCH_APP_SERVICE_NAME 时探测命令用重定向+&& || 守卫，避免 inactive 当真实状态。"""
+        import os
+        import app_pkg.server as server_module
+        old = os.environ.get("WORKBENCH_APP_SERVICE_NAME")
+        os.environ["WORKBENCH_APP_SERVICE_NAME"] = "workbench"
+        try:
+            cmd = server_module.server_probe_command()
+        finally:
+            if old is None:
+                os.environ.pop("WORKBENCH_APP_SERVICE_NAME", None)
+            else:
+                os.environ["WORKBENCH_APP_SERVICE_NAME"] = old
+        self.assertIn("systemctl is-active workbench >/dev/null 2>&1 && printf 'active' || printf 'unknown'", cmd)
+
 if __name__ == "__main__":
     unittest.main()

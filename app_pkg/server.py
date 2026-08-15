@@ -389,7 +389,7 @@ def analyze_server_snapshot(
 
     services = [
         {"key": "nginx", "label": "Nginx", "value": str(snapshot.get("nginx") or "unknown"), "required": True},
-        {"key": "app", "label": "App / PM2", "value": str(snapshot.get("app") or "unknown"), "required": True},
+        {"key": "app", "label": "App / PM2", "value": str(snapshot.get("app") or "unknown"), "required": bool(snapshot.get("app"))},
         {"key": "workbench", "label": "Workbench", "value": str(snapshot.get("workbench") or "unknown"), "required": False},
     ]
     alerts: list[dict[str, Any]] = []
@@ -635,13 +635,22 @@ printf 'DISK|%s\n' "$(df -P / | awk 'NR==2 {print $2 "|" $3 "|" $5}')"
 printf 'MEMORY|%s\n' "$(free -m 2>/dev/null | awk 'NR==2 {print $2 "|" $3 "|" $7}' || printf '—')"
 printf 'NGINX|%s\n' "$(systemctl is-active nginx 2>/dev/null || printf 'unknown')"
 printf 'WORKBENCH|%s\n' "$(systemctl is-active workbench 2>/dev/null || printf 'not-installed')"
-printf 'APP|%s\n' "$(systemctl is-active {app_service} 2>/dev/null || printf 'unknown')"'''
+{app_probe}'''
 
 
 def server_probe_command() -> str:
-    """探测命令；可额外监控的服务名通过环境变量配置（默认空=不探测）。"""
+    """探测命令；可额外监控的服务名通过环境变量配置（默认空=不探测该服务）。
+
+    注意：systemctl is-active 对不存在的服务会输出 inactive（退出码 3）而非报错，
+    所以必须用重定向 + || 显式兜底，避免把 inactive 当真实状态。
+    """
     app_service = os.getenv("WORKBENCH_APP_SERVICE_NAME", "").strip()
-    return SERVER_MONITOR_PROBE_COMMAND_TEMPLATE.format(app_service=app_service or "nonexistent-service")
+    if app_service:
+        app_probe = f"printf 'APP|%s\\n' \"$(systemctl is-active {app_service} >/dev/null 2>&1 && printf 'active' || printf 'unknown')\""
+    else:
+        app_probe = "# APP 服务未配置（WORKBENCH_APP_SERVICE_NAME），跳过探测"
+    # 模板含 awk 花括号，不能用 .format，用占位符替换
+    return SERVER_MONITOR_PROBE_COMMAND_TEMPLATE.replace("{app_probe}", app_probe)
 
 
 DEFAULT_SERVER_THRESHOLDS: dict[str, float] = {

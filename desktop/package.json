@@ -1,6 +1,6 @@
 {
   "name": "nexus-desktop",
-  "version": "0.3.213",
+  "version": "0.3.214",
   "private": true,
   "description": "NEXUS desktop shell",
   "main": "main.cjs",
