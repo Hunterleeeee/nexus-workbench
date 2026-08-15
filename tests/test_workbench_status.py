@@ -44,7 +44,7 @@ class WorkbenchStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("service-worker-allowed"), "/")
         self.assertIn("no-cache", response.headers.get("cache-control", ""))
-        self.assertIn(f'CACHE_NAME = "workbench-shell-v{version}"', response.text)
+        self.assertIn(f'CACHE_NAME = "nexus-shell-v{version}"', response.text)
         for route in (
             "/projects/inbox", "/projects/knowledge", "/projects/doc-factory",
             "/projects/sub2api", "/projects/market", "/projects/server",
@@ -54,7 +54,7 @@ class WorkbenchStatusTests(unittest.TestCase):
         ):
             self.assertIn(f'"{route}"', response.text, route)
 
-    def test_favicon_uses_the_existing_workbench_icon(self):
+    def test_favicon_uses_the_existing_nexus_icon(self):
         async def request():
             transport = httpx.ASGITransport(app=app.app)
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

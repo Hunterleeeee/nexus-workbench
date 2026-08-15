@@ -1,8 +1,8 @@
-# Workbench Desktop
+# NEXUS Desktop
 
 这是一个薄 Electron 壳，不内置 Python、模型或 API Key，也不向远程页面暴露 Node、IPC 或文件系统能力。
 
-当前壳版本与 Workbench 对齐为 `0.3.167`。
+当前壳版本与 NEXUS 对齐为 `0.3.167`。
 
 ## 开发
 

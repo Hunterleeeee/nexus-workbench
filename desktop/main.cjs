@@ -63,7 +63,7 @@ function promptForCredentials(window, authInfo) {
   <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-    <title>登录 Workbench</title>
+    <title>登录 NEXUS</title>
     <style>
       :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       body { box-sizing: border-box; display: grid; min-height: 100vh; margin: 0; padding: 28px; place-items: center; background: #f4f6f8; color: #17202a; }
@@ -127,7 +127,7 @@ function promptForCredentials(window, authInfo) {
       resizable: false,
       minimizable: false,
       maximizable: false,
-      title: "登录 Workbench",
+      title: "登录 NEXUS",
       parent: window,
       modal: Boolean(window && !window.isDestroyed()),
       autoHideMenuBar: true,
@@ -383,7 +383,7 @@ function buildErrorPageUrl(title, details, canRetry) {
   <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-    <title>Workbench</title>
+    <title>NEXUS</title>
     <style>
       :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       body { box-sizing: border-box; display: grid; min-height: 100vh; margin: 0; padding: 32px; place-items: center; background: #f4f6f8; color: #17202a; }

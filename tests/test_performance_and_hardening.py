@@ -2140,7 +2140,7 @@ class ServiceWorkerCacheTests(unittest.TestCase):
 
     def test_the_cache_name_tracks_the_release(self):
         version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertIn(f'workbench-shell-v{version}', self.worker(), "缓存名没跟着版本走，旧壳不会被清掉")
+        self.assertIn(f'nexus-shell-v{version}', self.worker(), "缓存名没跟着版本走，旧壳不会被清掉")
 
     def test_every_shell_entry_actually_exists(self):
         """现在缺文件不再阻塞安装，但也不该让它悄悄缺着。"""

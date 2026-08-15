@@ -1408,7 +1408,7 @@ async def service_worker_file() -> FileResponse:
 async def favicon_file() -> FileResponse:
     """Serve the existing app icon for browsers that request a legacy favicon path."""
     return FileResponse(
-        STATIC_DIR / "icons" / "workbench-192.png",
+        STATIC_DIR / "icons" / "nexus-192.png",
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=86400"},
     )

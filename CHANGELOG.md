@@ -1,6 +1,15 @@
 # 迭代记录
 
-## v0.3.212 · 2026-08-15
+## v0.3.213 · 2026-08-15
+
+- **品牌改造：Workbench → NEXUS**
+  - 可见品牌：PWA manifest（name/short_name/description）、各页面 `<title>`（18 页）、顶栏 `platform-brand`、README/desktop README/CONTRIBUTING、desktop verify 输出、`/api/meta` 返回、SW 缓存名（`workbench-shell-v` → `nexus-shell-v`）。
+  - 图标：重新生成 `static/icons/nexus-192.png` / `nexus-512.png` / `nexus-512.svg`，删除旧的 `workbench-*` 图标；生成 `desktop/build/icon.icns`（从 nexus-512.png 16/32/64/128/256/512/512@2x 多尺寸）。
+  - SW 缓存清单：重新生成 `static/sw.js`（含全部页面/路由/静态资源/图标共 105 条路径），缓存名 `nexus-shell-v0.3.212`。
+  - favicon 路由：`/favicon.ico` 改为返回 `nexus-192.png`。
+  - 服务端 User-Agent：`Mozilla/5.0 (Workbench Research Agent)` → `(NEXUS Research Agent)`。
+  - 内部命名（不动）：`WORKBENCH_API_TOKEN`、`X-Workbench-Token` 头、`workbench_*` 函数/类名（公开 API 契约，改动会破坏客户端兼容）。
+- **bug 修复**：sw.js 的 SHELL 数组定义在更早操作中损坏，仅剩 `SHELL.push(...)` 部分；本次重建完整 SHELL。
 
 - **开源发布准备**：
   - 新增 MIT LICENSE、通用 README（快速开始/初始化命令/插拔/安全边界）、CONTRIBUTING.md、SECURITY.md。

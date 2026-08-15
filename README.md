@@ -1,5 +1,4 @@
-# Workbench
-
+# NEXUS
 个人 AI 工作台：FastAPI 后端 + 多项目入口 + Agent 调度 + Electron 桌面壳。把「收件箱、知识库、文档工厂、研究、云开发、产品管理」等日常任务聚合成一个可部署的工作台，项目可插拔（`projects.json` 控制启用/禁用）。
 
 > 开源版默认关闭爬虫入口（`projects.open-source.json` 里 crawl4ai 为 `enabled: false`）。部署时把该文件复制为 `projects.json` 即可获得开源默认配置，也可按需编辑 `enabled` 字段。

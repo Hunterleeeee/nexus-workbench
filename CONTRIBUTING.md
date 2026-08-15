@@ -1,6 +1,6 @@
 # Contributing
 
-感谢你考虑为 Workbench 贡献代码。
+感谢你考虑为 NEXUS 贡献代码。
 
 ## 开发环境
 

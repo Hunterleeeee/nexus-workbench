@@ -13,7 +13,7 @@ const fail = (message) => {
 const version = read("VERSION").trim();
 const packageJson = JSON.parse(readDesktop("package.json"));
 if (!/^\d+\.\d+\.\d+$/.test(version)) fail(`VERSION 格式无效：${version}`);
-if (packageJson.version !== version) fail(`桌面壳版本 ${packageJson.version} 与 Workbench ${version} 不一致`);
+if (packageJson.version !== version) fail(`桌面壳版本 ${packageJson.version} 与 NEXUS ${version} 不一致`);
 
 const main = readDesktop("main.cjs");
 for (const required of [
@@ -63,9 +63,9 @@ if (manifest.start_url !== "/" || manifest.scope !== "/" || manifest.display !==
 if (!Array.isArray(manifest.icons) || manifest.icons.length < 2) fail("PWA Manifest 缺少完整图标声明");
 
 const serviceWorker = read("static/sw.js");
-if (!serviceWorker.includes(`workbench-shell-v${version}`)) fail("Service Worker 缓存版本未与 VERSION 对齐");
+if (!serviceWorker.includes(`nexus-shell-v${version}`)) fail("Service Worker 缓存版本未与 VERSION 对齐");
 for (const required of ["self.skipWaiting()", "self.clients.claim()", "if (url.pathname.startsWith(\"/api/\")) return"]) {
   if (!serviceWorker.includes(required)) fail(`Service Worker 缺少更新或 API 边界：${required}`);
 }
 
-console.log(`[desktop verify] OK · Workbench ${version} · Electron 安全边界、PWA Manifest、Service Worker 已对齐`);
+console.log(`[desktop verify] OK · NEXUS ${version} · Electron 安全边界、PWA Manifest、Service Worker 已对齐`);

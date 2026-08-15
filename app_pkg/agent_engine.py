@@ -2227,7 +2227,7 @@ def _react_crawl_fetch(args: dict[str, Any]) -> dict[str, Any]:
         # 完全可以 302 到 http://169.254.169.254/ 或 http://127.0.0.1:18765/api/...，
         # 而这个工具是 LLM 可以直接驱动的，等于把 SSRF 的方向盘交出去了。
         current = url
-        with httpx.Client(timeout=15, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0 (Workbench Research Agent)"}) as client:
+        with httpx.Client(timeout=15, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0 (NEXUS Research Agent)"}) as client:
             for _hop in range(5):
                 response = client.get(current)
                 if response.status_code not in {301, 302, 303, 307, 308}:

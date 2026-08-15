@@ -1,7 +1,7 @@
 {
-  "name": "Workbench · 个人工作台",
-  "short_name": "Workbench",
-  "description": "本地优先的个人工作台",
+  "name": "NEXUS Workbench",
+  "short_name": "NEXUS",
+  "description": "NEXUS · 本地优先的 AI 工作台",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -9,7 +9,7 @@
   "theme_color": "#f4f6f8",
   "lang": "zh-CN",
   "icons": [
-    { "src": "/static/icons/workbench-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/static/icons/workbench-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "/static/icons/nexus-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/static/icons/nexus-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

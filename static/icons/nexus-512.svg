@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="512" height="512">
+  <defs>
+    <linearGradient id="primary" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00c8ff"/>
+      <stop offset="50%" style="stop-color:#6e5bff"/>
+      <stop offset="100%" style="stop-color:#b84dff"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#6e5bff;stop-opacity:0.6"/>
+      <stop offset="50%" style="stop-color:#6e5bff;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#6e5bff;stop-opacity:0"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="500" height="500" fill="#0a0a1a"/>
+  <g transform="translate(250, 175)">
+    <circle cx="0" cy="0" r="90" fill="url(#coreGlow)"/>
+    <polygon points="0,-120 104,-60 104,60 0,120 -104,60 -104,-60" fill="none" stroke="url(#primary)" stroke-width="1" opacity="0.25"/>
+    <polygon points="0,-120 104,-60 104,60 0,120 -104,60 -104,-60" fill="none" stroke="url(#primary)" stroke-width="0.5" opacity="0.15" transform="rotate(30)"/>
+    <g stroke="url(#primary)" stroke-width="1" opacity="0.5">
+      <line x1="0" y1="0" x2="0" y2="-120"/><line x1="0" y1="0" x2="104" y2="-60"/><line x1="0" y1="0" x2="104" y2="60"/>
+      <line x1="0" y1="0" x2="0" y2="120"/><line x1="0" y1="0" x2="-104" y2="60"/><line x1="0" y1="0" x2="-104" y2="-60"/>
+    </g>
+    <g stroke="#6e5bff" stroke-width="0.4" opacity="0.18">
+      <line x1="0" y1="-120" x2="104" y2="-60"/><line x1="104" y1="-60" x2="104" y2="60"/><line x1="104" y1="60" x2="0" y2="120"/>
+      <line x1="0" y1="120" x2="-104" y2="60"/><line x1="-104" y1="60" x2="-104" y2="-60"/><line x1="-104" y1="-60" x2="0" y2="-120"/>
+    </g>
+    <g fill="url(#primary)" filter="url(#glow)">
+      <circle cx="0" cy="-120" r="5"/><circle cx="104" cy="-60" r="5"/><circle cx="104" cy="60" r="5"/>
+      <circle cx="0" cy="120" r="5"/><circle cx="-104" cy="60" r="5"/><circle cx="-104" cy="-60" r="5"/>
+    </g>
+    <g fill="none" stroke="#6e5bff" stroke-width="0.8" opacity="0.4">
+      <circle cx="0" cy="-120" r="9"/><circle cx="104" cy="-60" r="9"/><circle cx="104" cy="60" r="9"/>
+      <circle cx="0" cy="120" r="9"/><circle cx="-104" cy="60" r="9"/><circle cx="-104" cy="-60" r="9"/>
+    </g>
+    <polygon points="0,-45 39,-22 39,22 0,45 -39,22 -39,-22" fill="#0a0a1a" stroke="url(#primary)" stroke-width="2.5"/>
+    <polygon points="0,-45 39,-22 39,22 0,45 -39,22 -39,-22" fill="url(#primary)" opacity="0.08"/>
+    <polygon points="0,-25 22,-12 22,12 0,25 -22,12 -22,-12" fill="url(#primary)" opacity="0.9" filter="url(#glow)"/>
+    <circle cx="0" cy="0" r="4" fill="#ffffff" filter="url(#glow)"/>
+  </g>
+  <g transform="translate(250, 375)">
+    <text x="0" y="0" font-family="'Inter', 'SF Pro Display', sans-serif" font-size="64" font-weight="700" fill="#ffffff" text-anchor="middle" letter-spacing="18">NEXUS</text>
+  </g>
+  <g transform="translate(250, 430)">
+    <text x="0" y="0" font-family="'Inter', 'SF Pro Display', sans-serif" font-size="16" font-weight="400" fill="#6e5bff" text-anchor="middle" letter-spacing="14">WORKBENCH</text>
+  </g>
+</svg>

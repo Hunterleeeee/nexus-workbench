@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
-  <script src="/static/theme.js?v=0.3.212"></script>
+  <script src="/static/theme.js?v=0.3.213"></script>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#f4f6f8" />
-  <title>服务器监控 · Workbench</title>
-  <link rel="stylesheet" href="/static/project.css?v=0.3.212" />
+  <title>服务器监控 · NEXUS</title>
+  <link rel="stylesheet" href="/static/project.css?v=0.3.213" />
   <style>
     .server-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .server-metric { min-height: 126px; padding: 16px; }
@@ -69,7 +69,7 @@
 <body>
   <div class="page-shell">
     <header class="page-topbar">
-      <a class="page-brand" href="/"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>Workbench</strong><small>ONLINE WORKSPACE</small></span></a>
+      <a class="page-brand" href="/"><span class="brand-mark-small"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9.5 12 6l7 3.5v7L12 20l-7-3.5v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.8 10 6.2 3.2 6.2-3.2M12 13.2V20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span><strong>NEXUS</strong><small>ONLINE WORKSPACE</small></span></a>
       <div class="page-actions"><a class="back-link" href="/">← <span>返回工作台</span></a><button id="refresh-server" class="ghost-button" type="button">刷新检查</button><a class="global-button" href="/?settings=llm" target="_blank" rel="noopener"><span class="dot"></span>全局 LLM ↗</a></div>
     </header>
     <main class="page-main">
@@ -92,7 +92,7 @@
       <section class="card panel"><div class="panel-head"><h2>主机信息</h2><small>SSH 只读</small></div><div id="server-info" class="server-info"></div></section>
     </main>
   </div>
-  <script src="/static/request.js?v=0.3.212"></script><script src="/static/markdown.js?v=0.3.212"></script><script src="/static/project.js?v=0.3.212"></script>
+  <script src="/static/request.js?v=0.3.213"></script><script src="/static/markdown.js?v=0.3.213"></script><script src="/static/project.js?v=0.3.213"></script>
   <script>
     const $ = (selector) => document.querySelector(selector);
     const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");

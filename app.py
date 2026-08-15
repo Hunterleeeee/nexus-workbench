@@ -597,7 +597,7 @@ def get_output_content(name: str) -> dict[str, Any]:
 
 @app.get("/api/meta")
 async def get_meta() -> dict[str, Any]:
-    return {"name": "Workbench", "version": WORKBENCH_VERSION, "data_dir": str(DATA_DIR)}
+    return {"name": "NEXUS", "version": WORKBENCH_VERSION, "data_dir": str(DATA_DIR)}
 
 
 
