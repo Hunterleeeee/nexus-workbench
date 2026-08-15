@@ -7,6 +7,7 @@ annotated-types==0.8.0
 anyio==4.14.2
 certifi==2026.7.22
 click==8.4.2
+cryptography==50.0.0
 et-xmlfile==2.0.0
 fastapi==0.141.1
 h11==0.16.0
@@ -33,10 +34,9 @@ watchfiles==1.2.0
 websockets==17.0.1
 # Optional, feature-gated at import time (crawl4ai / Web Push).
 # These stay commented out here on purpose: they pull heavy transitive trees and
-# each feature degrades gracefully when the import fails.  deploy-workbench.sh
-# installs them from requirements-optional.txt right after this file, so a
-# lock-based deploy no longer silently loses crawling and Web Push.
-# When you regenerate this lock with `pip freeze`, keep these three commented.
+# each feature degrades gracefully when the import fails.
+# When you enable a feature, install its optional dependencies separately from
+# requirements-optional.txt (crawl4ai / pywebpush). Keep them commented when
+# regenerating this lock with `pip freeze`.
 # crawl4ai==0.9.2
 # pywebpush==2.0.0
-# cryptography==42.0.0

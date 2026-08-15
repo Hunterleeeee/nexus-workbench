@@ -32,7 +32,13 @@ pip install -r requirements.txt
 # 可复现安装（固定版本）：pip install -r requirements.lock
 ```
 
-可选增强（文档解析、浏览器渲染等）见 `requirements-optional.txt`。
+可选增强按需安装（网页抓取、Web Push 推送、文档解析等）：
+
+```bash
+pip install -r requirements-optional.txt
+```
+
+基础功能不需要这些重依赖；启用对应功能时再安装，缺失会自动降级。
 
 ### 1.5 初始化项目配置
 
