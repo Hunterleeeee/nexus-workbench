@@ -1,4 +1,4 @@
-const CACHE_NAME = "nexus-shell-v0.3.214";
+const CACHE_NAME = "nexus-shell-v0.3.215";
 // Service Worker 缓存了「壳」（所有页面、路由、静态资源）和公共请求/恢复脚本。
 // 离线时：先尝试按原 URL 匹配缓存；带 ?v= 的静态资源忽略查询串，
 // 因为 SW 缓存版本已与发布版本绑定，旧版本会被 activate 阶段清掉。
@@ -146,7 +146,7 @@ self.addEventListener("fetch", (event) => {
 });
 
 // 带版本号的静态资源必须精确匹配。原来统一用 ignoreSearch: true，
-// 于是 /static/ai-learning.js?v=0.3.214 会命中缓存里 v=0.3.153 那份——
+// 于是 /static/ai-learning.js?v=0.3.215 会命中缓存里 v=0.3.153 那份——
 // 整套 ?v= 缓存失效机制在离线回退这条路径上等于没有。
 // 页面文档仍然忽略查询串：/projects/x?tab=1 没必要单独缓存一份。
 function matchCached(request) {
