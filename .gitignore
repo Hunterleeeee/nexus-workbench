@@ -26,3 +26,4 @@ archive/
 # 个人知识库内容不进入版本库；只保留目录说明
 knowledge-base/*
 !knowledge-base/README.md
+static/cloud-patch-probe.txt
