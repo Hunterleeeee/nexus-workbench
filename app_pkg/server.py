@@ -769,7 +769,7 @@ async def refresh_server_monitor(request: ServerMonitorRequest) -> dict[str, Any
         previous.update({"status": "error", "error": str(exc), "checked_at": now_iso()})
         _app_call('save_server_monitor_snapshot', previous)
         await asyncio.to_thread(record_server_monitor_snapshot, previous)
-        artifact = await asyncio.to_thread(register_artifact_safely, 
+        artifact = await asyncio.to_thread(_app_call, "register_artifact_safely", 
             project_id="server",
             name="server_monitor_snapshot.json",
             path=str(SERVER_MONITOR_SNAPSHOT_FILE),
@@ -780,7 +780,7 @@ async def refresh_server_monitor(request: ServerMonitorRequest) -> dict[str, Any
         raise HTTPException(502, f"服务器检查失败：{exc}") from exc
     _app_call('save_server_monitor_snapshot', snapshot)
     await asyncio.to_thread(record_server_monitor_snapshot, snapshot)
-    artifact = await asyncio.to_thread(register_artifact_safely, 
+    artifact = await asyncio.to_thread(_app_call, "register_artifact_safely", 
         project_id="server",
         name="server_monitor_snapshot.json",
         path=str(SERVER_MONITOR_SNAPSHOT_FILE),
