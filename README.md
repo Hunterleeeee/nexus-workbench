@@ -124,16 +124,40 @@ npm run package    # 打包 macOS 安装包（arm64）
 
 ## 目录职责
 
+### 后端入口与进程
+
+| 文件 | 职责 |
+|---|---|
+| `app.py` | FastAPI 主应用（uvicorn 入口，已按领域拆分为 `app_pkg/`） |
+| `agent_worker.py` | Agent 调度后台 Worker（独立进程） |
+| `crawl_worker.py` | 网页抓取后台 Worker |
+| `monitor_worker.py` | 服务器监控后台 Worker |
+| `sync_worker.py` | 数据同步后台 Worker |
+| `browser_render_worker.py` | 浏览器截图渲染 Worker（按需启动） |
+| `browser_session_worker.py` | 浏览器会话 Worker（按需启动） |
+| `feishu.py` | 飞书机器人适配层（被主应用 import） |
+| `cloud_dev.py` / `cloud_patch.py` | 云开发受控执行与代码补丁模块 |
+| `backup.py` | 数据库备份/恢复 CLI |
+
+### 模块与资源
+
 | 路径 | 职责 |
 |---|---|
-| `app.py` | FastAPI 主应用（已按领域拆分） |
 | `app_pkg/` | 35 个领域模块（inbox/knowledge/agent_engine/market/server/…） |
 | `static/` | 工作台与各项目页面资源 |
-| `data/` | SQLite、LLM 配置、快照（不提交版本库） |
-| `knowledge-base/` | 运行时 Markdown 知识库（只提交 README，个人内容不入库） |
-| `outputs/` | 交付产物 |
 | `desktop/` | Electron 桌面壳 |
+| `tests/` | 测试套件（pytest） |
 | `scripts/` | 工具脚本（VAPID 密钥生成等） |
+
+### 配置与数据（不提交版本库）
+
+| 路径 | 职责 |
+|---|---|
+| `projects.json` / `projects.open-source.json` | 项目插拔配置（缺失回退开源模板） |
+| `data/` | SQLite、LLM 配置、快照（仅 `.gitkeep` 入库） |
+| `knowledge-base/` | 运行时 Markdown 知识库（仅 `README.md` 入库） |
+| `outputs/` | 交付产物 |
+| `.env` / `.env.example` | 环境变量（模板入库，真实配置不入库） |
 
 ## 测试
 
