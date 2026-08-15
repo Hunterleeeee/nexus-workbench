@@ -318,7 +318,7 @@
       button.disabled = true; button.textContent = "启动 Companion 后可用";
       state.textContent = "本机 Companion 未连接"; state.className = "companion-state error";
       const detail = query("#companion-detail");
-      if (detail) detail.textContent = "请在本机运行 companion/workbench_companion.py；服务器不会替代本机管理员桥。";
+      if (detail) detail.textContent = "请先安装并运行可选的本机助手组件；该组件不包含在 NEXUS 主仓库中。";
     }
   }
   async function toggleCompanion() {
