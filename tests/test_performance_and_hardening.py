@@ -738,7 +738,7 @@ class VapidKeyGenerationTests(unittest.TestCase):
 
     def generate(self, key_file):
         import subprocess, sys
-        script = Path(__file__).resolve().parents[1] / "deploy" / "generate-vapid-keys.py"
+        script = Path(__file__).resolve().parents[1] / "scripts" / "generate-vapid-keys.py"
         return subprocess.run([sys.executable, str(script), "--key-file", str(key_file)],
                               capture_output=True, text=True)
 

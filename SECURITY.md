@@ -17,5 +17,5 @@
 ## 部署注意事项
 
 - 生产环境务必启用 HTTPS（Nginx 反向代理 + 认证）。
-- Web Push 使用 VAPID 密钥（`python3 deploy/generate-vapid-keys.py` 生成），私钥默认写 `data/vapid_private.pem`（权限 600），换密钥会使已有订阅失效。
+- Web Push 使用 VAPID 密钥（`python3 scripts/generate-vapid-keys.py` 生成），私钥默认写 `data/vapid_private.pem`（权限 600），换密钥会使已有订阅失效。
 - 定期备份：`python3 backup.py backup`。
