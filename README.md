@@ -70,7 +70,7 @@ LLM_MODEL=gpt-4o-mini
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8765
 ```
 
-浏览器打开 `http://127.0.0.1:8765` 即可。完整生产部署（Nginx + systemd + 备份）可参考 `deploy/` 目录中的脚本与配置模板。
+浏览器打开 `http://127.0.0.1:8765` 即可。生产部署模板（Nginx + systemd + 备份）暂未包含在本仓库中，可按需自行配置。
 
 ## 项目插拔
 
@@ -91,8 +91,8 @@ LLM_MODEL=gpt-4o-mini
 - `data/`：SQLite、LLM 本地配置、快照；不提交版本库。
 - `knowledge-base/`：运行时 Markdown 知识库；默认只提交 `README.md`，个人内容不进入版本库。
 - `outputs/`：交付产物（草稿、DOCX/PDF）。
-- `deploy/`：Nginx / systemd / 健康检查 / 备份 / 一键部署脚本（模板）。
 - `desktop/`：Electron 桌面壳。
+- `scripts/`：通用工具脚本（如 VAPID 密钥生成）。
 - `backup.py`：数据库备份/恢复 CLI。
 
 ## 测试
@@ -107,6 +107,7 @@ LLM_MODEL=gpt-4o-mini
 - 云开发只接受白名单工作区 + 固定配方命令，使用 `shell=False`，不支持任意 shell。
 - 浏览器项目只能访问公开 URL；工作台自身（`WORKBENCH_PUBLIC_URL` 配置的源）永远不能成为目标。
 - 服务器监控为只读探测；日志读取和重启必须服务器侧人工确认。
+- 代码中出现的 `workbench.example.dev` 均为示例占位地址，部署时必须通过 `WORKBENCH_PUBLIC_URL`（后端）或 `WORKBENCH_URL`（桌面壳）覆盖为实际地址。
 
 ## License
 

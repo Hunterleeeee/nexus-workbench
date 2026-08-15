@@ -2,7 +2,7 @@
 
 这是一个薄 Electron 壳，不内置 Python、模型或 API Key，也不向远程页面暴露 Node、IPC 或文件系统能力。
 
-当前壳版本与 NEXUS 对齐为 `0.3.167`。
+桌面壳版本与根目录 `VERSION` 保持同步（`npm run verify` 会校验两者一致）。
 
 ## 开发
 
@@ -22,13 +22,13 @@ npm run package:intel # 打包 Intel (x64) 安装包
 
 ## 安装（普通用户）
 
-打包完成后，安装包在 `desktop/dist/Workbench-<版本>-arm64.dmg`。安装方式：
+打包完成后，安装包在 `desktop/dist/NEXUS-<版本>-arm64.dmg`。安装方式：
 
 1. 双击打开 `.dmg` 文件
-2. 把弹出的「Workbench」图标拖进「应用程序」文件夹
+2. 把弹出的「NEXUS」图标拖进「应用程序」文件夹
 3. 第一次打开时，如果 macOS 提示「无法验证开发者」，右键点应用 → 打开 → 再点「打开」即可（未签名包需要这一步）
 
-> 也可以直接双击 `desktop/dist/mac-arm64/Workbench.app` 免安装运行（无需拖动）。
+> 也可以直接双击 `desktop/dist/mac-arm64/NEXUS.app` 免安装运行（无需拖动）。
 
 本机没有签名证书时，可生成用于结构和启动验收的未签名包：
 
@@ -40,13 +40,15 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npm run package
 
 `npm run verify` 不启动应用，也不需要读取线上凭据；它会检查桌面壳版本是否与根目录 `VERSION` 一致、远程地址和 Electron 隔离配置、PWA Manifest 以及 Service Worker 缓存版本。它是发布前静态门禁，不等于已经生成安装包或完成线上发布。
 
-默认打开部署的 Workbench 地址（默认 `https://workbench.example.dev/`，可用 `WORKBENCH_URL` 覆盖）。如需切换到其他部署地址，必须使用 HTTPS：
+默认打开部署的 NEXUS 地址（默认 `https://workbench.example.dev/`，可用 `WORKBENCH_URL` 覆盖）。如需切换到其他部署地址，必须使用 HTTPS：
 
 ```bash
 WORKBENCH_URL=https://workbench.example.dev npm start
 ```
 
-壳不会忽略证书错误，也不设置 `ignore-certificate-errors`。远程页面只能在原始 Workbench 同源地址内导航；安全的 HTTPS 外链交给系统浏览器，任意 `file://`、`javascript:`、`data:` 等其他协议会被拒绝（错误页使用的内部 `data:` 页面除外）。窗口启用单实例、隔离上下文、Node 禁用、沙箱和 Web 安全策略；preload 保持空实现。
+> `workbench.example.dev` 为示例地址，部署时必须通过 `WORKBENCH_URL` 覆盖为你的实际部署地址。
+
+壳不会忽略证书错误，也不设置 `ignore-certificate-errors`。远程页面只能在原始 NEXUS 同源地址内导航；安全的 HTTPS 外链交给系统浏览器，任意 `file://`、`javascript:`、`data:` 等其他协议会被拒绝（错误页使用的内部 `data:` 页面除外）。窗口启用单实例、隔离上下文、Node 禁用、沙箱和 Web 安全策略；preload 保持空实现。
 
 如果服务器暂时不可用，窗口会显示错误页并提供“重试”。macOS 关闭最后一个窗口后保留应用运行，再次激活或启动会聚焦已有窗口。
 
@@ -54,12 +56,10 @@ WORKBENCH_URL=https://workbench.example.dev npm start
 
 ### Basic Auth 登录
 
-线上 Workbench 有 HTTP Basic Auth。桌面壳首次打开遇到 401 时会弹出登录窗口，输入账号密码后自动保存到 `userData/auth.json`（仅本机 0600 可读），之后每次启动自动登录。也可以先用环境变量预置（优先级高于保存的凭据）：
+线上 NEXUS 有 HTTP Basic Auth。桌面壳首次打开遇到 401 时会弹出登录窗口，输入账号密码后自动保存到 `userData/auth.json`（仅本机 0600 可读），之后每次启动自动登录。也可以先用环境变量预置（优先级高于保存的凭据）：
 
 ```bash
 WORKBENCH_AUTH_USER=你的账号 WORKBENCH_AUTH_PASS=你的密码 npm start
 ```
-
-本机 Gemini 按需开关由 Workbench 网页研究页调用独立的 `companion/workbench_companion.py`；桌面壳本身不执行任意本机命令，也不向远程页面暴露 Node、IPC 或凭据。使用该开关前需在本机启动 Companion，来财 Gemini bridge 只在用户确认后启动或停止。
 
 生产发布时只更新壳和代码版本，工作台的数据、配置和产物仍由后端的 shared 数据目录保存。

@@ -1,8 +1,8 @@
 {
-  "name": "workbench-desktop",
+  "name": "nexus-desktop",
   "version": "0.3.213",
   "private": true,
-  "description": "Workbench desktop shell",
+  "description": "NEXUS desktop shell",
   "main": "main.cjs",
   "scripts": {
     "verify": "node verify.mjs",
@@ -11,8 +11,8 @@
     "package:intel": "electron-builder --mac --x64"
   },
   "build": {
-    "appId": "com.workbench.desktop",
-    "productName": "Workbench",
+    "appId": "com.nexus.desktop",
+    "productName": "NEXUS",
     "directories": {
       "output": "dist",
       "buildResources": "build"

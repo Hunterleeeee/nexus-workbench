@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 # 允许修改的目录前缀（相对仓库根）
-ALLOWED_PREFIXES = ("static/", "deploy/")
+ALLOWED_PREFIXES = ("static/",)
 # 顶层允许修改的小模块（字符数限制内）
 ALLOWED_TOP_FILES = ("feishu.py", "cloud_dev.py", "cloud_patch.py", "browser_render_worker.py")
 # 单个文件超过该字符数不参与云端自动改（防止大文件模糊编辑）

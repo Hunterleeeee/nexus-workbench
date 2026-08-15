@@ -28,16 +28,21 @@ tar -czf workbench-open-source.tar.gz \
   --exclude=projects.json --exclude='._*' .
 ```
 
-## 历史清洗（如首次公开旧仓库）
+## 历史清洗（仅首次公开旧仓库时执行）
+
+> ⚠️ **仅在从未清洗过的旧仓库上执行一次。** 如果历史已经完成清洗（`git log --all --name-only | grep -aE 'deploy/|companion/|knowledge-base/'` 无输出或只剩预期白名单），**不要重复执行**——重复执行会误删本来想保留的文件（如 `knowledge-base/README.md`）。
+> filter-repo 会重写所有 commit hash 并移除 remote；**执行前必须先 `git bundle` 备份**。
 
 ```bash
 pip install git-filter-repo
+# 0. 先备份
+git bundle create /path/backup.bundle --all
 # 1. 替换敏感文本
 git filter-repo --force --replace-text /tmp/replacements.txt
-# 2. 删除敏感路径（含历史）
+# 2. 删除敏感路径（含历史）——按仓库实际内容调整路径列表
 git filter-repo --force --invert-paths --path deploy/ --path companion/ --path knowledge-base/
 # 3. 验证
 git log --all --name-only --format='' | grep -aE 'deploy/|knowledge-base' | sort -u
 ```
 
-> ⚠️ filter-repo 会重写所有 commit hash 并移除 remote；先 `git bundle` 备份，再操作。
+> 当前仓库已完成清洗（历史中仅剩 `knowledge-base/README.md` 白名单路径），**无需再次执行本段**。
