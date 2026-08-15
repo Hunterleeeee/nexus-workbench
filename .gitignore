@@ -28,3 +28,4 @@ knowledge-base/*
 !knowledge-base/README.md
 static/cloud-patch-probe.txt
 deploy/
+projects/cid-dashboard-v2.html

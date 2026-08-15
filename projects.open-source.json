@@ -167,7 +167,9 @@
     "status": "ready",
     "group": "discover",
     "source_env": "WORKBENCH_CID_DASHBOARD_FILE",
-    "source_path": "projects/cid-dashboard-v2.html"
+    "source_path": "projects/cid-dashboard-v2.html",
+    "enabled": false,
+    "note": "中国独立开发者看板依赖个人第三方数据源，开源版默认禁用；需自行实现数据接口。"
   },
   {
     "id": "embodied",
