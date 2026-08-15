@@ -586,7 +586,7 @@ def sync_inbox_to_obsidian(item_id: int, *, content: str = "", title_override: s
     selected_content = str(content or item.get("content", "")).strip()
     if not selected_content:
         raise HTTPException(400, "写入内容不能为空")
-    title = title_override.strip() or next((line.strip() for line in selected_content.splitlines() if line.strip()), f"Workbench 收件箱 {item_id}")
+    title = title_override.strip() or next((line.strip() for line in selected_content.splitlines() if line.strip()), f"NEXUS 收件箱 {item_id}")
     title = clip(title, 70)
     filename = _app_call('safe_filename', f"{title}-{item_id}", f"workbench-inbox-{item_id}") + ".md"
     path = inbox_dir / filename
@@ -606,7 +606,7 @@ def sync_inbox_to_obsidian(item_id: int, *, content: str = "", title_override: s
         f"{tag_lines}\n"
         "---\n\n"
         f"# {title}\n\n"
-        f"> 来源：Workbench 快速收件箱 #{item_id}\n\n"
+        f"> 来源：NEXUS 快速收件箱 #{item_id}\n\n"
         f"{selected_content}\n"
     )
     path.write_text(body, encoding="utf-8")

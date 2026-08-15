@@ -151,7 +151,7 @@ INTEGRATION_DEFINITIONS: dict[str, dict[str, Any]] = {
         "name": "Vikunja",
         "repo": "https://github.com/go-vikunja/vikunja",
         "kind": "task_management",
-        "description": "读取自托管任务系统中的未完成任务，人工选择后进入收件箱；Workbench 仍保留来源和审计主线。",
+        "description": "读取自托管任务系统中的未完成任务，人工选择后进入收件箱；NEXUS 仍保留来源和审计主线。",
         "fields": {"base_url": "服务地址", "api_token": "API Token", "project_id": "项目 ID（可选）"},
         "required": ["base_url", "api_token"],
         "secret_fields": {"api_token"},
@@ -794,7 +794,7 @@ async def fetch_integration_items(integration_id: str, limit: int = 20) -> list[
                     "labels": [name for name in label_names if name][:20],
                     "percent_done": raw.get("percentDone", raw.get("percent_done", 0)),
                     "source_updated_at": updated_at,
-                    "next_step": "确认是否要处理；必要时拆分或归档；Workbench 不会自动改写 Vikunja",
+                    "next_step": "确认是否要处理；必要时拆分或归档；NEXUS 不会自动改写 Vikunja",
                     },
                 })
     elif integration_id == "searxng":

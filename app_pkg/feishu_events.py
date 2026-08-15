@@ -152,7 +152,7 @@ async def feishu_cloud_dev_command(text: str, chat_id: str) -> bool:
         return True
     if parsed.get("requires_approval"):
         created = _app_call('create_cloud_dev_approval', parsed, source="workbench")
-        await _FEISHU_BOT().send_message(chat_id, f"🛡️ 已进入审批：云开发 {parsed.get('project')} 构建。\n审批编号：{created['approval']['id']}\n审批前不会执行命令；请在 Workbench 审批中心确认。")
+        await _FEISHU_BOT().send_message(chat_id, f"🛡️ 已进入审批：云开发 {parsed.get('project')} 构建。\n审批编号：{created['approval']['id']}\n审批前不会执行命令；请在 NEXUS 审批中心确认。")
         return True
 
     await _FEISHU_BOT().send_message(chat_id, f"收到，正在执行固定云开发动作：{parsed.get('project')} · {parsed.get('action')}。")
@@ -164,7 +164,7 @@ async def feishu_cloud_dev_command(text: str, chat_id: str) -> bool:
             status = str(result.get("status") or "unknown")
             if status == "approval_required":
                 label = "已生成编辑计划"
-                message = f"☁️ 云开发{label}\n动作：修改代码\n摘要：{clip(str(result.get('summary') or ''), 200)}\n涉及 {result.get('edits_count')} 处编辑 · {len(result.get('files') or [])} 个文件\n审批编号：{result.get('approval_id')}\n审批通过前不会改动任何代码，请在 Workbench 审批中心确认。"
+                message = f"☁️ 云开发{label}\n动作：修改代码\n摘要：{clip(str(result.get('summary') or ''), 200)}\n涉及 {result.get('edits_count')} 处编辑 · {len(result.get('files') or [])} 个文件\n审批编号：{result.get('approval_id')}\n审批通过前不会改动任何代码，请在 NEXUS 审批中心确认。"
             else:
                 label = "完成" if status == "ok" else "未执行/失败"
                 message = f"☁️ 云开发{label}\n项目：{parsed.get('project')}\n动作：{parsed.get('action')}\n状态：{status}"

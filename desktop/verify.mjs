@@ -15,6 +15,18 @@ const packageJson = JSON.parse(readDesktop("package.json"));
 if (!/^\d+\.\d+\.\d+$/.test(version)) fail(`VERSION 格式无效：${version}`);
 if (packageJson.version !== version) fail(`桌面壳版本 ${packageJson.version} 与 NEXUS ${version} 不一致`);
 
+// 品牌与发布元数据一致性（防止品牌/版本再次脱节）
+const lock = JSON.parse(readDesktop("package-lock.json"));
+if (lock.name !== packageJson.name) fail(`package-lock name ${lock.name} 与 package.json ${packageJson.name} 不一致`);
+if (lock.version !== version) fail(`package-lock version ${lock.version} 与 VERSION ${version} 不一致`);
+if (lock.packages?.[""]?.name !== packageJson.name) fail(`package-lock root name 与 package.json 不一致`);
+if (lock.packages?.[""]?.version !== version) fail(`package-lock root version 与 VERSION 不一致`);
+if (packageJson.build?.productName !== "NEXUS") fail(`productName 应为 NEXUS，当前：${packageJson.build?.productName}`);
+if (packageJson.build?.appId !== "com.nexus.desktop") fail(`appId 应为 com.nexus.desktop，当前：${packageJson.build?.appId}`);
+if (!packageJson.build?.dmg?.artifactName?.startsWith("NEXUS-")) {
+  fail(`安装包 artifactName 未使用 NEXUS 品牌：${packageJson.build?.dmg?.artifactName}`);
+}
+
 const main = readDesktop("main.cjs");
 for (const required of [
   "https://workbench.example.dev/",

@@ -420,7 +420,7 @@ async def fetch_aihot_snapshot(*, force: bool = False) -> dict[str, Any]:
         return current
     async def fetch_one(client: httpx.AsyncClient, url: str) -> tuple[str, list[dict[str, Any]]]:
         try:
-            response = await client.get(url, headers={"User-Agent": "Workbench/0.2"})
+            response = await client.get(url, headers={"User-Agent": "NEXUS/0.2"})
             response.raise_for_status()
             body = response.text
         except Exception as exc:
@@ -437,7 +437,7 @@ async def fetch_aihot_snapshot(*, force: bool = False) -> dict[str, Any]:
             entry["domain"] = domain
         return (url, batch)
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False, headers={"User-Agent": "Workbench/0.2"}) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False, headers={"User-Agent": "NEXUS/0.2"}) as client:
             results = await asyncio.gather(*(fetch_one(client, url) for url in AIHOT_SOURCES), return_exceptions=False)
         items: list[dict[str, Any]] = []
         errors: list[str] = []

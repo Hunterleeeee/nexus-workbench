@@ -109,6 +109,10 @@ LLM_MODEL=gpt-4o-mini
 - 服务器监控为只读探测；日志读取和重启必须服务器侧人工确认。
 - 代码中出现的 `workbench.example.dev` 均为示例占位地址，部署时必须通过 `WORKBENCH_PUBLIC_URL`（后端）或 `WORKBENCH_URL`（桌面壳）覆盖为实际地址。
 
+## 命名说明
+
+产品名称为 **NEXUS**。部分环境变量、HTTP Header 和前端全局对象（如 `WORKBENCH_*`、`X-Workbench-*`、`window.WorkbenchUX`）仍保留 `WORKBENCH` 前缀，用于兼容已有部署配置和客户端集成；新配置请继续沿用这些约定，不要自行改名，否则会破坏兼容性。
+
 ## License
 
 [MIT](LICENSE)

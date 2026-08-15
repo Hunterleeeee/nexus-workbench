@@ -505,7 +505,7 @@ async def regenerate_document_factory(request: DocumentFactoryRegenerateRequest)
     if new_artifact_id:
         formats = [str(value).lower().strip() for value in (parent_approval_payload.get("formats") or ["docx"]) if str(value).lower().strip() in {"docx", "pdf"}]
         try:
-            delivery = await asyncio.to_thread(_app_call, 'deliver_document_factory', DocumentDeliveryRequest(artifact_id=new_artifact_id, formats=formats or ["docx"], title=str(metadata.get("title") or artifact.get("name") or "Workbench 文档"), parent_approval_id=parent_approval_id))
+            delivery = await asyncio.to_thread(_app_call, 'deliver_document_factory', DocumentDeliveryRequest(artifact_id=new_artifact_id, formats=formats or ["docx"], title=str(metadata.get("title") or artifact.get("name") or "NEXUS 文档"), parent_approval_id=parent_approval_id))
             result["revision_delivery"] = delivery
             result["message"] = "新版本已生成，并已创建新的交付审批轮次。"
         except HTTPException as exc:
@@ -673,7 +673,7 @@ def deliver_document_factory(request: DocumentDeliveryRequest) -> dict[str, Any]
     previous_artifact_id = metadata.get("revision_from_artifact_id")
     source_artifact_id = previous_artifact_id if parent_approval_id and previous_artifact_id else artifact.get("id")
     revision_artifact_id = artifact.get("id") if parent_approval_id and previous_artifact_id else None
-    title = request.title.strip() or str(metadata.get("title") or artifact.get("name") or "Workbench 文档")
+    title = request.title.strip() or str(metadata.get("title") or artifact.get("name") or "NEXUS 文档")
     base = _app_call('_app_call', 'safe_filename', title, "workbench-document")
     version = int(metadata.get("version") or 1)
     created: list[dict[str, Any]] = []
@@ -867,7 +867,7 @@ def build_docx_delivery(title: str, text: str, target: Path) -> None:
         style.paragraph_format.space_after = Pt(after)
         style.paragraph_format.line_spacing = 1.1
     header = section.header.paragraphs[0]
-    header.text = "Workbench · 文档交付包"
+    header.text = "NEXUS · 文档交付包"
     header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     for run in header.runs:
         set_docx_run_font(run, size=9, color="6B7280")

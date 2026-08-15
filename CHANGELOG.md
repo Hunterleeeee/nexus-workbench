@@ -38,9 +38,3 @@ NEXUS 的版本记录。格式基于 [Keep a Changelog](https://keepachangelog.c
 
 ### Changed
 - 完成巨型单文件应用按领域拆分：`app.py` 拆分为 `app_pkg/` 模块（35 个领域模块）。
-
-[0.3.213]: https://github.com/YOUR_ORG/nexus/releases/tag/v0.3.213
-[0.3.212]: https://github.com/YOUR_ORG/nexus/releases/tag/v0.3.212
-[0.3.211]: https://github.com/YOUR_ORG/nexus/releases/tag/v0.3.211
-[0.3.210]: https://github.com/YOUR_ORG/nexus/releases/tag/v0.3.210
-[0.3.202]: https://github.com/YOUR_ORG/nexus/releases/tag/v0.3.202

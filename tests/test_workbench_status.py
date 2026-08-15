@@ -100,7 +100,7 @@ class WorkbenchStatusTests(unittest.TestCase):
         self.assertIn("companion-toggle", llm_settings)
         for page in ("workbench.html", "index.html"):
             source = (root / "static" / page).read_text(encoding="utf-8")
-            self.assertIn("本机 Gemini 桥", source, page)
+            self.assertIn("本机浏览器助手", source, page)
             self.assertIn("companion-toggle", source, page)
         web_research_page = (root / "static" / "web-research.html").read_text(encoding="utf-8")
         self.assertIn("address-form", web_research_page)

@@ -33,7 +33,7 @@
       ]
     },
     "dmg": {
-      "artifactName": "Workbench-${version}-${arch}.${ext}"
+      "artifactName": "NEXUS-${version}-${arch}.${ext}"
     }
   },
   "devDependencies": {

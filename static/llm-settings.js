@@ -274,7 +274,7 @@
     return true;
   }
 
-  // ── 本机 Gemini 桥（来财 Companion）设置 ────────────────────────────
+  // ── 本机浏览器助手（可选，外部组件）设置 ────────────────────────────
   const companionBase = "http://127.0.0.1:8766";
   async function companionRequest(path, options = {}) {
     const headers = { ...(options.headers || {}) };
@@ -301,12 +301,12 @@
     const state = query("#companion-state");
     const detail = query("#companion-detail");
     if (!button || !state) return;
-    state.textContent = running ? "Gemini bridge 运行中" : body.status === "not_configured" ? "未配置来财脚本" : "Gemini bridge 未运行";
+    state.textContent = running ? "本机助手运行中" : body.status === "not_configured" ? "未配置助手脚本" : "本机助手未运行";
     state.classList.toggle("ok", running);
     state.classList.toggle("error", body.ok === false);
     if (detail) detail.textContent = body.message || (running ? "本机 Google / Gemini 域名桥接已开启。" : "只在需要时启动；启动/停止会请求 macOS 管理员授权。");
     button.disabled = false;
-    button.textContent = running ? "停止 Gemini bridge" : "启动 Gemini bridge";
+    button.textContent = running ? "停止本机助手" : "启动本机助手";
     button.dataset.running = running ? "1" : "0";
   }
   async function loadCompanionStatus() {
@@ -326,7 +326,7 @@
     if (!button) return;
     const running = button.dataset.running === "1";
     const action = running ? "停止" : "启动";
-    if (!window.confirm(`确认${action}本机 Gemini bridge？这会调用来财固定脚本，并可能弹出 macOS 管理员授权。`)) return;
+    if (!window.confirm(`确认${action}本机助手？这会调用外部助手脚本，并可能弹出系统授权。`)) return;
     button.disabled = true; button.textContent = `${action}中…`;
     try { renderCompanionStatus(await companionRequest(running ? "/gemini/stop" : "/gemini/start", { method: "POST" })); }
     catch (error) { const detail = query("#companion-detail"); if (detail) detail.textContent = error.message; button.disabled = false; }

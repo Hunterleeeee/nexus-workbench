@@ -281,7 +281,7 @@ function renderLearningTrack(track) {
   if (title) title.textContent = track.title;
   const subtitle = learnQuery("#learning-subtitle");
   if (subtitle && track.subtitle) subtitle.textContent = `${track.subtitle}（共 ${track.lesson_count || 0} 节）`;
-  document.title = `${track.title} · Workbench`;
+  document.title = `${track.title} · NEXUS`;
 }
 
 function renderLearningDashboard(dashboard) {
