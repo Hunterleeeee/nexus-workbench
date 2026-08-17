@@ -27,11 +27,11 @@ from .core import DATA_DIR, KNOWLEDGE_DIR, OUTPUTS_DIR, SETTINGS_FILE, _int_env,
 from .db import db_connection
 from .instance import app
 
-def _app_call(name: str, *args: Any, **kwargs: Any) -> Any:
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
     """通过 app 命名空间调用本模块函数——测试 patch app.X 时能生效。"""
     import app as _app
 
-    return getattr(_app, name)(*args, **kwargs)
+    return getattr(_app, fn_name)(*args, **kwargs)
 
 
 def load_saved_llm_settings() -> dict[str, Any]:

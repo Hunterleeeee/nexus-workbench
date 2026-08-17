@@ -77,12 +77,12 @@ def document_factory_source_descriptors(limit: int = 100) -> list[dict[str, Any]
     projects = {str(item.get("id")): item for item in load_projects()}
     descriptors = []
     seen_paths: set[str] = set()
-    for artifact in _app_call('_app_call', 'list_artifacts', ):
+    for artifact in _app_call('list_artifacts', ):
         source_key = str(artifact.get("path") or f"artifact:{artifact.get('id')}")
         if source_key in seen_paths:
             continue
         seen_paths.add(source_key)
-        path, path_error = _app_call('_app_call', 'artifact_source_path', artifact)
+        path, path_error = _app_call('artifact_source_path', artifact)
         metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
         project_id = str(artifact.get("project_id") or "")
         descriptors.append(
@@ -108,11 +108,11 @@ def collect_document_factory_materials(request: DocumentFactoryRequest) -> dict[
     materials: list[dict[str, Any]] = []
     errors: list[str] = []
     for artifact_id in requested_ids:
-        artifact = _app_call('_app_call', 'get_artifact_record', artifact_id)
+        artifact = _app_call('get_artifact_record', artifact_id)
         if not artifact:
             errors.append(f"Artifact #{artifact_id} 不存在")
             continue
-        content, error = _app_call('_app_call', 'read_artifact_source', artifact)
+        content, error = _app_call('read_artifact_source', artifact)
         if error:
             errors.append(f"{artifact.get('name', f'Artifact #{artifact_id}')}：{error}")
             continue
@@ -205,7 +205,7 @@ def document_factory_review_checks(document_text: str, metadata: dict[str, Any],
             for match in re.finditer(r"(?:api[_ -]?key|authorization|bearer\s+[a-z0-9._-]+|password|cookie|secret)", document_text, flags=re.IGNORECASE)
         )
     )
-    citation_coverage = _app_call('_app_call', 'document_factory_citation_coverage', document_text, source_materials)
+    citation_coverage = _app_call('document_factory_citation_coverage', document_text, source_materials)
     coverage = citation_coverage.get("coverage")
     coverage_status = "warn" if source_count and (coverage is None or float(coverage) < 0.6) else "pass" if source_count else "warn"
     coverage_detail = (
@@ -263,31 +263,31 @@ async def extract_document(upload: UploadFile = File(...)) -> dict[str, Any]:
     return {
         "filename": filename,
         "content": clip(content, 100_000),
-        "extractor": _app_call('_app_call', 'document_extraction_engine', filename),
-        "markitdown": _app_call('_app_call', 'markitdown_status', ),
-        "mineru": _app_call('_app_call', 'mineru_status', ),
+        "extractor": _app_call('document_extraction_engine', filename),
+        "markitdown": _app_call('markitdown_status', ),
+        "mineru": _app_call('mineru_status', ),
     }
 
 
 @app.get("/api/doc-factory/templates")
 async def get_document_factory_templates() -> dict[str, Any]:
-    return {"templates": _app_call('_app_call', 'document_factory_templates', )}
+    return {"templates": _app_call('document_factory_templates', )}
 
 
 @app.get("/api/doc-factory/sources")
 def get_document_factory_sources() -> dict[str, Any]:
     return {
-        "sources": _app_call('_app_call', 'document_factory_source_descriptors', limit=120),
+        "sources": _app_call('document_factory_source_descriptors', limit=120),
         "policy": "只读取已登记且位于工作台 outputs、knowledge-base、Obsidian Vault 或热点/行情/服务器安全快照内的文件；账户和配置快照不进入文档材料，原始文件保持只读。支持可选 MarkItDown 增强 PDF、DOCX、XLSX、PPTX、HTML 提取，未安装时回退到内置解析器。",
-        "extractor": _app_call('_app_call', 'markitdown_status', ),
-        "mineru": _app_call('_app_call', 'mineru_status', ),
+        "extractor": _app_call('markitdown_status', ),
+        "mineru": _app_call('mineru_status', ),
     }
 
 
 def document_factory_history(artifact_id: int = 0, title: str = "") -> list[dict[str, Any]]:
     """Return the complete local version chain for a document title."""
-    artifacts = _app_call('_app_call', 'list_artifacts', "doc-factory")
-    selected = _app_call('_app_call', 'get_artifact_record', artifact_id) if artifact_id else None
+    artifacts = _app_call('list_artifacts', "doc-factory")
+    selected = _app_call('get_artifact_record', artifact_id) if artifact_id else None
     selected_metadata = selected.get("metadata") if isinstance(selected, dict) else {}
     document_title = title.strip() or str(selected_metadata.get("title") or "")
     if not document_title and selected:
@@ -316,31 +316,31 @@ def document_factory_history(artifact_id: int = 0, title: str = "") -> list[dict
 
 @app.get("/api/doc-factory/history")
 def get_document_factory_history(artifact_id: int = 0, title: str = "") -> dict[str, Any]:
-    if artifact_id and not _app_call('_app_call', 'get_artifact_record', artifact_id):
+    if artifact_id and not _app_call('get_artifact_record', artifact_id):
         raise HTTPException(404, "文档 Artifact 不存在")
-    history = _app_call('_app_call', 'document_factory_history', artifact_id, title)
+    history = _app_call('document_factory_history', artifact_id, title)
     return {"history": history, "count": len(history), "policy": "版本只读来自 Artifact 与 version_of 关系；重新生成会创建新版本，不覆盖旧文件。"}
 
 
 @app.post("/api/doc-factory/validate")
 def validate_document_factory(request: DocumentFactoryRequest) -> dict[str, Any]:
-    materials = _app_call('_app_call', 'collect_document_factory_materials', request)
-    return {"validation": _app_call('_app_call', 'validate_document_factory_payload', request, materials)}
+    materials = _app_call('collect_document_factory_materials', request)
+    return {"validation": _app_call('validate_document_factory_payload', request, materials)}
 
 
 @app.post("/api/doc-factory/run")
 async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any]:
-    if not _app_call('_app_call', 'llm_settings', )["configured"]:
+    if not _app_call('llm_settings', )["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
     materials = await asyncio.to_thread(_app_call, 'collect_document_factory_materials', request)
     validation = await asyncio.to_thread(_app_call, 'validate_document_factory_payload', request, materials)
     if not validation["valid"]:
         raise HTTPException(400, "；".join(validation["errors"]))
-    template = _app_call('_app_call', '_DOC_FACTORY_TEMPLATES', )[request.template]
+    template = _app_call('_DOC_FACTORY_TEMPLATES', )[request.template]
     previous_artifact = next(
         (
             artifact
-            for artifact in _app_call('_app_call', 'list_artifacts', "doc-factory")
+            for artifact in _app_call('list_artifacts', "doc-factory")
             if artifact.get("metadata", {}).get("title") == request.title.strip()
         ),
         None,
@@ -372,7 +372,7 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
         f"材料：\n{materials['combined_text']}"
     )
     try:
-        answer = await _app_call('_app_call', 'call_llm', [
+        answer = await _app_call('call_llm', [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ])
@@ -381,10 +381,10 @@ async def run_document_factory(request: DocumentFactoryRequest) -> dict[str, Any
         raise HTTPException(502, f"文档生成失败：上游返回 {exc.response.status_code}：{detail}") from exc
     except Exception as exc:
         raise HTTPException(502, f"文档生成失败：{exc}") from exc
-    output_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-v{version}-{_app_call('_app_call', 'safe_filename', request.title, '文档产物')}.md"
+    output_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-v{version}-{_app_call('safe_filename', request.title, '文档产物')}.md"
     output_path = OUTPUTS_DIR / output_name
     output_path.write_text(answer.rstrip() + "\n", encoding="utf-8")
-    citation_coverage = _app_call('_app_call', 'document_factory_citation_coverage', answer, materials)
+    citation_coverage = _app_call('document_factory_citation_coverage', answer, materials)
     artifact = await asyncio.to_thread(_app_call, 'register_artifact_safely', 
         project_id="doc-factory",
         name=output_name,
@@ -473,7 +473,7 @@ async def regenerate_document_factory(request: DocumentFactoryRegenerateRequest)
     parent_approval_id = str(request.approval_id or "").strip()
     parent_approval_payload: dict[str, Any] = {}
     if parent_approval_id:
-        connection = _app_call('_app_call', 'db_connection', )
+        connection = _app_call('db_connection', )
         try:
             parent_row = connection.execute("SELECT status, kind, payload_json FROM approval_requests WHERE id = ?", (parent_approval_id,)).fetchone()
         finally:
@@ -482,9 +482,9 @@ async def regenerate_document_factory(request: DocumentFactoryRegenerateRequest)
             raise HTTPException(404, "关联的文档审批不存在")
         if parent_row["status"] not in {"changes_requested", "rejected"}:
             raise HTTPException(409, "只有需要修改或已退回的审批才能发起修订")
-        parent_approval_payload = _app_call('_app_call', 'platform_decode_json', parent_row["payload_json"], {})
+        parent_approval_payload = _app_call('platform_decode_json', parent_row["payload_json"], {})
     source_ids = [int(value) for value in metadata.get("source_artifact_ids", []) if str(value).isdigit()]
-    previous_text, read_error = _app_call('_app_call', 'read_artifact_source', artifact)
+    previous_text, read_error = _app_call('read_artifact_source', artifact)
     if read_error:
         raise HTTPException(409, f"无法读取上一版文档：{read_error}")
     instruction_parts = [str(metadata.get("instruction") or "").strip(), f"审批/复核意见：{request.reviewer_note.strip()}" if request.reviewer_note.strip() else "", "请根据以上意见生成新版本，并保留可回溯来源标记。"]
@@ -499,7 +499,7 @@ async def regenerate_document_factory(request: DocumentFactoryRegenerateRequest)
         acceptance_criteria=request.acceptance_criteria or [str(item) for item in metadata.get("acceptance_criteria", []) if str(item)],
         revision_from_artifact_id=request.artifact_id,
     )
-    result = await _app_call('_app_call', 'run_document_factory', regeneration)
+    result = await _app_call('run_document_factory', regeneration)
     result["regenerated_from_artifact_id"] = request.artifact_id
     new_artifact_id = int((result.get("artifact") or {}).get("id") or 0)
     if new_artifact_id:
@@ -518,18 +518,18 @@ async def regenerate_document_factory(request: DocumentFactoryRegenerateRequest)
 
 @app.post("/api/doc-factory/review")
 async def review_document_factory_output(request: DocumentFactoryReviewRequest) -> dict[str, Any]:
-    if not _app_call('_app_call', 'llm_settings', )["configured"]:
+    if not _app_call('llm_settings', )["configured"]:
         raise HTTPException(503, "请先在工作台顶部配置全局 LLM")
     artifact = await asyncio.to_thread(_app_call, 'get_artifact_record', request.artifact_id)
     if not artifact or artifact.get("project_id") != "doc-factory":
         raise HTTPException(404, "文档产物 Artifact 不存在")
-    document_text, read_error = _app_call('_app_call', 'read_artifact_source', artifact)
+    document_text, read_error = _app_call('read_artifact_source', artifact)
     if read_error:
         raise HTTPException(409, f"无法读取待校验文档：{read_error}")
     metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
     source_ids = [int(value) for value in metadata.get("source_artifact_ids", []) if str(value).isdigit()]
     source_materials = await asyncio.to_thread(_app_call, 'collect_document_factory_materials', DocumentFactoryRequest(artifact_ids=source_ids))
-    checks = _app_call('_app_call', 'document_factory_review_checks', document_text, metadata, source_materials)
+    checks = _app_call('document_factory_review_checks', document_text, metadata, source_materials)
     run = await asyncio.to_thread(_app_call, 'create_agent_run_record', 
         project_id="doc-factory",
         kind="document_review",
@@ -546,7 +546,7 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
         f"来源材料：\n{source_context}\n\n待校验文档：\n{clip_for_llm(document_text, 28_000)}"
     )
     try:
-        agent_answer = await _app_call('_app_call', 'call_llm', 
+        agent_answer = await _app_call('call_llm', 
             [
                 {"role": "system", "content": "你是保守的事实与引用校验 Agent。无法从来源确认的内容必须标记为待核实。"},
                 {"role": "user", "content": prompt},
@@ -566,7 +566,7 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
         await asyncio.to_thread(_app_call, 'add_agent_run_event', run["id"], "review_failed", error, level="error")
         raise HTTPException(502, error) from exc
     review_title = metadata.get("title") or artifact.get("name", "未命名产物")
-    review_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-校验-{_app_call('_app_call', 'safe_filename', review_title, '文档产物')}.md"
+    review_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-校验-{_app_call('safe_filename', review_title, '文档产物')}.md"
     review_path = OUTPUTS_DIR / review_name
     check_lines = "\n".join(
         f"- {'✅' if item['status'] == 'pass' else '⚠️' if item['status'] == 'warn' else '❌'} **{item['label']}**：{item['detail']}"
@@ -599,7 +599,7 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
     relations = []
     if review_artifact:
         relations.append(
-            _app_call('_app_call', 'create_relation_record', 
+            _app_call('create_relation_record', 
                 from_type="artifact",
                 from_id=str(artifact.get("id")),
                 to_type="artifact",
@@ -610,7 +610,7 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
         )
         for source_id in source_ids:
             relations.append(
-                _app_call('_app_call', 'create_relation_record', 
+                _app_call('create_relation_record', 
                     from_type="artifact",
                     from_id=str(source_id),
                     to_type="artifact",
@@ -647,10 +647,10 @@ async def review_document_factory_output(request: DocumentFactoryReviewRequest) 
 
 @app.post("/api/doc-factory/deliver")
 def deliver_document_factory(request: DocumentDeliveryRequest) -> dict[str, Any]:
-    artifact = _app_call('_app_call', 'get_artifact_record', request.artifact_id)
+    artifact = _app_call('get_artifact_record', request.artifact_id)
     if not artifact or artifact.get("project_id") != "doc-factory":
         raise HTTPException(404, "文档产物 Artifact 不存在")
-    text, read_error = _app_call('_app_call', 'read_artifact_source', artifact)
+    text, read_error = _app_call('read_artifact_source', artifact)
     if read_error:
         raise HTTPException(409, f"无法读取文档产物：{read_error}")
     metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
@@ -658,13 +658,13 @@ def deliver_document_factory(request: DocumentDeliveryRequest) -> dict[str, Any]
     parent_payload: dict[str, Any] = {}
     parent_round = 0
     if parent_approval_id:
-        connection = _app_call('_app_call', 'db_connection', )
+        connection = _app_call('db_connection', )
         try:
             parent_row = connection.execute("SELECT payload_json FROM approval_requests WHERE id = ? AND kind = 'document_delivery'", (parent_approval_id,)).fetchone()
         finally:
             connection.close()
         if parent_row:
-            parent_payload = _app_call('_app_call', 'platform_decode_json', parent_row["payload_json"], {})
+            parent_payload = _app_call('platform_decode_json', parent_row["payload_json"], {})
             try:
                 parent_round = max(0, int(parent_payload.get("round") or 0))
             except (TypeError, ValueError):
@@ -674,7 +674,7 @@ def deliver_document_factory(request: DocumentDeliveryRequest) -> dict[str, Any]
     source_artifact_id = previous_artifact_id if parent_approval_id and previous_artifact_id else artifact.get("id")
     revision_artifact_id = artifact.get("id") if parent_approval_id and previous_artifact_id else None
     title = request.title.strip() or str(metadata.get("title") or artifact.get("name") or "NEXUS 文档")
-    base = _app_call('_app_call', 'safe_filename', title, "workbench-document")
+    base = _app_call('safe_filename', title, "workbench-document")
     version = int(metadata.get("version") or 1)
     created: list[dict[str, Any]] = []
     formats = [value.lower().strip() for value in request.formats if value.lower().strip() in {"docx", "pdf"}]
@@ -682,18 +682,18 @@ def deliver_document_factory(request: DocumentDeliveryRequest) -> dict[str, Any]
         raise HTTPException(400, "formats 只能是 docx 或 pdf")
     docx_path = OUTPUTS_DIR / f"{base}-v{version}.docx"
     if "docx" in formats or "pdf" in formats:
-        _app_call('_app_call', 'build_docx_delivery', title, text, docx_path)
-        docx_artifact = _app_call('_app_call', 'register_artifact_safely', project_id="doc-factory", name=docx_path.name, path=str(docx_path), kind="document_delivery_docx", metadata={"title": title, "version": version, "source_artifact_id": artifact.get("id"), "revision_artifact_id": revision_artifact_id, "format": "docx", "approval_status": "pending", "approval_round": approval_round, "parent_approval_id": parent_approval_id})
+        _app_call('build_docx_delivery', title, text, docx_path)
+        docx_artifact = _app_call('register_artifact_safely', project_id="doc-factory", name=docx_path.name, path=str(docx_path), kind="document_delivery_docx", metadata={"title": title, "version": version, "source_artifact_id": artifact.get("id"), "revision_artifact_id": revision_artifact_id, "format": "docx", "approval_status": "pending", "approval_round": approval_round, "parent_approval_id": parent_approval_id})
         created.append(docx_artifact or {"name": docx_path.name, "path": str(docx_path)})
-        _app_call('_app_call', 'create_relation_record', from_type="artifact", from_id=str(artifact.get("id")), to_type="artifact", to_id=str((docx_artifact or {}).get("id", "")), relation_type="delivered_as_docx", metadata={"title": title, "version": version}) if docx_artifact else None
+        _app_call('create_relation_record', from_type="artifact", from_id=str(artifact.get("id")), to_type="artifact", to_id=str((docx_artifact or {}).get("id", "")), relation_type="delivered_as_docx", metadata={"title": title, "version": version}) if docx_artifact else None
     if "pdf" in formats:
         pdf_path = OUTPUTS_DIR / f"{base}-v{version}.pdf"
-        ok, conversion_error = _app_call('_app_call', 'convert_docx_to_pdf', docx_path, pdf_path)
+        ok, conversion_error = _app_call('convert_docx_to_pdf', docx_path, pdf_path)
         if not ok:
             raise HTTPException(503, f"PDF 交付需要 LibreOffice：{conversion_error}")
-        pdf_artifact = _app_call('_app_call', 'register_artifact_safely', project_id="doc-factory", name=pdf_path.name, path=str(pdf_path), kind="document_delivery_pdf", metadata={"title": title, "version": version, "source_artifact_id": artifact.get("id"), "revision_artifact_id": revision_artifact_id, "format": "pdf", "approval_status": "pending", "approval_round": approval_round, "parent_approval_id": parent_approval_id})
+        pdf_artifact = _app_call('register_artifact_safely', project_id="doc-factory", name=pdf_path.name, path=str(pdf_path), kind="document_delivery_pdf", metadata={"title": title, "version": version, "source_artifact_id": artifact.get("id"), "revision_artifact_id": revision_artifact_id, "format": "pdf", "approval_status": "pending", "approval_round": approval_round, "parent_approval_id": parent_approval_id})
         created.append(pdf_artifact or {"name": pdf_path.name, "path": str(pdf_path)})
-        _app_call('_app_call', 'create_relation_record', from_type="artifact", from_id=str(artifact.get("id")), to_type="artifact", to_id=str((pdf_artifact or {}).get("id", "")), relation_type="delivered_as_pdf", metadata={"title": title, "version": version}) if pdf_artifact else None
+        _app_call('create_relation_record', from_type="artifact", from_id=str(artifact.get("id")), to_type="artifact", to_id=str((pdf_artifact or {}).get("id", "")), relation_type="delivered_as_pdf", metadata={"title": title, "version": version}) if pdf_artifact else None
     approval_payload = {
         "round": approval_round,
         "source_artifact_id": source_artifact_id,
@@ -705,9 +705,9 @@ def deliver_document_factory(request: DocumentDeliveryRequest) -> dict[str, Any]
         "title": title,
         "version": version,
     }
-    approval = _app_call('_app_call', 'create_approval_request', "doc-factory", "document_delivery", f"第 {approval_round} 轮审批：{title}", approval_payload)
+    approval = _app_call('create_approval_request', "doc-factory", "document_delivery", f"第 {approval_round} 轮审批：{title}", approval_payload)
     if parent_approval_id:
-        _app_call('_app_call', 'create_relation_record', from_type="approval", from_id=parent_approval_id, to_type="approval", to_id=approval["id"], relation_type="approval_revised_as", metadata={"round": approval_round, "source_artifact_id": source_artifact_id, "revision_artifact_id": revision_artifact_id})
+        _app_call('create_relation_record', from_type="approval", from_id=parent_approval_id, to_type="approval", to_id=approval["id"], relation_type="approval_revised_as", metadata={"round": approval_round, "source_artifact_id": source_artifact_id, "revision_artifact_id": revision_artifact_id})
     create_notification_record(title="正式文档交付包待审批", body=f"{title} · {', '.join(formats).upper()} · 请在审批中心确认或提出修改意见。", project_id="doc-factory", kind="approval", level="warning", href="/projects/doc-factory", event_key=f"document-delivery:{approval['id']}", dedupe_seconds=0)
     return {"ok": True, "source": artifact, "deliveries": created, "approval": approval, "approval_context": {"round": approval_round, "parent_approval_id": parent_approval_id, "source_artifact_id": source_artifact_id, "revision_artifact_id": revision_artifact_id}, "message": f"第 {approval_round} 轮交付包已生成，当前状态为待审批。"}
 

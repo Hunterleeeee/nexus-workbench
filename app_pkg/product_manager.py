@@ -1407,7 +1407,7 @@ async def generate_product_requirement_prd(requirement_id: int) -> dict[str, Any
         f"RICE：{requirement.get('score')}（Reach {requirement.get('reach')} / Impact {requirement.get('impact')} / Confidence {requirement.get('confidence')}% / Effort {requirement.get('effort')}）\n\n"
         f"关联反馈证据：\n{evidence}"
     )
-    result = await _app_call('run_document_factory', _app_call('_app_call', 'DocumentFactoryRequest', 
+    result = await _app_call('run_document_factory', _app_call('DocumentFactoryRequest', 
         title=f"{requirement['title']} PRD",
         source_text=source_text,
         instruction="生成一页式、可评审的产品需求文档。先写结论，明确目标与非目标；所有缺失信息标记待补充，不得把推断写成用户事实。",

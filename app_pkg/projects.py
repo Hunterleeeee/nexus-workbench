@@ -42,11 +42,11 @@ from .sub2api import analyze_sub2api_snapshot, load_market_snapshot, load_sub2ap
 from .usage import USAGE_EXCLUDED_RUN_KINDS
 
 
-def _app_call(name: str, *args: Any, **kwargs: Any) -> Any:
+def _app_call(fn_name: str, *args: Any, **kwargs: Any) -> Any:
     """通过 app 命名空间调用仍在 app.py 的领域函数——测试 patch app.X 时能生效。"""
     import app as _app
 
-    return getattr(_app, name)(*args, **kwargs)
+    return getattr(_app, fn_name)(*args, **kwargs)
 
 
 def load_project_preferences() -> dict[str, Any]:

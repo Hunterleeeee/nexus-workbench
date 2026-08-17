@@ -461,5 +461,17 @@ class KnowledgeNoteCrudTests(unittest.TestCase):
                 os.environ["WORKBENCH_APP_SERVICE_NAME"] = old
         self.assertIn("systemctl is-active workbench >/dev/null 2>&1 && printf 'active' || printf 'unknown'", cmd)
 
+    def test_app_call_signature_does_not_clash_with_kwargs(self):
+        """app 命名空间的 _app_call 参数名不应与常见 kwargs 冲突（避免 multiple values for argument）。"""
+        import app
+        import inspect
+        sig = inspect.signature(app._app_call)
+        params = list(sig.parameters.keys())
+        # 必须有 fn_name/第一个 positional，**kwargs 也必须支持
+        self.assertIn('kwargs', params, '_app_call 必须支持 kwargs')
+        # 关键：第一个命名参数名不能是 'name'（会和 kwargs 中的 name 冲突）
+        first_named = next((p for p in params if sig.parameters[p].kind.name == 'POSITIONAL_OR_KEYWORD'), None)
+        self.assertNotEqual(first_named, 'name', '第一个参数名不能是 name（会与 kwargs 冲突，如 _app_call("X", name=...) 会报 multiple values for argument name）')
+
 if __name__ == "__main__":
     unittest.main()
